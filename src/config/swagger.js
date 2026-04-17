@@ -8,7 +8,10 @@ const options = {
       version: "1.0.0",
       description: "Auth & User Management REST API",
     },
-    servers: [{ url: "/api/v1" }],
+    servers: [
+      { url: "http://localhost:3000/api/v1", description: "Local development server" },
+      { url: "https://nextoneapi-production.up.railway.app/api/v1", description: "Production server" }
+    ],
     components: {
       securitySchemes: {
         bearerAuth: {
