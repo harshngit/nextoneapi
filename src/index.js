@@ -1,47 +1,37 @@
-require('dotenv').config();
-const express = require('express');
-const cors = require('cors');
-const swaggerUi = require('swagger-ui-express');
-const swaggerSpec = require('./config/swagger');
-
-const authRoutes = require('./routes/auth.routes');
-const userRoutes = require('./routes/user.routes');
-const { sendError } = require('./utils/response');
+const express = require("express");
+const http = require("http");
+const cors = require("cors");
+const swaggerUi = require("swagger-ui-express");
+const swaggerSpec = require("./config/swagger");
+const { initSocket } = require("./config/socket");
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const server = http.createServer(app); // ← IMPORTANT: use http server for WS
 
-// Middleware
+// ─── Middleware ───────────────────────────────────────────────
 app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
-// Swagger Docs
-app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec, {
-  customCss: '.swagger-ui .topbar { display: none }',
-  customSiteTitle: 'Express PostgreSQL API Docs',
-}));
-app.get('/api-docs.json', (req, res) => res.json(swaggerSpec));
+// ─── Swagger Docs ─────────────────────────────────────────────
+app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
-// Routes
-app.use('/api/v1/auth', authRoutes);
-app.use('/api/v1/users', userRoutes);
+// ─── Routes ───────────────────────────────────────────────────
+app.use("/api/v1/auth",         require("./routes/auth.routes"));
+app.use("/api/v1/users",        require("./routes/user.routes"));
+app.use("/api/v1/leads",        require("./routes/leadRoutes"));
+app.use("/api/v1/projects",     require("./routes/projectRoutes"));
+app.use("/api/v1/site-visits",  require("./routes/siteVisitRoutes"));
+app.use("/api/v1/tasks",        require("./routes/taskRoutes"));
+app.use("/api/v1/notifications",require("./routes/notificationRoutes"));
+app.use("/api/v1/dashboard",    require("./routes/dashboardRoutes"));
 
-// Health check
-app.get('/health', (req, res) => res.json({ status: 'OK', timestamp: new Date().toISOString() }));
+// ─── Init WebSocket ───────────────────────────────────────────
+initSocket(server);
 
-// 404 handler
-app.use((req, res) => sendError(res, `Route ${req.originalUrl} not found`, 404));
-
-// Global error handler
-app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
-  sendError(res, 'Internal server error', 500);
+// ─── Start Server ─────────────────────────────────────────────
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  console.log(`Swagger docs: http://localhost:${PORT}/api/docs`);
+  console.log(`WebSocket ready on ws://localhost:${PORT}`);
 });
-
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-  console.log(`Swagger docs at http://localhost:${PORT}/api-docs`);
-});
-
-module.exports = app;
