@@ -1,94 +1,393 @@
+const bcrypt = require("bcryptjs");
 const { pool } = require("../config/db");
-const { sendSuccess, sendError } = require("../utils/response");
+const { sendSuccess, sendError, paginate } = require("../utils/response");
 
-// Get All Users
+/**
+ * GET /api/users
+ */
 const getAllUsers = async (req, res) => {
   try {
-    const { page = 1, limit = 10, role, search } = req.query;
-    const offset = (parseInt(page) - 1) * parseInt(limit);
+    const { role, is_active, region, search, manager_id, page = 1, per_page = 20 } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(per_page);
+
     let conditions = [];
     let params = [];
     let idx = 1;
-    if (role) { conditions.push(`role = $${idx}`); params.push(role); idx++; }
+
+    // Sales Manager can only see their own team
+    if (req.user.role === "sales_manager") {
+      conditions.push(`manager_id = $${idx++}`);
+      params.push(req.user.id);
+    }
+
+    if (role)       { conditions.push(`role = $${idx++}`);       params.push(role); }
+    if (region)     { conditions.push(`$${idx++} = ANY(regions)`); params.push(region); }
+    if (manager_id && req.user.role !== "sales_manager") {
+                      conditions.push(`manager_id = $${idx++}`); params.push(manager_id); }
+    if (is_active !== undefined) {
+                      conditions.push(`is_active = $${idx++}`);  params.push(is_active === "true"); }
     if (search) {
       conditions.push(`(first_name ILIKE $${idx} OR last_name ILIKE $${idx} OR email ILIKE $${idx})`);
-      params.push(`%${search}%`); idx++;
+      params.push(`%${search}%`);
+      idx++;
     }
-    const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
-    const countResult = await pool.query(`SELECT COUNT(*) FROM users ${where}`, params);
-    const total = parseInt(countResult.rows[0].count);
-    params.push(parseInt(limit));
-    params.push(offset);
-    const result = await pool.query(
-      `SELECT * FROM users ${where} ORDER BY created_at DESC LIMIT $${idx} OFFSET $${idx + 1}`,
-      params
+
+    const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+
+    const countResult = await pool.query(
+      `SELECT COUNT(*) FROM users ${where}`, params
     );
-    return sendSuccess(res, {
-      users: result.rows,
-      pagination: { total, page: parseInt(page), limit: parseInt(limit), pages: Math.ceil(total / limit) },
-    }, "Users fetched successfully");
+    const total = parseInt(countResult.rows[0].count);
+
+    const dataResult = await pool.query(
+      `SELECT id, first_name, last_name, email, phone_number, role,
+              language_preferences, regions, is_active, last_login, manager_id, created_at
+       FROM users ${where}
+       ORDER BY created_at DESC
+       LIMIT $${idx++} OFFSET $${idx++}`,
+      [...params, parseInt(per_page), offset]
+    );
+
+    return res.json(paginate(dataResult.rows, total, parseInt(page), parseInt(per_page)));
   } catch (err) {
-    console.error("GetAllUsers error:", err);
+    console.error("[getAllUsers]", err);
     return sendError(res, "Failed to fetch users", 500);
   }
 };
 
-// Get User By ID
+/**
+ * POST /api/users
+ */
+const createUser = async (req, res) => {
+  try {
+    const {
+      first_name, last_name, email, password, phone_number,
+      role, language_preferences, regions, manager_id,
+    } = req.body;
+
+    if (!first_name || !last_name || !email || !password || !role) {
+      return sendError(res, "first_name, last_name, email, password, and role are required", 400);
+    }
+
+    const validRoles = ["admin", "sales_manager", "sales_executive", "external_caller"];
+    if (!validRoles.includes(role)) {
+      return sendError(res, `Invalid role. Allowed: ${validRoles.join(", ")}`, 400);
+    }
+
+    if (role === "sales_executive" && !manager_id) {
+      return sendError(res, "manager_id is required when creating a sales_executive", 400);
+    }
+
+    const existing = await pool.query("SELECT id FROM users WHERE email = $1", [email.toLowerCase()]);
+    if (existing.rows.length > 0) return sendError(res, "A user with this email already exists", 400);
+
+    if (manager_id) {
+      const mgr = await pool.query("SELECT id, role FROM users WHERE id = $1 AND is_active = true", [manager_id]);
+      if (mgr.rows.length === 0) return sendError(res, "Manager not found", 400);
+      if (mgr.rows[0].role !== "sales_manager") return sendError(res, "Provided manager_id does not belong to a Sales Manager", 400);
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    const result = await pool.query(
+      `INSERT INTO users
+        (first_name, last_name, email, password_hash, phone_number, role,
+         language_preferences, regions, manager_id, is_active)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true)
+       RETURNING id, email, role, first_name, last_name, created_at`,
+      [
+        first_name.trim(), last_name.trim(), email.toLowerCase(),
+        passwordHash, phone_number || null, role,
+        language_preferences || "en",
+        regions ? JSON.stringify(regions) : "[]",
+        manager_id || null,
+      ]
+    );
+
+    return sendSuccess(res, "User created successfully", result.rows[0], 201);
+  } catch (err) {
+    console.error("[createUser]", err);
+    return sendError(res, "Failed to create user", 500);
+  }
+};
+
+/**
+ * GET /api/users/:id
+ */
 const getUserById = async (req, res) => {
   try {
     const { id } = req.params;
+    const { role, id: callerId } = req.user;
+
+    // Sales Executive can only view themselves
+    if (role === "sales_executive" && id !== callerId) {
+      return sendError(res, "Access denied", 403);
+    }
+
     const result = await pool.query(
-      "SELECT * FROM users WHERE id = $1",
+      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone_number, u.role,
+              u.language_preferences, u.regions, u.is_active, u.last_login,
+              u.manager_id, u.created_at, u.updated_at,
+              m.first_name AS manager_first_name, m.last_name AS manager_last_name
+       FROM users u
+       LEFT JOIN users m ON m.id = u.manager_id
+       WHERE u.id = $1`,
       [id]
     );
+
     if (result.rows.length === 0) return sendError(res, "User not found", 404);
-    return sendSuccess(res, { user: result.rows[0] }, "User fetched successfully");
+
+    const user = result.rows[0];
+
+    // Sales Manager can only view their own team
+    if (role === "sales_manager" && user.manager_id !== callerId) {
+      return sendError(res, "Access denied to this user's profile", 403);
+    }
+
+    const { manager_first_name, manager_last_name, manager_id, ...rest } = user;
+    const formatted = {
+      ...rest,
+      manager: manager_id ? { id: manager_id, full_name: `${manager_first_name} ${manager_last_name}` } : null,
+    };
+
+    return sendSuccess(res, "User fetched successfully", formatted);
   } catch (err) {
-    console.error("GetUserById error:", err);
+    console.error("[getUserById]", err);
     return sendError(res, "Failed to fetch user", 500);
   }
 };
 
-// Update User
+/**
+ * PUT /api/users/:id
+ */
 const updateUser = async (req, res) => {
   try {
     const { id } = req.params;
-    const { first_name, last_name, phone_number, language_preferences, regions } = req.body;
-    const existing = await pool.query("SELECT id FROM users WHERE id = $1", [id]);
+    const { role: callerRole, id: callerId } = req.user;
+
+    // Only admin+ or the user themselves can update
+    const canUpdate = ["super_admin", "admin"].includes(callerRole) || callerId === id;
+    if (!canUpdate) return sendError(res, "You can only update your own profile", 403);
+
+    const existing = await pool.query("SELECT id, manager_id FROM users WHERE id = $1", [id]);
     if (existing.rows.length === 0) return sendError(res, "User not found", 404);
-    const fields = [];
+
+    const { first_name, last_name, phone_number, language_preferences, regions, manager_id } = req.body;
+
+    const updates = [];
     const params = [];
     let idx = 1;
-    if (first_name !== undefined) { fields.push(`first_name = $${idx}`); params.push(first_name); idx++; }
-    if (last_name !== undefined) { fields.push(`last_name = $${idx}`); params.push(last_name); idx++; }
-    if (phone_number !== undefined) { fields.push(`phone_number = $${idx}`); params.push(phone_number); idx++; }
-    if (language_preferences !== undefined) { fields.push(`language_preferences = $${idx}`); params.push(language_preferences); idx++; }
-    if (regions !== undefined) { fields.push(`regions = $${idx}`); params.push(regions); idx++; }
-    if (fields.length === 0) return sendError(res, "No fields to update", 400);
+
+    if (first_name)           { updates.push(`first_name = $${idx++}`);           params.push(first_name.trim()); }
+    if (last_name)            { updates.push(`last_name = $${idx++}`);            params.push(last_name.trim()); }
+    if (phone_number)         { updates.push(`phone_number = $${idx++}`);         params.push(phone_number); }
+    if (language_preferences) { updates.push(`language_preferences = $${idx++}`); params.push(language_preferences); }
+    if (regions)              { updates.push(`regions = $${idx++}`);              params.push(JSON.stringify(regions)); }
+    if (manager_id !== undefined && ["super_admin", "admin"].includes(callerRole)) {
+                                updates.push(`manager_id = $${idx++}`);           params.push(manager_id || null); }
+
+    if (updates.length === 0) return sendError(res, "No fields to update", 400);
+
+    updates.push(`updated_at = NOW()`);
     params.push(id);
+
     const result = await pool.query(
-      `UPDATE users SET ${fields.join(", ")}, updated_at = NOW() WHERE id = $${idx} RETURNING *`,
+      `UPDATE users SET ${updates.join(", ")} WHERE id = $${idx}
+       RETURNING id, first_name, last_name, email, phone_number, role, regions, is_active, updated_at`,
       params
     );
-    return sendSuccess(res, { user: result.rows[0] }, "User updated successfully");
+
+    return sendSuccess(res, "User updated successfully", result.rows[0]);
   } catch (err) {
-    console.error("UpdateUser error:", err);
+    console.error("[updateUser]", err);
     return sendError(res, "Failed to update user", 500);
   }
 };
 
-// Delete User
+/**
+ * DELETE /api/users/:id  (soft delete)
+ */
 const deleteUser = async (req, res) => {
   try {
     const { id } = req.params;
-    const result = await pool.query("SELECT id FROM users WHERE id = $1", [id]);
+
+    const result = await pool.query("SELECT role FROM users WHERE id = $1", [id]);
     if (result.rows.length === 0) return sendError(res, "User not found", 404);
-    await pool.query("UPDATE users SET is_active = false, updated_at = NOW() WHERE id = $1", [id]);
-    return sendSuccess(res, {}, "User deleted successfully");
+    if (result.rows[0].role === "super_admin") return sendError(res, "Cannot deactivate a Super Admin", 400);
+
+    await pool.query(
+      "UPDATE users SET is_active = false, updated_at = NOW() WHERE id = $1",
+      [id]
+    );
+
+    // Revoke all sessions
+    await pool.query("DELETE FROM refresh_tokens WHERE user_id = $1", [id]);
+
+    return sendSuccess(res, "User deactivated successfully");
   } catch (err) {
-    console.error("DeleteUser error:", err);
-    return sendError(res, "Failed to delete user", 500);
+    console.error("[deleteUser]", err);
+    return sendError(res, "Failed to deactivate user", 500);
   }
 };
 
-module.exports = { getAllUsers, getUserById, updateUser, deleteUser };
+/**
+ * PATCH /api/users/:id/role
+ */
+const updateRole = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { role } = req.body;
+
+    const validRoles = ["admin", "sales_manager", "sales_executive", "external_caller"];
+    if (!role || !validRoles.includes(role)) {
+      return sendError(res, `Invalid role. Allowed: ${validRoles.join(", ")}`, 400);
+    }
+
+    const existing = await pool.query("SELECT role FROM users WHERE id = $1", [id]);
+    if (existing.rows.length === 0) return sendError(res, "User not found", 404);
+
+    const updates = [`role = $1`, `updated_at = NOW()`];
+    const params = [role, id];
+
+    // If promoted from exec to manager, clear their manager_id
+    if (role === "sales_manager") {
+      updates.push(`manager_id = NULL`);
+    }
+
+    const result = await pool.query(
+      `UPDATE users SET ${updates.join(", ")} WHERE id = $2 RETURNING id, role, updated_at`,
+      params
+    );
+
+    return sendSuccess(res, `User role updated to ${role}`, result.rows[0]);
+  } catch (err) {
+    console.error("[updateRole]", err);
+    return sendError(res, "Failed to update role", 500);
+  }
+};
+
+/**
+ * GET /api/users/team
+ */
+const getTeam = async (req, res) => {
+  try {
+    const { role, id: callerId } = req.user;
+    let managerId = callerId;
+
+    // Admin/Super Admin can query any manager's team
+    if (["super_admin", "admin"].includes(role) && req.query.manager_id) {
+      managerId = req.query.manager_id;
+    }
+
+    const managerResult = await pool.query(
+      "SELECT id, first_name, last_name, role FROM users WHERE id = $1 AND role = 'sales_manager'",
+      [managerId]
+    );
+    if (managerResult.rows.length === 0) return sendError(res, "Manager not found", 404);
+
+    const teamResult = await pool.query(
+      `SELECT id, first_name, last_name, email, phone_number, is_active,
+              (SELECT COUNT(*) FROM leads WHERE assigned_to = u.id) AS total_leads,
+              (SELECT COUNT(*) FROM tasks WHERE assigned_to = u.id AND is_completed = false) AS pending_followups
+       FROM users u
+       WHERE manager_id = $1
+       ORDER BY first_name`,
+      [managerId]
+    );
+
+    const mgr = managerResult.rows[0];
+    return sendSuccess(res, "Team fetched successfully", {
+      manager: { id: mgr.id, full_name: `${mgr.first_name} ${mgr.last_name}`, role: mgr.role },
+      team_size: teamResult.rows.length,
+      members: teamResult.rows,
+    });
+  } catch (err) {
+    console.error("[getTeam]", err);
+    return sendError(res, "Failed to fetch team", 500);
+  }
+};
+
+/**
+ * GET /api/users/:id/performance
+ */
+const getUserPerformance = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { from, to, role: callerRole, id: callerId } = req.user;
+
+    // Access control
+    if (callerRole === "sales_executive" && id !== callerId) {
+      return sendError(res, "Access denied", 403);
+    }
+
+    const fromDate = req.query.from || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split("T")[0];
+    const toDate   = req.query.to   || new Date().toISOString().split("T")[0];
+
+    const user = await pool.query(
+      "SELECT id, first_name, last_name FROM users WHERE id = $1",
+      [id]
+    );
+    if (user.rows.length === 0) return sendError(res, "User not found", 404);
+
+    // If caller is sales_manager, verify the user is in their team
+    if (callerRole === "sales_manager") {
+      const check = await pool.query(
+        "SELECT id FROM users WHERE id = $1 AND manager_id = $2",
+        [id, callerId]
+      );
+      if (check.rows.length === 0) return sendError(res, "Access denied", 403);
+    }
+
+    const stats = await pool.query(
+      `SELECT
+        COUNT(*) FILTER (WHERE status = 'new')                  AS new_leads,
+        COUNT(*) FILTER (WHERE status = 'contacted')            AS contacted,
+        COUNT(*) FILTER (WHERE status = 'interested')           AS interested,
+        COUNT(*) FILTER (WHERE status = 'site_visit_scheduled') AS site_visits_scheduled,
+        COUNT(*) FILTER (WHERE status = 'site_visit_done')      AS site_visits_done,
+        COUNT(*) FILTER (WHERE status = 'negotiation')          AS negotiation,
+        COUNT(*) FILTER (WHERE status = 'booked')               AS booked,
+        COUNT(*) FILTER (WHERE status = 'lost')                 AS lost,
+        COUNT(*)                                                 AS total_leads
+       FROM leads
+       WHERE assigned_to = $1
+         AND created_at::date BETWEEN $2 AND $3`,
+      [id, fromDate, toDate]
+    );
+
+    const tasks = await pool.query(
+      `SELECT
+        COUNT(*) FILTER (WHERE is_completed = false)                    AS pending_followups,
+        COUNT(*) FILTER (WHERE is_completed = false AND due_date < NOW()) AS overdue_followups
+       FROM tasks WHERE assigned_to = $1`,
+      [id]
+    );
+
+    const s = stats.rows[0];
+    const t = tasks.rows[0];
+    const booked = parseInt(s.booked);
+    const total  = parseInt(s.total_leads);
+
+    return sendSuccess(res, "Performance stats fetched", {
+      user_id:     id,
+      full_name:   `${user.rows[0].first_name} ${user.rows[0].last_name}`,
+      period:      { from: fromDate, to: toDate },
+      total_leads: total,
+      contacted:              parseInt(s.contacted),
+      interested:             parseInt(s.interested),
+      site_visits_scheduled:  parseInt(s.site_visits_scheduled),
+      site_visits_done:       parseInt(s.site_visits_done),
+      negotiation:            parseInt(s.negotiation),
+      booked,
+      lost:                   parseInt(s.lost),
+      conversion_rate:        total > 0 ? parseFloat(((booked / total) * 100).toFixed(1)) : 0,
+      pending_followups:      parseInt(t.pending_followups),
+      overdue_followups:      parseInt(t.overdue_followups),
+    });
+  } catch (err) {
+    console.error("[getUserPerformance]", err);
+    return sendError(res, "Failed to fetch performance stats", 500);
+  }
+};
+
+module.exports = { getAllUsers, createUser, getUserById, updateUser, deleteUser, updateRole, getTeam, getUserPerformance };
