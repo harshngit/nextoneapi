@@ -10,7 +10,7 @@ const options = {
     },
     servers: [
       { url: "http://localhost:3000/api/v1", description: "Local development server" },
-      { url: "https://nextoneapi.onrender.com/api/v1", description: "Production server" }
+      { url: "https://nextoneapi.onrender.com", description: "Production server" }
     ],
     components: {
       securitySchemes: {
