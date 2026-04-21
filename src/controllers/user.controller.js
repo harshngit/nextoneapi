@@ -98,8 +98,8 @@ const createUser = async (req, res) => {
       [
         first_name.trim(), last_name.trim(), email.toLowerCase(),
         passwordHash, phone_number || null, role,
-        language_preferences || "en",
-        regions ? JSON.stringify(regions) : "[]",
+        language_preferences ? (Array.isArray(language_preferences) ? language_preferences : [language_preferences]) : ["en"],
+        regions ? (Array.isArray(regions) ? regions : [regions]) : [],
         manager_id || null,
       ]
     );
@@ -181,8 +181,14 @@ const updateUser = async (req, res) => {
     if (first_name)           { updates.push(`first_name = $${idx++}`);           params.push(first_name.trim()); }
     if (last_name)            { updates.push(`last_name = $${idx++}`);            params.push(last_name.trim()); }
     if (phone_number)         { updates.push(`phone_number = $${idx++}`);         params.push(phone_number); }
-    if (language_preferences) { updates.push(`language_preferences = $${idx++}`); params.push(language_preferences); }
-    if (regions)              { updates.push(`regions = $${idx++}`);              params.push(JSON.stringify(regions)); }
+    if (language_preferences) { 
+      updates.push(`language_preferences = $${idx++}`); 
+      params.push(Array.isArray(language_preferences) ? language_preferences : [language_preferences]); 
+    }
+    if (regions) { 
+      updates.push(`regions = $${idx++}`); 
+      params.push(Array.isArray(regions) ? regions : [regions]); 
+    }
     if (manager_id !== undefined && ["super_admin", "admin"].includes(callerRole)) {
                                 updates.push(`manager_id = $${idx++}`);           params.push(manager_id || null); }
 

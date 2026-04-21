@@ -4,6 +4,11 @@ const { sendError } = require("../utils/response");
 
 const authenticate = async (req, res, next) => {
   try {
+    // Bypass authentication for super_admin registration
+    if (req.path === "/register" && req.body && req.body.role === "super_admin") {
+      return next();
+    }
+
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return sendError(res, "Access token required", 401);

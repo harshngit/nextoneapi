@@ -15,11 +15,11 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash        TEXT NOT NULL,
   phone_number         VARCHAR(20),
   role                 VARCHAR(30) NOT NULL CHECK (role IN (
-                         'super_admin', 'admin', 'sales_manager',
+                         'super_admin', 'superadmin', 'admin', 'sales_manager',
                          'sales_executive', 'external_caller'
                        )),
-  language_preferences VARCHAR(10) DEFAULT 'en',
-  regions              JSONB DEFAULT '[]',
+  language_preferences TEXT[] DEFAULT '{"en"}',
+  regions              TEXT[] DEFAULT '{}',
   manager_id           UUID REFERENCES users(id) ON DELETE SET NULL,
   is_active            BOOLEAN DEFAULT true,
   last_login           TIMESTAMPTZ,

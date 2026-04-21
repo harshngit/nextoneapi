@@ -11,6 +11,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- ============================================================
 DO $$ BEGIN
   CREATE TYPE user_role AS ENUM (
+    'super_admin',
     'superadmin',
     'admin',
     'sales_manager',

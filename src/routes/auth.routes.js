@@ -19,6 +19,7 @@ const { authenticate } = require("../middleware/auth");
  *       Creates a new user account. Only accessible by Super Admin or Admin.
  *       The role assigned determines what modules the user can access.
  *       A temporary password is set and the user will be prompted to change it on first login.
+ *       **Note:** Authentication token is not required if the role being created is 'super_admin'.
  *     tags: [Auth]
  *     security:
  *       - BearerAuth: []

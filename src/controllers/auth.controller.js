@@ -30,10 +30,14 @@ const generateResetToken = () =>
  */
 const register = async (req, res) => {
   try {
-    const { authorize } = require("../middleware/auth");
+    const { role: requestedRole } = req.body;
+
     // RBAC: only admin-level can register users
-    if (!["super_admin", "admin"].includes(req.user.role)) {
-      return sendError(res, "You do not have permission to register users", 403);
+    // Exception: super_admin can be created without a token (req.user will be undefined)
+    if (requestedRole !== "super_admin") {
+      if (!req.user || !["super_admin", "admin"].includes(req.user.role)) {
+        return sendError(res, "You do not have permission to register users", 403);
+      }
     }
 
     const {
@@ -51,7 +55,7 @@ const register = async (req, res) => {
     }
 
     // Prevent non-super_admin from creating super_admin
-    if (role === "super_admin" && req.user.role !== "super_admin") {
+    if (role === "super_admin" && req.user && req.user.role !== "super_admin") {
       return sendError(res, "Only Super Admin can create another Super Admin", 403);
     }
 
@@ -70,8 +74,8 @@ const register = async (req, res) => {
       [
         first_name.trim(), last_name.trim(), email.toLowerCase(),
         passwordHash, phone_number || null, role,
-        language_preferences || "en",
-        regions ? JSON.stringify(regions) : "[]",
+        language_preferences ? (Array.isArray(language_preferences) ? language_preferences : [language_preferences]) : ["en"],
+        regions ? (Array.isArray(regions) ? regions : [regions]) : [],
       ]
     );
 
