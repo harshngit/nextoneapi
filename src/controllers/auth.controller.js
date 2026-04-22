@@ -26,28 +26,24 @@ const generateResetToken = () =>
 // ─── Controllers ──────────────────────────────────────────────────────────────
 
 /**
- * POST /api/auth/register
- * Roles: super_admin, admin
+ * POST /api/v1/auth/register
  */
 const register = async (req, res, next) => {
   try {
     const { role: requestedRole } = req.body;
 
-    // RBAC: only admin-level can register users
-    // Exception: super_admin can be created without a token (req.user will be undefined)
+    // super_admin can be created without a token (first-time setup)
+    // All other roles require a valid admin/super_admin token
     if (requestedRole !== "super_admin") {
       if (!req.user || !["super_admin", "admin"].includes(req.user.role)) {
         return next(new AppError("You do not have permission to register users", 403));
       }
     }
 
-    const {
-      first_name, last_name, email, password, phone_number,
-      role, language_preferences, regions,
-    } = req.body;
+    const { first_name, last_name, email, password, phone_number, role } = req.body;
 
-    if (!first_name || !last_name || !email || !password || !role) {
-      return next(new AppError("first_name, last_name, email, password and role are required", 400));
+    if (!first_name || !last_name || !email || !password || !role || !phone_number) {
+      return next(new AppError("first_name, last_name, email, phone_number, password and role are required", 400));
     }
 
     const validRoles = ["super_admin", "admin", "sales_manager", "sales_executive", "external_caller"];
@@ -55,28 +51,43 @@ const register = async (req, res, next) => {
       return next(new AppError(`Invalid role. Must be one of: ${validRoles.join(", ")}`, 400));
     }
 
-    // Prevent non-super_admin from creating super_admin
+    // Prevent non-super_admin from creating another super_admin
     if (role === "super_admin" && req.user && req.user.role !== "super_admin") {
       return next(new AppError("Only Super Admin can create another Super Admin", 403));
     }
 
-    const existing = await pool.query("SELECT id FROM users WHERE email = $1", [email.toLowerCase()]);
-    if (existing.rows.length > 0) {
+    // Check duplicate email
+    const existingEmail = await pool.query(
+      "SELECT id FROM users WHERE email = $1",
+      [email.toLowerCase()]
+    );
+    if (existingEmail.rows.length > 0) {
       return next(new AppError("A user with this email already exists", 400));
+    }
+
+    // Check duplicate phone
+    const existingPhone = await pool.query(
+      "SELECT id FROM users WHERE phone_number = $1",
+      [phone_number]
+    );
+    if (existingPhone.rows.length > 0) {
+      return next(new AppError("A user with this phone number already exists", 400));
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
 
     const result = await pool.query(
       `INSERT INTO users
-        (first_name, last_name, email, password_hash, phone_number, role, language_preferences, regions, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true)
-       RETURNING id, email, role, first_name, last_name, created_at`,
+        (email, first_name, last_name, phone_number, password_hash, role)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, email, role, first_name, last_name, phone_number, is_active, created_at`,
       [
-        first_name.trim(), last_name.trim(), email.toLowerCase(),
-        passwordHash, phone_number || null, role,
-        Array.isArray(language_preferences) && language_preferences.length ? `{${language_preferences.join(',')}}` : (language_preferences ? `{${language_preferences}}` : '{en}'),
-        Array.isArray(regions) && regions.length ? `{${regions.join(',')}}` : (regions ? `{${regions}}` : '{}'),
+        email.toLowerCase(),
+        first_name.trim(),
+        last_name.trim(),
+        phone_number,
+        passwordHash,
+        role,
       ]
     );
 
@@ -87,12 +98,12 @@ const register = async (req, res, next) => {
 };
 
 /**
- * POST /api/auth/login
+ * POST /api/v1/auth/login
  */
 const login = async (req, res, next) => {
   try {
     const { email, phone_number, password } = req.body;
-    
+
     if ((!email && !phone_number) || !password) {
       return next(new AppError("Email or phone number, and password are required", 400));
     }
@@ -109,7 +120,7 @@ const login = async (req, res, next) => {
         [phone_number]
       );
     }
-    
+
     const user = result.rows[0];
 
     if (!user) return next(new AppError("Invalid credentials", 401));
@@ -121,14 +132,12 @@ const login = async (req, res, next) => {
     const accessToken  = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
 
-    // Store refresh token
     await pool.query(
       `INSERT INTO refresh_tokens (user_id, token, expires_at)
        VALUES ($1, $2, NOW() + INTERVAL '30 days')`,
       [user.id, refreshToken]
     );
 
-    // Update last_login
     await pool.query("UPDATE users SET last_login = NOW() WHERE id = $1", [user.id]);
 
     const { password_hash, ...safeUser } = user;
@@ -145,7 +154,7 @@ const login = async (req, res, next) => {
 };
 
 /**
- * POST /api/auth/logout
+ * POST /api/v1/auth/logout
  */
 const logout = async (req, res, next) => {
   try {
@@ -164,14 +173,13 @@ const logout = async (req, res, next) => {
 };
 
 /**
- * POST /api/auth/refresh-token
+ * POST /api/v1/auth/refresh-token
  */
 const refreshToken = async (req, res, next) => {
   try {
     const { refresh_token } = req.body;
     if (!refresh_token) return next(new AppError("Refresh token is required", 400));
 
-    // Verify token signature
     let decoded;
     try {
       decoded = jwt.verify(refresh_token, process.env.JWT_REFRESH_SECRET);
@@ -179,7 +187,6 @@ const refreshToken = async (req, res, next) => {
       return next(new AppError("Invalid or expired refresh token", 401));
     }
 
-    // Check token exists in DB
     const stored = await pool.query(
       "SELECT * FROM refresh_tokens WHERE user_id = $1 AND token = $2 AND expires_at > NOW()",
       [decoded.id, refresh_token]
@@ -208,13 +215,13 @@ const refreshToken = async (req, res, next) => {
 };
 
 /**
- * GET /api/auth/me
+ * GET /api/v1/auth/me
  */
 const getMe = async (req, res, next) => {
   try {
     const result = await pool.query(
       `SELECT id, email, first_name, last_name, phone_number, role,
-              language_preferences, regions, is_active, last_login, created_at, updated_at
+              is_active, last_login, created_at, updated_at
        FROM users WHERE id = $1`,
       [req.user.id]
     );
@@ -226,7 +233,7 @@ const getMe = async (req, res, next) => {
 };
 
 /**
- * PUT /api/auth/change-password
+ * PUT /api/v1/auth/change-password
  */
 const changePassword = async (req, res, next) => {
   try {
@@ -238,7 +245,10 @@ const changePassword = async (req, res, next) => {
       return next(new AppError("New password must be at least 8 characters", 400));
     }
 
-    const result = await pool.query("SELECT password_hash FROM users WHERE id = $1", [req.user.id]);
+    const result = await pool.query(
+      "SELECT password_hash FROM users WHERE id = $1",
+      [req.user.id]
+    );
     const isValid = await bcrypt.compare(current_password, result.rows[0].password_hash);
     if (!isValid) return next(new AppError("Current password is incorrect", 401));
 
@@ -246,9 +256,11 @@ const changePassword = async (req, res, next) => {
     if (isSame) return next(new AppError("New password cannot be same as current password", 400));
 
     const newHash = await bcrypt.hash(new_password, 12);
-    await pool.query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2", [newHash, req.user.id]);
+    await pool.query(
+      "UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2",
+      [newHash, req.user.id]
+    );
 
-    // Invalidate all refresh tokens for this user
     await pool.query("DELETE FROM refresh_tokens WHERE user_id = $1", [req.user.id]);
 
     return sendSuccess(res, "Password changed successfully. Please log in again.");
@@ -258,7 +270,7 @@ const changePassword = async (req, res, next) => {
 };
 
 /**
- * POST /api/auth/forgot-password
+ * POST /api/v1/auth/forgot-password
  */
 const forgotPassword = async (req, res, next) => {
   try {
@@ -270,10 +282,9 @@ const forgotPassword = async (req, res, next) => {
       [email.toLowerCase()]
     );
 
-    // Always return 200 to prevent email enumeration
     if (result.rows.length > 0) {
       const token = generateResetToken();
-      const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+      const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
       await pool.query(
         `INSERT INTO password_reset_tokens (user_id, token, expires_at)
@@ -282,8 +293,6 @@ const forgotPassword = async (req, res, next) => {
         [result.rows[0].id, token, expiresAt]
       );
 
-      // TODO: Send email via email service (nodemailer / sendgrid)
-      // await emailService.sendPasswordReset(email, token);
       console.log(`[DEV] Password reset token for ${email}: ${token}`);
     }
 
@@ -294,7 +303,7 @@ const forgotPassword = async (req, res, next) => {
 };
 
 /**
- * POST /api/auth/reset-password
+ * POST /api/v1/auth/reset-password
  */
 const resetPassword = async (req, res, next) => {
   try {
@@ -318,7 +327,10 @@ const resetPassword = async (req, res, next) => {
     const userId = result.rows[0].user_id;
     const newHash = await bcrypt.hash(new_password, 12);
 
-    await pool.query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2", [newHash, userId]);
+    await pool.query(
+      "UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2",
+      [newHash, userId]
+    );
     await pool.query("DELETE FROM password_reset_tokens WHERE user_id = $1", [userId]);
     await pool.query("DELETE FROM refresh_tokens WHERE user_id = $1", [userId]);
 
@@ -328,4 +340,7 @@ const resetPassword = async (req, res, next) => {
   }
 };
 
-module.exports = { register, login, logout, refreshToken, getMe, changePassword, forgotPassword, resetPassword };
+module.exports = {
+  register, login, logout, refreshToken,
+  getMe, changePassword, forgotPassword, resetPassword
+};

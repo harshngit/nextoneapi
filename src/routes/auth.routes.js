@@ -13,13 +13,20 @@ const { authenticate } = require("../middleware/auth");
 /**
  * @swagger
  * components:
+ *   securitySchemes:
+ *     BearerAuth:
+ *       type: http
+ *       scheme: bearer
+ *       bearerFormat: JWT
  *   schemas:
+ *
  *     RegisterRequest:
  *       type: object
  *       required:
  *         - first_name
  *         - last_name
  *         - email
+ *         - phone_number
  *         - password
  *         - role
  *       properties:
@@ -32,14 +39,14 @@ const { authenticate } = require("../middleware/auth");
  *         email:
  *           type: string
  *           format: email
- *           example: "shubham.shinde@nextonerealty.com"
+ *           example: "shubhamshinde@gmail.com"
+ *         phone_number:
+ *           type: string
+ *           example: "+918850773797"
  *         password:
  *           type: string
  *           minLength: 8
  *           example: "Shinde@123"
- *         phone_number:
- *           type: string
- *           example: "+918850773797"
  *         role:
  *           type: string
  *           enum:
@@ -49,22 +56,45 @@ const { authenticate } = require("../middleware/auth");
  *             - sales_executive
  *             - external_caller
  *           example: "super_admin"
- *         language_preferences:
+ *
+ *     RegisterResponse:
+ *       type: object
+ *       properties:
+ *         success:
+ *           type: boolean
+ *           example: true
+ *         message:
  *           type: string
- *           example: "en"
- *           description: Language code. Default is "en"
- *         regions:
- *           type: array
- *           items:
- *             type: string
- *           example: ["Mumbai", "Pune"]
- *           description: List of cities or regions the user operates in
- *         manager_id:
- *           type: string
- *           format: uuid
- *           nullable: true
- *           example: null
- *           description: Required when role is sales_executive. UUID of the Sales Manager.
+ *           example: "User registered successfully"
+ *         data:
+ *           type: object
+ *           properties:
+ *             id:
+ *               type: string
+ *               format: uuid
+ *               example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+ *             email:
+ *               type: string
+ *               example: "shubhamshinde@gmail.com"
+ *             first_name:
+ *               type: string
+ *               example: "Shubham"
+ *             last_name:
+ *               type: string
+ *               example: "Shinde"
+ *             phone_number:
+ *               type: string
+ *               example: "+918850773797"
+ *             role:
+ *               type: string
+ *               example: "super_admin"
+ *             is_active:
+ *               type: boolean
+ *               example: true
+ *             created_at:
+ *               type: string
+ *               format: date-time
+ *               example: "2025-04-22T10:00:00Z"
  *
  *     LoginRequest:
  *       type: object
@@ -74,12 +104,12 @@ const { authenticate } = require("../middleware/auth");
  *         email:
  *           type: string
  *           format: email
- *           example: "shubham.shinde@nextonerealty.com"
- *           description: Either email or phone_number is required
+ *           example: "shubhamshinde@gmail.com"
+ *           description: Use either email or phone_number
  *         phone_number:
  *           type: string
  *           example: "+918850773797"
- *           description: Either email or phone_number is required
+ *           description: Use either email or phone_number
  *         password:
  *           type: string
  *           example: "Shinde@123"
@@ -144,11 +174,11 @@ const { authenticate } = require("../middleware/auth");
  *       properties:
  *         current_password:
  *           type: string
- *           example: "OldPass@123"
+ *           example: "Shinde@123"
  *         new_password:
  *           type: string
  *           minLength: 8
- *           example: "NewPass@456"
+ *           example: "NewShinde@456"
  *
  *     ForgotPasswordRequest:
  *       type: object
@@ -158,7 +188,7 @@ const { authenticate } = require("../middleware/auth");
  *         email:
  *           type: string
  *           format: email
- *           example: "shubham.shinde@nextonerealty.com"
+ *           example: "shubhamshinde@gmail.com"
  *
  *     ResetPasswordRequest:
  *       type: object
@@ -169,7 +199,6 @@ const { authenticate } = require("../middleware/auth");
  *         token:
  *           type: string
  *           example: "a1b2c3d4e5f6g7h8..."
- *           description: Token received in the reset password email
  *         new_password:
  *           type: string
  *           minLength: 8
@@ -211,15 +240,11 @@ const { authenticate } = require("../middleware/auth");
  *   post:
  *     summary: Register a new user
  *     description: >
- *       Creates a new user account in the system.
+ *       Creates a new user account.
  *
- *       **No token required when creating a `super_admin`** — this is the
- *       first-time setup scenario. For all other roles (admin, sales_manager,
- *       sales_executive, external_caller), a valid Bearer token belonging to a
- *       super_admin or admin is required.
- *
- *       When creating a `sales_executive`, the `manager_id` field is required
- *       to assign them under a Sales Manager.
+ *       **No token required when creating `super_admin`** — this is the
+ *       first-time setup. For all other roles a valid Bearer token from
+ *       a super_admin or admin is required.
  *     tags: [Auth]
  *     security: []
  *     requestBody:
@@ -229,80 +254,83 @@ const { authenticate } = require("../middleware/auth");
  *           schema:
  *             $ref: '#/components/schemas/RegisterRequest'
  *           examples:
- *             CreateSuperAdmin:
+ *             SuperAdmin:
  *               summary: Create Super Admin (no token needed)
  *               value:
  *                 first_name: "Shubham"
  *                 last_name: "Shinde"
  *                 email: "shubhamshinde@gmail.com"
- *                 password: "Shinde@123"
  *                 phone_number: "+918850773797"
+ *                 password: "Shinde@123"
  *                 role: "super_admin"
- *                 language_preferences: "en"
- *                 regions: ["Mumbai", "Pune"]
- *             CreateSalesExecutive:
+ *             Admin:
+ *               summary: Create Admin (token required)
+ *               value:
+ *                 first_name: "Amit"
+ *                 last_name: "Joshi"
+ *                 email: "amit.joshi@nextonerealty.com"
+ *                 phone_number: "+919012345678"
+ *                 password: "TempPass@321"
+ *                 role: "admin"
+ *             SalesManager:
+ *               summary: Create Sales Manager (token required)
+ *               value:
+ *                 first_name: "Priya"
+ *                 last_name: "Mehta"
+ *                 email: "priya.mehta@nextonerealty.com"
+ *                 phone_number: "+919123456789"
+ *                 password: "TempPass@321"
+ *                 role: "sales_manager"
+ *             SalesExecutive:
  *               summary: Create Sales Executive (token required)
  *               value:
  *                 first_name: "Rahul"
  *                 last_name: "Sharma"
  *                 email: "rahul.sharma@nextonerealty.com"
- *                 password: "StrongPass@123"
  *                 phone_number: "+919876543210"
+ *                 password: "TempPass@123"
  *                 role: "sales_executive"
- *                 language_preferences: "en"
- *                 regions: ["Mumbai"]
- *                 manager_id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
- *             CreateSalesManager:
- *               summary: Create Sales Manager (token required)
+ *             ExternalCaller:
+ *               summary: Create External Caller (token required)
  *               value:
- *                 first_name: "Amit"
- *                 last_name: "Joshi"
- *                 email: "amit.joshi@nextonerealty.com"
+ *                 first_name: "Neha"
+ *                 last_name: "Patil"
+ *                 email: "neha.patil@nextonerealty.com"
+ *                 phone_number: "+919988776655"
  *                 password: "TempPass@321"
- *                 phone_number: "+919012345678"
- *                 role: "sales_manager"
- *                 regions: ["Pune"]
+ *                 role: "external_caller"
  *     responses:
  *       201:
  *         description: User registered successfully
  *         content:
  *           application/json:
  *             schema:
- *               $ref: '#/components/schemas/SuccessResponse'
- *             example:
- *               success: true
- *               message: "User registered successfully"
- *               data:
- *                 id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
- *                 email: "shubhamshinde@gmail.com"
- *                 role: "super_admin"
- *                 first_name: "Shubham"
- *                 last_name: "Shinde"
- *                 created_at: "2025-04-22T10:00:00Z"
+ *               $ref: '#/components/schemas/RegisterResponse'
  *       400:
- *         description: Validation error or email already exists
+ *         description: Validation error
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  *             examples:
  *               MissingFields:
- *                 summary: Missing required fields
  *                 value:
  *                   success: false
- *                   message: "first_name, last_name, email, password and role are required"
+ *                   message: "first_name, last_name, email, phone_number, password and role are required"
  *               DuplicateEmail:
- *                 summary: Email already registered
  *                 value:
  *                   success: false
  *                   message: "A user with this email already exists"
+ *               DuplicatePhone:
+ *                 value:
+ *                   success: false
+ *                   message: "A user with this phone number already exists"
  *               InvalidRole:
- *                 summary: Invalid role value
  *                 value:
  *                   success: false
  *                   message: "Invalid role. Must be one of: super_admin, admin, sales_manager, sales_executive, external_caller"
  *       403:
- *         description: Forbidden — insufficient role permissions
+ *         description: Forbidden
  *         content:
  *           application/json:
  *             example:
@@ -317,12 +345,8 @@ router.post("/register", authController.register);
  *   post:
  *     summary: Login with email or phone number
  *     description: >
- *       Authenticates a user using either their **email** or **phone number**
- *       along with their password. Returns a JWT access token (expires in 7 days)
- *       and a refresh token (expires in 30 days).
- *
- *       Store the `access_token` in memory and the `refresh_token` in secure
- *       storage (httpOnly cookie for web, SecureStorage for mobile).
+ *       Login using either **email** or **phone number** with password.
+ *       Returns JWT access token (7 days) and refresh token (30 days).
  *     tags: [Auth]
  *     security: []
  *     requestBody:
@@ -344,46 +368,28 @@ router.post("/register", authController.register);
  *                 password: "Shinde@123"
  *     responses:
  *       200:
- *         description: Login successful — returns tokens and user profile
+ *         description: Login successful
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/LoginResponse'
- *             example:
- *               success: true
- *               message: "Login successful"
- *               data:
- *                 access_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
- *                 refresh_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
- *                 expires_in: "7d"
- *                 user:
- *                   id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
- *                   first_name: "Shubham"
- *                   last_name: "Shinde"
- *                   email: "shubhamshinde@gmail.com"
- *                   phone_number: "+918850773797"
- *                   role: "super_admin"
- *                   is_active: true
- *                   last_login: "2025-04-22T10:00:00Z"
  *       400:
- *         description: Missing email/phone or password
+ *         description: Missing credentials
  *         content:
  *           application/json:
  *             example:
  *               success: false
  *               message: "Email or phone number, and password are required"
  *       401:
- *         description: Wrong credentials or account deactivated
+ *         description: Wrong credentials or deactivated account
  *         content:
  *           application/json:
  *             examples:
  *               InvalidCredentials:
- *                 summary: Wrong email or password
  *                 value:
  *                   success: false
  *                   message: "Invalid credentials"
- *               AccountDeactivated:
- *                 summary: Account is deactivated
+ *               Deactivated:
  *                 value:
  *                   success: false
  *                   message: "Your account has been deactivated. Contact admin."
@@ -394,14 +400,10 @@ router.post("/login", authController.login);
  * @swagger
  * /api/v1/auth/refresh-token:
  *   post:
- *     summary: Get a new access token using refresh token
+ *     summary: Get new access token using refresh token
  *     description: >
- *       Use this endpoint when the access token has expired (you receive a 401).
- *       Pass the stored refresh token to receive a new access token without
- *       requiring the user to log in again.
- *
- *       The refresh token is **not rotated** — it stays valid until its 30-day
- *       expiry or until the user logs out.
+ *       Call this when the access token has expired (401 response).
+ *       The refresh token is valid for 30 days and is not rotated.
  *     tags: [Auth]
  *     security: []
  *     requestBody:
@@ -414,7 +416,7 @@ router.post("/login", authController.login);
  *             refresh_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
  *     responses:
  *       200:
- *         description: New access token issued successfully
+ *         description: New access token issued
  *         content:
  *           application/json:
  *             example:
@@ -424,7 +426,7 @@ router.post("/login", authController.login);
  *                 access_token: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
  *                 expires_in: "7d"
  *       401:
- *         description: Refresh token is invalid or expired
+ *         description: Refresh token invalid or expired
  *         content:
  *           application/json:
  *             example:
@@ -439,11 +441,8 @@ router.post("/refresh-token", authController.refreshToken);
  *   post:
  *     summary: Send password reset link to email
  *     description: >
- *       Sends a password reset link to the provided email address.
- *       The reset token is valid for **15 minutes**.
- *
- *       This endpoint **always returns 200** even if the email is not found —
- *       this is intentional to prevent email enumeration attacks.
+ *       Always returns 200 even if email is not found — prevents email enumeration.
+ *       Reset token is valid for 15 minutes.
  *     tags: [Auth]
  *     security: []
  *     requestBody:
@@ -456,7 +455,7 @@ router.post("/refresh-token", authController.refreshToken);
  *             email: "shubhamshinde@gmail.com"
  *     responses:
  *       200:
- *         description: Always returns 200 for security reasons
+ *         description: Always 200 for security
  *         content:
  *           application/json:
  *             example:
@@ -469,14 +468,10 @@ router.post("/forgot-password", authController.forgotPassword);
  * @swagger
  * /api/v1/auth/reset-password:
  *   post:
- *     summary: Reset password using the token from email
+ *     summary: Reset password using token from email
  *     description: >
- *       Resets the user's password using the token received in the
- *       forgot-password email. The token is **single-use** and expires
- *       after 15 minutes.
- *
- *       After a successful reset, all existing sessions (refresh tokens)
- *       for that user are invalidated.
+ *       Single-use token valid for 15 minutes. All sessions are
+ *       invalidated after a successful reset.
  *     tags: [Auth]
  *     security: []
  *     requestBody:
@@ -486,7 +481,7 @@ router.post("/forgot-password", authController.forgotPassword);
  *           schema:
  *             $ref: '#/components/schemas/ResetPasswordRequest'
  *           example:
- *             token: "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6..."
+ *             token: "a1b2c3d4e5f6g7h8i9j0..."
  *             new_password: "NewSecurePass@789"
  *     responses:
  *       200:
@@ -497,17 +492,15 @@ router.post("/forgot-password", authController.forgotPassword);
  *               success: true
  *               message: "Password reset successfully. Please log in."
  *       400:
- *         description: Token is invalid or has expired
+ *         description: Token invalid or expired
  *         content:
  *           application/json:
  *             examples:
  *               InvalidToken:
- *                 summary: Token not found or expired
  *                 value:
  *                   success: false
  *                   message: "Reset token is invalid or has expired"
  *               ShortPassword:
- *                 summary: Password too short
  *                 value:
  *                   success: false
  *                   message: "Password must be at least 8 characters"
@@ -524,9 +517,8 @@ router.post("/reset-password", authController.resetPassword);
  *   post:
  *     summary: Logout and invalidate refresh token
  *     description: >
- *       Removes the refresh token from the database, invalidating the session.
- *       The access token will remain technically valid until it naturally expires,
- *       so the client must also delete both tokens from local storage.
+ *       Removes the refresh token from the database.
+ *       Client must also delete both tokens from local storage.
  *     tags: [Auth]
  *     security:
  *       - BearerAuth: []
@@ -547,7 +539,7 @@ router.post("/reset-password", authController.resetPassword);
  *               success: true
  *               message: "Logged out successfully"
  *       400:
- *         description: Refresh token missing in request body
+ *         description: Missing refresh token
  *         content:
  *           application/json:
  *             example:
@@ -564,15 +556,14 @@ router.post("/logout", authenticate, authController.logout);
  *   get:
  *     summary: Get current authenticated user profile
  *     description: >
- *       Returns the full profile of the currently logged-in user based on
- *       the Bearer token. Call this on app load to restore the session.
- *       The password hash is never included in the response.
+ *       Returns profile of the logged-in user. Call on app load to restore session.
+ *       Password hash is never returned.
  *     tags: [Auth]
  *     security:
  *       - BearerAuth: []
  *     responses:
  *       200:
- *         description: User profile returned successfully
+ *         description: User profile returned
  *         content:
  *           application/json:
  *             example:
@@ -585,19 +576,12 @@ router.post("/logout", authenticate, authController.logout);
  *                 email: "shubhamshinde@gmail.com"
  *                 phone_number: "+918850773797"
  *                 role: "super_admin"
- *                 language_preferences: ["en"]
- *                 regions: ["Mumbai", "Pune"]
  *                 is_active: true
  *                 last_login: "2025-04-22T10:00:00Z"
  *                 created_at: "2025-04-22T09:00:00Z"
  *                 updated_at: "2025-04-22T09:00:00Z"
  *       401:
- *         description: Token missing, invalid, or expired
- *         content:
- *           application/json:
- *             example:
- *               success: false
- *               message: "Invalid data format provided!"
+ *         description: Token missing or invalid
  *       404:
  *         description: User not found
  */
@@ -609,11 +593,8 @@ router.get("/me", authenticate, authController.getMe);
  *   put:
  *     summary: Change password for logged-in user
  *     description: >
- *       Allows the currently authenticated user to change their own password.
- *       Requires the current password for verification.
- *
- *       After a successful change, **all refresh tokens** for this user are
- *       invalidated — they will need to log in again on all devices.
+ *       Requires current password for verification. After success, all
+ *       existing sessions are invalidated — user must log in again on all devices.
  *     tags: [Auth]
  *     security:
  *       - BearerAuth: []
@@ -640,17 +621,15 @@ router.get("/me", authenticate, authController.getMe);
  *           application/json:
  *             examples:
  *               SamePassword:
- *                 summary: New password same as current
  *                 value:
  *                   success: false
  *                   message: "New password cannot be same as current password"
  *               TooShort:
- *                 summary: Password too short
  *                 value:
  *                   success: false
  *                   message: "New password must be at least 8 characters"
  *       401:
- *         description: Current password is wrong or token invalid
+ *         description: Wrong current password
  *         content:
  *           application/json:
  *             example:
