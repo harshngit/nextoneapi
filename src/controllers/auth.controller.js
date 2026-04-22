@@ -75,8 +75,8 @@ const register = async (req, res, next) => {
       [
         first_name.trim(), last_name.trim(), email.toLowerCase(),
         passwordHash, phone_number || null, role,
-        language_preferences ? (Array.isArray(language_preferences) ? language_preferences : [language_preferences]) : ["en"],
-        regions ? (Array.isArray(regions) ? regions : [regions]) : [],
+        Array.isArray(language_preferences) && language_preferences.length ? `{${language_preferences.join(',')}}` : (language_preferences ? `{${language_preferences}}` : '{en}'),
+        Array.isArray(regions) && regions.length ? `{${regions.join(',')}}` : (regions ? `{${regions}}` : '{}'),
       ]
     );
 
