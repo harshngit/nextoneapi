@@ -1,11 +1,12 @@
 const bcrypt = require("bcryptjs");
 const { pool } = require("../config/db");
-const { sendSuccess, sendError, paginate } = require("../utils/response");
+const { sendSuccess, paginate } = require("../utils/response");
+const AppError = require("../utils/AppError");
 
 /**
  * GET /api/users
  */
-const getAllUsers = async (req, res) => {
+const getAllUsers = async (req, res, next) => {
   try {
     const { role, is_active, region, search, manager_id, page = 1, per_page = 20 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(per_page);
@@ -50,15 +51,14 @@ const getAllUsers = async (req, res) => {
 
     return res.json(paginate(dataResult.rows, total, parseInt(page), parseInt(per_page)));
   } catch (err) {
-    console.error("[getAllUsers]", err);
-    return sendError(res, "Failed to fetch users", 500);
+    next(err);
   }
 };
 
 /**
  * POST /api/users
  */
-const createUser = async (req, res) => {
+const createUser = async (req, res, next) => {
   try {
     const {
       first_name, last_name, email, password, phone_number,
@@ -66,25 +66,25 @@ const createUser = async (req, res) => {
     } = req.body;
 
     if (!first_name || !last_name || !email || !password || !role) {
-      return sendError(res, "first_name, last_name, email, password, and role are required", 400);
+      return next(new AppError("first_name, last_name, email, password, and role are required", 400));
     }
 
     const validRoles = ["admin", "sales_manager", "sales_executive", "external_caller"];
     if (!validRoles.includes(role)) {
-      return sendError(res, `Invalid role. Allowed: ${validRoles.join(", ")}`, 400);
+      return next(new AppError(`Invalid role. Allowed: ${validRoles.join(", ")}`, 400));
     }
 
     if (role === "sales_executive" && !manager_id) {
-      return sendError(res, "manager_id is required when creating a sales_executive", 400);
+      return next(new AppError("manager_id is required when creating a sales_executive", 400));
     }
 
     const existing = await pool.query("SELECT id FROM users WHERE email = $1", [email.toLowerCase()]);
-    if (existing.rows.length > 0) return sendError(res, "A user with this email already exists", 400);
+    if (existing.rows.length > 0) return next(new AppError("A user with this email already exists", 400));
 
     if (manager_id) {
       const mgr = await pool.query("SELECT id, role FROM users WHERE id = $1 AND is_active = true", [manager_id]);
-      if (mgr.rows.length === 0) return sendError(res, "Manager not found", 400);
-      if (mgr.rows[0].role !== "sales_manager") return sendError(res, "Provided manager_id does not belong to a Sales Manager", 400);
+      if (mgr.rows.length === 0) return next(new AppError("Manager not found", 400));
+      if (mgr.rows[0].role !== "sales_manager") return next(new AppError("Provided manager_id does not belong to a Sales Manager", 400));
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
@@ -106,22 +106,21 @@ const createUser = async (req, res) => {
 
     return sendSuccess(res, "User created successfully", result.rows[0], 201);
   } catch (err) {
-    console.error("[createUser]", err);
-    return sendError(res, "Failed to create user", 500);
+    next(err);
   }
 };
 
 /**
  * GET /api/users/:id
  */
-const getUserById = async (req, res) => {
+const getUserById = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { role, id: callerId } = req.user;
 
     // Sales Executive can only view themselves
     if (role === "sales_executive" && id !== callerId) {
-      return sendError(res, "Access denied", 403);
+      return next(new AppError("Access denied", 403));
     }
 
     const result = await pool.query(
@@ -135,13 +134,13 @@ const getUserById = async (req, res) => {
       [id]
     );
 
-    if (result.rows.length === 0) return sendError(res, "User not found", 404);
+    if (result.rows.length === 0) return next(new AppError("User not found", 404));
 
     const user = result.rows[0];
 
     // Sales Manager can only view their own team
     if (role === "sales_manager" && user.manager_id !== callerId) {
-      return sendError(res, "Access denied to this user's profile", 403);
+      return next(new AppError("Access denied to this user's profile", 403));
     }
 
     const { manager_first_name, manager_last_name, manager_id, ...rest } = user;
@@ -152,25 +151,24 @@ const getUserById = async (req, res) => {
 
     return sendSuccess(res, "User fetched successfully", formatted);
   } catch (err) {
-    console.error("[getUserById]", err);
-    return sendError(res, "Failed to fetch user", 500);
+    next(err);
   }
 };
 
 /**
  * PUT /api/users/:id
  */
-const updateUser = async (req, res) => {
+const updateUser = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { role: callerRole, id: callerId } = req.user;
 
     // Only admin+ or the user themselves can update
     const canUpdate = ["super_admin", "admin"].includes(callerRole) || callerId === id;
-    if (!canUpdate) return sendError(res, "You can only update your own profile", 403);
+    if (!canUpdate) return next(new AppError("You can only update your own profile", 403));
 
     const existing = await pool.query("SELECT id, manager_id FROM users WHERE id = $1", [id]);
-    if (existing.rows.length === 0) return sendError(res, "User not found", 404);
+    if (existing.rows.length === 0) return next(new AppError("User not found", 404));
 
     const { first_name, last_name, phone_number, language_preferences, regions, manager_id } = req.body;
 
@@ -192,7 +190,7 @@ const updateUser = async (req, res) => {
     if (manager_id !== undefined && ["super_admin", "admin"].includes(callerRole)) {
                                 updates.push(`manager_id = $${idx++}`);           params.push(manager_id || null); }
 
-    if (updates.length === 0) return sendError(res, "No fields to update", 400);
+    if (updates.length === 0) return next(new AppError("No fields to update", 400));
 
     updates.push(`updated_at = NOW()`);
     params.push(id);
@@ -205,21 +203,20 @@ const updateUser = async (req, res) => {
 
     return sendSuccess(res, "User updated successfully", result.rows[0]);
   } catch (err) {
-    console.error("[updateUser]", err);
-    return sendError(res, "Failed to update user", 500);
+    next(err);
   }
 };
 
 /**
  * DELETE /api/users/:id  (soft delete)
  */
-const deleteUser = async (req, res) => {
+const deleteUser = async (req, res, next) => {
   try {
     const { id } = req.params;
 
     const result = await pool.query("SELECT role FROM users WHERE id = $1", [id]);
-    if (result.rows.length === 0) return sendError(res, "User not found", 404);
-    if (result.rows[0].role === "super_admin") return sendError(res, "Cannot deactivate a Super Admin", 400);
+    if (result.rows.length === 0) return next(new AppError("User not found", 404));
+    if (result.rows[0].role === "super_admin") return next(new AppError("Cannot deactivate a Super Admin", 400));
 
     await pool.query(
       "UPDATE users SET is_active = false, updated_at = NOW() WHERE id = $1",
@@ -231,26 +228,25 @@ const deleteUser = async (req, res) => {
 
     return sendSuccess(res, "User deactivated successfully");
   } catch (err) {
-    console.error("[deleteUser]", err);
-    return sendError(res, "Failed to deactivate user", 500);
+    next(err);
   }
 };
 
 /**
  * PATCH /api/users/:id/role
  */
-const updateRole = async (req, res) => {
+const updateRole = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { role } = req.body;
 
     const validRoles = ["admin", "sales_manager", "sales_executive", "external_caller"];
     if (!role || !validRoles.includes(role)) {
-      return sendError(res, `Invalid role. Allowed: ${validRoles.join(", ")}`, 400);
+      return next(new AppError(`Invalid role. Allowed: ${validRoles.join(", ")}`, 400));
     }
 
     const existing = await pool.query("SELECT role FROM users WHERE id = $1", [id]);
-    if (existing.rows.length === 0) return sendError(res, "User not found", 404);
+    if (existing.rows.length === 0) return next(new AppError("User not found", 404));
 
     const updates = [`role = $1`, `updated_at = NOW()`];
     const params = [role, id];
@@ -267,15 +263,14 @@ const updateRole = async (req, res) => {
 
     return sendSuccess(res, `User role updated to ${role}`, result.rows[0]);
   } catch (err) {
-    console.error("[updateRole]", err);
-    return sendError(res, "Failed to update role", 500);
+    next(err);
   }
 };
 
 /**
  * GET /api/users/team
  */
-const getTeam = async (req, res) => {
+const getTeam = async (req, res, next) => {
   try {
     const { role, id: callerId } = req.user;
     let managerId = callerId;
@@ -289,7 +284,7 @@ const getTeam = async (req, res) => {
       "SELECT id, first_name, last_name, role FROM users WHERE id = $1 AND role = 'sales_manager'",
       [managerId]
     );
-    if (managerResult.rows.length === 0) return sendError(res, "Manager not found", 404);
+    if (managerResult.rows.length === 0) return next(new AppError("Manager not found", 404));
 
     const teamResult = await pool.query(
       `SELECT id, first_name, last_name, email, phone_number, is_active,
@@ -308,22 +303,21 @@ const getTeam = async (req, res) => {
       members: teamResult.rows,
     });
   } catch (err) {
-    console.error("[getTeam]", err);
-    return sendError(res, "Failed to fetch team", 500);
+    next(err);
   }
 };
 
 /**
  * GET /api/users/:id/performance
  */
-const getUserPerformance = async (req, res) => {
+const getUserPerformance = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { from, to, role: callerRole, id: callerId } = req.user;
 
     // Access control
     if (callerRole === "sales_executive" && id !== callerId) {
-      return sendError(res, "Access denied", 403);
+      return next(new AppError("Access denied", 403));
     }
 
     const fromDate = req.query.from || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split("T")[0];
@@ -333,7 +327,7 @@ const getUserPerformance = async (req, res) => {
       "SELECT id, first_name, last_name FROM users WHERE id = $1",
       [id]
     );
-    if (user.rows.length === 0) return sendError(res, "User not found", 404);
+    if (user.rows.length === 0) return next(new AppError("User not found", 404));
 
     // If caller is sales_manager, verify the user is in their team
     if (callerRole === "sales_manager") {
@@ -341,7 +335,7 @@ const getUserPerformance = async (req, res) => {
         "SELECT id FROM users WHERE id = $1 AND manager_id = $2",
         [id, callerId]
       );
-      if (check.rows.length === 0) return sendError(res, "Access denied", 403);
+      if (check.rows.length === 0) return next(new AppError("Access denied", 403));
     }
 
     const stats = await pool.query(
@@ -391,8 +385,7 @@ const getUserPerformance = async (req, res) => {
       overdue_followups:      parseInt(t.overdue_followups),
     });
   } catch (err) {
-    console.error("[getUserPerformance]", err);
-    return sendError(res, "Failed to fetch performance stats", 500);
+    next(err);
   }
 };
 

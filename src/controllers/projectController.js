@@ -1,12 +1,13 @@
 const { pool } = require("../config/db");
-const { sendSuccess, sendError, paginate } = require("../utils/response");
+const { sendSuccess, paginate } = require("../utils/response");
+const AppError = require("../utils/AppError");
 
 const VALID_STATUSES = ["active", "inactive", "upcoming", "completed"];
 
 /**
  * GET /api/v1/projects
  */
-const getAllProjects = async (req, res) => {
+const getAllProjects = async (req, res, next) => {
   try {
     const { status, city, search, page = 1, per_page = 20 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(per_page);
@@ -37,15 +38,14 @@ const getAllProjects = async (req, res) => {
 
     return res.json(paginate(dataResult.rows, total, parseInt(page), parseInt(per_page)));
   } catch (err) {
-    console.error("[getAllProjects]", err);
-    return sendError(res, "Failed to fetch projects", 500);
+    next(err);
   }
 };
 
 /**
  * POST /api/v1/projects
  */
-const createProject = async (req, res) => {
+const createProject = async (req, res, next) => {
   try {
     const {
       name, developer, city, locality, address, configurations,
@@ -53,7 +53,7 @@ const createProject = async (req, res) => {
       amenities, status = "active", brochure_url, description,
     } = req.body;
 
-    if (!name || !city) return sendError(res, "name and city are required", 400);
+    if (!name || !city) return next(new AppError("name and city are required", 400));
 
     const result = await pool.query(
       `INSERT INTO projects
@@ -70,15 +70,14 @@ const createProject = async (req, res) => {
     );
     return sendSuccess(res, "Project created successfully", result.rows[0], 201);
   } catch (err) {
-    console.error("[createProject]", err);
-    return sendError(res, "Failed to create project", 500);
+    next(err);
   }
 };
 
 /**
  * GET /api/v1/projects/:id
  */
-const getProjectById = async (req, res) => {
+const getProjectById = async (req, res, next) => {
   try {
     const { id } = req.params;
     const result = await pool.query(
@@ -87,22 +86,21 @@ const getProjectById = async (req, res) => {
        FROM projects p WHERE p.id = $1`,
       [id]
     );
-    if (result.rows.length === 0) return sendError(res, "Project not found", 404);
+    if (result.rows.length === 0) return next(new AppError("Project not found", 404));
     return sendSuccess(res, "Project fetched successfully", result.rows[0]);
   } catch (err) {
-    console.error("[getProjectById]", err);
-    return sendError(res, "Failed to fetch project", 500);
+    next(err);
   }
 };
 
 /**
  * PUT /api/v1/projects/:id
  */
-const updateProject = async (req, res) => {
+const updateProject = async (req, res, next) => {
   try {
     const { id } = req.params;
     const existing = await pool.query("SELECT id FROM projects WHERE id = $1", [id]);
-    if (existing.rows.length === 0) return sendError(res, "Project not found", 404);
+    if (existing.rows.length === 0) return next(new AppError("Project not found", 404));
 
     const fields = ["name", "developer", "city", "locality", "address", "price_range",
                     "total_units", "possession_date", "rera_number", "brochure_url", "description"];
@@ -123,7 +121,7 @@ const updateProject = async (req, res) => {
       }
     }
 
-    if (updates.length === 0) return sendError(res, "No fields to update", 400);
+    if (updates.length === 0) return next(new AppError("No fields to update", 400));
     updates.push(`updated_at = NOW()`);
     params.push(id);
 
@@ -133,41 +131,39 @@ const updateProject = async (req, res) => {
     );
     return sendSuccess(res, "Project updated successfully", result.rows[0]);
   } catch (err) {
-    console.error("[updateProject]", err);
-    return sendError(res, "Failed to update project", 500);
+    next(err);
   }
 };
 
 /**
  * DELETE /api/v1/projects/:id
  */
-const deleteProject = async (req, res) => {
+const deleteProject = async (req, res, next) => {
   try {
     const { id } = req.params;
     const existing = await pool.query("SELECT id FROM projects WHERE id = $1", [id]);
-    if (existing.rows.length === 0) return sendError(res, "Project not found", 404);
+    if (existing.rows.length === 0) return next(new AppError("Project not found", 404));
     await pool.query("UPDATE projects SET status = 'inactive', updated_at = NOW() WHERE id = $1", [id]);
     return sendSuccess(res, "Project deactivated successfully");
   } catch (err) {
-    console.error("[deleteProject]", err);
-    return sendError(res, "Failed to deactivate project", 500);
+    next(err);
   }
 };
 
 /**
  * PATCH /api/v1/projects/:id/status
  */
-const updateProjectStatus = async (req, res) => {
+const updateProjectStatus = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
 
     if (!status || !VALID_STATUSES.includes(status)) {
-      return sendError(res, `Invalid status. Must be one of: ${VALID_STATUSES.join(", ")}`, 400);
+      return next(new AppError(`Invalid status. Must be one of: ${VALID_STATUSES.join(", ")}`, 400));
     }
 
     const existing = await pool.query("SELECT id FROM projects WHERE id = $1", [id]);
-    if (existing.rows.length === 0) return sendError(res, "Project not found", 404);
+    if (existing.rows.length === 0) return next(new AppError("Project not found", 404));
 
     const result = await pool.query(
       "UPDATE projects SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING id, status",
@@ -175,22 +171,21 @@ const updateProjectStatus = async (req, res) => {
     );
     return sendSuccess(res, `Project status updated to ${status}`, result.rows[0]);
   } catch (err) {
-    console.error("[updateProjectStatus]", err);
-    return sendError(res, "Failed to update project status", 500);
+    next(err);
   }
 };
 
 /**
  * GET /api/v1/projects/:id/leads
  */
-const getProjectLeads = async (req, res) => {
+const getProjectLeads = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { status, page = 1, per_page = 20 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(per_page);
 
     const project = await pool.query("SELECT id, name FROM projects WHERE id = $1", [id]);
-    if (project.rows.length === 0) return sendError(res, "Project not found", 404);
+    if (project.rows.length === 0) return next(new AppError("Project not found", 404));
 
     let conditions = ["l.project_id = $1", "l.is_archived = false"];
     const params = [id];
@@ -213,14 +208,18 @@ const getProjectLeads = async (req, res) => {
       [...params, parseInt(per_page), offset]
     );
 
-    return res.json({
-      success: true,
-      data: { project: project.rows[0], leads: dataResult.rows },
-      pagination: { total, page: parseInt(page), per_page: parseInt(per_page), total_pages: Math.ceil(total / parseInt(per_page)) }
+    return sendSuccess(res, "Project leads fetched", {
+      project: project.rows[0],
+      leads: dataResult.rows,
+      pagination: {
+        total,
+        page: parseInt(page),
+        per_page: parseInt(per_page),
+        total_pages: Math.ceil(total / parseInt(per_page))
+      }
     });
   } catch (err) {
-    console.error("[getProjectLeads]", err);
-    return sendError(res, "Failed to fetch project leads", 500);
+    next(err);
   }
 };
 

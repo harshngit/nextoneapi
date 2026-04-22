@@ -1,6 +1,7 @@
 const { pool } = require("../config/db");
 const { sendSuccess, sendError } = require("../utils/response");
 const { emitToRole, emitToUser } = require("../config/socket");
+const AppError = require("../utils/AppError");
 
 const defaultRange = () => {
   const now = new Date();
@@ -28,7 +29,7 @@ const broadcastDashboardUpdate = (type, data, userId = null) => {
 /**
  * GET /api/v1/dashboard/overview
  */
-const getOverview = async (req, res) => {
+const getOverview = async (req, res, next) => {
   try {
     const { role, id: callerId } = req.user;
     const { from, to, project_id } = req.query;
@@ -83,15 +84,14 @@ const getOverview = async (req, res) => {
 
     return sendSuccess(res, "Overview fetched", data);
   } catch (err) {
-    console.error("[getOverview]", err);
-    return sendError(res, "Failed to fetch overview", 500);
+    next(err);
   }
 };
 
 /**
  * GET /api/v1/dashboard/team-performance
  */
-const getTeamPerformance = async (req, res) => {
+const getTeamPerformance = async (req, res, next) => {
   try {
     const { role, id: callerId } = req.user;
     const { manager_id, from, to } = req.query;
@@ -146,15 +146,14 @@ const getTeamPerformance = async (req, res) => {
 
     return sendSuccess(res, "Team performance fetched", data);
   } catch (err) {
-    console.error("[getTeamPerformance]", err);
-    return sendError(res, "Failed to fetch team performance", 500);
+    next(err);
   }
 };
 
 /**
  * GET /api/v1/dashboard/site-visits
  */
-const getSiteVisitAnalytics = async (req, res) => {
+const getSiteVisitAnalytics = async (req, res, next) => {
   try {
     const { role, id: callerId } = req.user;
     const { from, to } = req.query;
@@ -209,15 +208,14 @@ const getSiteVisitAnalytics = async (req, res) => {
       upcoming: upcoming.rows,
     });
   } catch (err) {
-    console.error("[getSiteVisitAnalytics]", err);
-    return sendError(res, "Failed to fetch analytics", 500);
+    next(err);
   }
 };
 
 /**
  * GET /api/v1/dashboard/followup-tracker
  */
-const getFollowupTracker = async (req, res) => {
+const getFollowupTracker = async (req, res, next) => {
   try {
     const { role, id: callerId } = req.user;
 
@@ -265,18 +263,17 @@ const getFollowupTracker = async (req, res) => {
       })),
     });
   } catch (err) {
-    console.error("[getFollowupTracker]", err);
-    return sendError(res, "Failed to fetch tracker", 500);
+    next(err);
   }
 };
 
 /**
  * GET /api/v1/reports/leads
  */
-const getLeadsReport = async (req, res) => {
+const getLeadsReport = async (req, res, next) => {
   try {
     const { from, to, status, source, assigned_to, project_id } = req.query;
-    if (!from || !to) return sendError(res, "from and to date are required", 400);
+    if (!from || !to) return next(new AppError("from and to date are required", 400));
 
     const { role, id: callerId } = req.user;
 
@@ -329,18 +326,17 @@ const getLeadsReport = async (req, res) => {
       leads: leads.rows,
     });
   } catch (err) {
-    console.error("[getLeadsReport]", err);
-    return sendError(res, "Failed to generate report", 500);
+    next(err);
   }
 };
 
 /**
  * GET /api/v1/reports/conversion
  */
-const getConversionReport = async (req, res) => {
+const getConversionReport = async (req, res, next) => {
   try {
     const { from, to } = req.query;
-    if (!from || !to) return sendError(res, "from and to date are required", 400);
+    if (!from || !to) return next(new AppError("from and to date are required", 400));
 
     const params = [from, to];
     const baseWhere = "WHERE l.is_archived = false AND l.created_at::date BETWEEN $1 AND $2";
@@ -373,8 +369,7 @@ const getConversionReport = async (req, res) => {
       by_executive: byExec.rows.map(r => ({ ...r, total: parseInt(r.total), booked: parseInt(r.booked), rate: calcRate(r.booked, r.total) })),
     });
   } catch (err) {
-    console.error("[getConversionReport]", err);
-    return sendError(res, "Failed to generate report", 500);
+    next(err);
   }
 };
 

@@ -1,5 +1,6 @@
 const { pool } = require("../config/db");
-const { sendSuccess, sendError, paginate } = require("../utils/response");
+const { sendSuccess, paginate } = require("../utils/response");
+const AppError = require("../utils/AppError");
 
 const VALID_STATUSES = ["new", "contacted", "interested", "follow_up", "site_visit_scheduled", "site_visit_done", "negotiation", "booked", "lost"];
 
@@ -14,7 +15,7 @@ const logActivity = async (client, leadId, type, note, performedBy) => {
 /**
  * GET /api/v1/leads
  */
-const getAllLeads = async (req, res) => {
+const getAllLeads = async (req, res, next) => {
   try {
     const { status, source, assigned_to, project_id, from, to, search, page = 1, per_page = 20 } = req.query;
     const { role, id: callerId } = req.user;
@@ -67,19 +68,18 @@ const getAllLeads = async (req, res) => {
 
     return res.json(paginate(dataResult.rows, total, parseInt(page), parseInt(per_page)));
   } catch (err) {
-    console.error("[getAllLeads]", err);
-    return sendError(res, "Failed to fetch leads", 500);
+    next(err);
   }
 };
 
 /**
  * POST /api/v1/leads
  */
-const createLead = async (req, res) => {
+const createLead = async (req, res, next) => {
   const client = await pool.connect();
   try {
     const { name, phone, email, source, project_id, assigned_to, budget, location_preference, notes } = req.body;
-    if (!name || !phone) return sendError(res, "name and phone are required", 400);
+    if (!name || !phone) return next(new AppError("name and phone are required", 400));
 
     await client.query("BEGIN");
 
@@ -98,11 +98,10 @@ const createLead = async (req, res) => {
     }
 
     await client.query("COMMIT");
-    return sendSuccess(res, "Lead created successfully", lead, 201);
+    return sendSuccess(res, "Lead created", lead, 201);
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("[createLead]", err);
-    return sendError(res, "Failed to create lead", 500);
+    next(err);
   } finally {
     client.release();
   }
@@ -111,7 +110,7 @@ const createLead = async (req, res) => {
 /**
  * GET /api/v1/leads/:id
  */
-const getLeadById = async (req, res) => {
+const getLeadById = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { role, id: callerId } = req.user;
@@ -128,11 +127,11 @@ const getLeadById = async (req, res) => {
       [id]
     );
 
-    if (result.rows.length === 0) return sendError(res, "Lead not found", 404);
+    if (result.rows.length === 0) return next(new AppError("Lead not found", 404));
     const lead = result.rows[0];
 
     if (role === "sales_executive" && lead.assigned_to !== callerId) {
-      return sendError(res, "Access denied", 403);
+      return next(new AppError("Access denied", 403));
     }
 
     return sendSuccess(res, "Lead fetched successfully", {
@@ -141,25 +140,24 @@ const getLeadById = async (req, res) => {
       project: lead.project_id ? { id: lead.project_id, name: lead.project_name, city: lead.project_city, locality: lead.project_locality } : null,
     });
   } catch (err) {
-    console.error("[getLeadById]", err);
-    return sendError(res, "Failed to fetch lead", 500);
+    next(err);
   }
 };
 
 /**
  * PUT /api/v1/leads/:id
  */
-const updateLead = async (req, res) => {
+const updateLead = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { name, phone, email, source, project_id, budget, location_preference } = req.body;
 
     const existing = await pool.query("SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [id]);
-    if (existing.rows.length === 0) return sendError(res, "Lead not found", 404);
+    if (existing.rows.length === 0) return next(new AppError("Lead not found", 404));
 
     const { role, id: callerId } = req.user;
     if (role === "sales_executive" && existing.rows[0].assigned_to !== callerId) {
-      return sendError(res, "Access denied", 403);
+      return next(new AppError("Access denied", 403));
     }
 
     const updates = []; const params = []; let idx = 1;
@@ -171,7 +169,7 @@ const updateLead = async (req, res) => {
     if (budget)              { updates.push(`budget = $${idx++}`);              params.push(budget); }
     if (location_preference) { updates.push(`location_preference = $${idx++}`); params.push(location_preference); }
 
-    if (updates.length === 0) return sendError(res, "No fields to update", 400);
+    if (updates.length === 0) return next(new AppError("No fields to update", 400));
     updates.push(`updated_at = NOW()`);
     params.push(id);
 
@@ -181,46 +179,44 @@ const updateLead = async (req, res) => {
     );
     return sendSuccess(res, "Lead updated successfully", result.rows[0]);
   } catch (err) {
-    console.error("[updateLead]", err);
-    return sendError(res, "Failed to update lead", 500);
+    next(err);
   }
 };
 
 /**
  * DELETE /api/v1/leads/:id
  */
-const deleteLead = async (req, res) => {
+const deleteLead = async (req, res, next) => {
   try {
     const { id } = req.params;
     const existing = await pool.query("SELECT id FROM leads WHERE id = $1", [id]);
-    if (existing.rows.length === 0) return sendError(res, "Lead not found", 404);
+    if (existing.rows.length === 0) return next(new AppError("Lead not found", 404));
     await pool.query("UPDATE leads SET is_archived = true, updated_at = NOW() WHERE id = $1", [id]);
     return sendSuccess(res, "Lead archived successfully");
   } catch (err) {
-    console.error("[deleteLead]", err);
-    return sendError(res, "Failed to archive lead", 500);
+    next(err);
   }
 };
 
 /**
  * PATCH /api/v1/leads/:id/status
  */
-const updateLeadStatus = async (req, res) => {
+const updateLeadStatus = async (req, res, next) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
     const { status, note } = req.body;
 
     if (!status || !VALID_STATUSES.includes(status)) {
-      return sendError(res, `Invalid status. Must be one of: ${VALID_STATUSES.join(", ")}`, 400);
+      return next(new AppError(`Invalid status. Must be one of: ${VALID_STATUSES.join(", ")}`, 400));
     }
 
     const existing = await pool.query("SELECT id, status, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [id]);
-    if (existing.rows.length === 0) return sendError(res, "Lead not found", 404);
+    if (existing.rows.length === 0) return next(new AppError("Lead not found", 404));
 
     const { role, id: callerId } = req.user;
     if (role === "sales_executive" && existing.rows[0].assigned_to !== callerId) {
-      return sendError(res, "Access denied", 403);
+      return next(new AppError("Access denied", 403));
     }
 
     await client.query("BEGIN");
@@ -238,8 +234,7 @@ const updateLeadStatus = async (req, res) => {
     return sendSuccess(res, `Lead status updated to ${status}`, result.rows[0]);
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("[updateLeadStatus]", err);
-    return sendError(res, "Failed to update status", 500);
+    next(err);
   } finally {
     client.release();
   }
@@ -248,26 +243,26 @@ const updateLeadStatus = async (req, res) => {
 /**
  * PATCH /api/v1/leads/:id/assign
  */
-const assignLead = async (req, res) => {
+const assignLead = async (req, res, next) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
     const { assigned_to, note } = req.body;
 
-    if (!assigned_to) return sendError(res, "assigned_to is required", 400);
+    if (!assigned_to) return next(new AppError("assigned_to is required", 400));
 
     const leadResult = await pool.query("SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [id]);
-    if (leadResult.rows.length === 0) return sendError(res, "Lead not found", 404);
+    if (leadResult.rows.length === 0) return next(new AppError("Lead not found", 404));
 
     const userResult = await pool.query(
       "SELECT id, first_name, last_name, manager_id FROM users WHERE id = $1 AND is_active = true",
       [assigned_to]
     );
-    if (userResult.rows.length === 0) return sendError(res, "User not found", 404);
+    if (userResult.rows.length === 0) return next(new AppError("User not found", 404));
 
     const { role, id: callerId } = req.user;
     if (role === "sales_manager" && userResult.rows[0].manager_id !== callerId) {
-      return sendError(res, "Cannot assign to a user outside your team", 403);
+      return next(new AppError("Cannot assign to a user outside your team", 403));
     }
 
     await client.query("BEGIN");
@@ -283,8 +278,7 @@ const assignLead = async (req, res) => {
     return sendSuccess(res, `Lead assigned to ${assignee.first_name} ${assignee.last_name}`);
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("[assignLead]", err);
-    return sendError(res, "Failed to assign lead", 500);
+    next(err);
   } finally {
     client.release();
   }
@@ -293,15 +287,15 @@ const assignLead = async (req, res) => {
 /**
  * GET /api/v1/leads/:id/activity
  */
-const getLeadActivity = async (req, res) => {
+const getLeadActivity = async (req, res, next) => {
   try {
     const { id } = req.params;
     const lead = await pool.query("SELECT id, assigned_to FROM leads WHERE id = $1", [id]);
-    if (lead.rows.length === 0) return sendError(res, "Lead not found", 404);
+    if (lead.rows.length === 0) return next(new AppError("Lead not found", 404));
 
     const { role, id: callerId } = req.user;
     if (role === "sales_executive" && lead.rows[0].assigned_to !== callerId) {
-      return sendError(res, "Access denied", 403);
+      return next(new AppError("Access denied", 403));
     }
 
     const result = await pool.query(
@@ -315,31 +309,30 @@ const getLeadActivity = async (req, res) => {
     );
     return sendSuccess(res, "Activity log fetched", result.rows);
   } catch (err) {
-    console.error("[getLeadActivity]", err);
-    return sendError(res, "Failed to fetch activity", 500);
+    next(err);
   }
 };
 
 /**
  * POST /api/v1/leads/:id/activity
  */
-const addLeadActivity = async (req, res) => {
+const addLeadActivity = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { type, note } = req.body;
 
     const VALID_TYPES = ["note", "call", "email", "whatsapp", "meeting"];
     if (!type || !VALID_TYPES.includes(type)) {
-      return sendError(res, `Invalid type. Must be one of: ${VALID_TYPES.join(", ")}`, 400);
+      return next(new AppError(`Invalid type. Must be one of: ${VALID_TYPES.join(", ")}`, 400));
     }
-    if (!note) return sendError(res, "note is required", 400);
+    if (!note) return next(new AppError("note is required", 400));
 
     const lead = await pool.query("SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [id]);
-    if (lead.rows.length === 0) return sendError(res, "Lead not found", 404);
+    if (lead.rows.length === 0) return next(new AppError("Lead not found", 404));
 
     const { role, id: callerId } = req.user;
     if (role === "sales_executive" && lead.rows[0].assigned_to !== callerId) {
-      return sendError(res, "Access denied", 403);
+      return next(new AppError("Access denied", 403));
     }
 
     const result = await pool.query(
@@ -348,15 +341,14 @@ const addLeadActivity = async (req, res) => {
     );
     return sendSuccess(res, "Activity logged successfully", result.rows[0], 201);
   } catch (err) {
-    console.error("[addLeadActivity]", err);
-    return sendError(res, "Failed to log activity", 500);
+    next(err);
   }
 };
 
 /**
  * GET /api/v1/leads/sources
  */
-const getLeadSources = async (req, res) => {
+const getLeadSources = async (req, res, next) => {
   try {
     const result = await pool.query(
       "SELECT DISTINCT source FROM leads WHERE source IS NOT NULL ORDER BY source"
@@ -364,8 +356,7 @@ const getLeadSources = async (req, res) => {
     const sources = result.rows.map(r => r.source);
     return sendSuccess(res, "Lead sources fetched", sources);
   } catch (err) {
-    console.error("[getLeadSources]", err);
-    return sendError(res, "Failed to fetch lead sources", 500);
+    next(err);
   }
 };
 

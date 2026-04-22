@@ -1,5 +1,6 @@
 const { pool } = require("../config/db");
-const { sendSuccess, sendError, paginate } = require("../utils/response");
+const { sendSuccess, paginate } = require("../utils/response");
+const AppError = require("../utils/AppError");
 const { emitToUser } = require("../config/socket");
 
 const VALID_PRIORITIES = ["low", "medium", "high"];
@@ -7,7 +8,7 @@ const VALID_PRIORITIES = ["low", "medium", "high"];
 /**
  * GET /api/v1/tasks
  */
-const getAllTasks = async (req, res) => {
+const getAllTasks = async (req, res, next) => {
   try {
     const { is_completed, lead_id, assigned_to, due_from, due_to, overdue, page = 1, per_page = 20 } = req.query;
     const { role, id: callerId } = req.user;
@@ -50,26 +51,25 @@ const getAllTasks = async (req, res) => {
 
     return res.json(paginate(dataResult.rows, total, parseInt(page), parseInt(per_page)));
   } catch (err) {
-    console.error("[getAllTasks]", err);
-    return sendError(res, "Failed to fetch tasks", 500);
+    next(err);
   }
 };
 
 /**
  * POST /api/v1/tasks
  */
-const createTask = async (req, res) => {
+const createTask = async (req, res, next) => {
   try {
     const { title, lead_id, due_date, assigned_to, priority = "medium", notes } = req.body;
     if (!title || !lead_id || !due_date) {
-      return sendError(res, "title, lead_id, and due_date are required", 400);
+      return next(new AppError("title, lead_id, and due_date are required", 400));
     }
     if (!VALID_PRIORITIES.includes(priority)) {
-      return sendError(res, "priority must be low, medium, or high", 400);
+      return next(new AppError("priority must be low, medium, or high", 400));
     }
 
     const lead = await pool.query("SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [lead_id]);
-    if (lead.rows.length === 0) return sendError(res, "Lead not found", 404);
+    if (lead.rows.length === 0) return next(new AppError("Lead not found", 404));
 
     const execId = assigned_to || lead.rows[0].assigned_to || req.user.id;
 
@@ -98,15 +98,14 @@ const createTask = async (req, res) => {
 
     return sendSuccess(res, "Task created successfully", task, 201);
   } catch (err) {
-    console.error("[createTask]", err);
-    return sendError(res, "Failed to create task", 500);
+    next(err);
   }
 };
 
 /**
  * GET /api/v1/tasks/today
  */
-const getTodayTasks = async (req, res) => {
+const getTodayTasks = async (req, res, next) => {
   try {
     const userId = req.user.id;
     const today = new Date().toISOString().split("T")[0];
@@ -146,15 +145,14 @@ const getTodayTasks = async (req, res) => {
       completed_today: completedToday.rows,
     });
   } catch (err) {
-    console.error("[getTodayTasks]", err);
-    return sendError(res, "Failed to fetch today's tasks", 500);
+    next(err);
   }
 };
 
 /**
  * GET /api/v1/tasks/:id
  */
-const getTaskById = async (req, res) => {
+const getTaskById = async (req, res, next) => {
   try {
     const result = await pool.query(
       `SELECT t.*, l.name AS lead_name,
@@ -165,22 +163,21 @@ const getTaskById = async (req, res) => {
        WHERE t.id = $1`,
       [req.params.id]
     );
-    if (result.rows.length === 0) return sendError(res, "Task not found", 404);
+    if (result.rows.length === 0) return next(new AppError("Task not found", 404));
     return sendSuccess(res, "Task fetched", result.rows[0]);
   } catch (err) {
-    console.error("[getTaskById]", err);
-    return sendError(res, "Failed to fetch task", 500);
+    next(err);
   }
 };
 
 /**
  * PUT /api/v1/tasks/:id
  */
-const updateTask = async (req, res) => {
+const updateTask = async (req, res, next) => {
   try {
     const { id } = req.params;
     const existing = await pool.query("SELECT * FROM tasks WHERE id = $1", [id]);
-    if (existing.rows.length === 0) return sendError(res, "Task not found", 404);
+    if (existing.rows.length === 0) return next(new AppError("Task not found", 404));
 
     const { title, due_date, priority, notes } = req.body;
     const updates = []; const params = []; let idx = 1;
@@ -188,11 +185,11 @@ const updateTask = async (req, res) => {
     if (title)             { updates.push(`title = $${idx++}`);    params.push(title.trim()); }
     if (due_date)          { updates.push(`due_date = $${idx++}`); params.push(due_date); }
     if (priority) {
-      if (!VALID_PRIORITIES.includes(priority)) return sendError(res, "Invalid priority", 400);
+      if (!VALID_PRIORITIES.includes(priority)) return next(new AppError("Invalid priority", 400));
       updates.push(`priority = $${idx++}`); params.push(priority);
     }
     if (notes !== undefined) { updates.push(`notes = $${idx++}`); params.push(notes); }
-    if (updates.length === 0) return sendError(res, "No fields to update", 400);
+    if (updates.length === 0) return next(new AppError("No fields to update", 400));
     updates.push(`updated_at = NOW()`);
     params.push(id);
 
@@ -207,44 +204,42 @@ const updateTask = async (req, res) => {
 
     return sendSuccess(res, "Task updated successfully", task);
   } catch (err) {
-    console.error("[updateTask]", err);
-    return sendError(res, "Failed to update task", 500);
+    next(err);
   }
 };
 
 /**
  * DELETE /api/v1/tasks/:id
  */
-const deleteTask = async (req, res) => {
+const deleteTask = async (req, res, next) => {
   try {
     const { id } = req.params;
     const existing = await pool.query("SELECT created_by FROM tasks WHERE id = $1", [id]);
-    if (existing.rows.length === 0) return sendError(res, "Task not found", 404);
+    if (existing.rows.length === 0) return next(new AppError("Task not found", 404));
 
     const { role, id: callerId } = req.user;
     if (!["super_admin", "admin"].includes(role) && existing.rows[0].created_by !== callerId) {
-      return sendError(res, "You can only delete tasks you created", 403);
+      return next(new AppError("You can only delete tasks you created", 403));
     }
 
     await pool.query("DELETE FROM tasks WHERE id = $1", [id]);
     return sendSuccess(res, "Task deleted successfully");
   } catch (err) {
-    console.error("[deleteTask]", err);
-    return sendError(res, "Failed to delete task", 500);
+    next(err);
   }
 };
 
 /**
  * PATCH /api/v1/tasks/:id/complete
  */
-const completeTask = async (req, res) => {
+const completeTask = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { is_completed } = req.body;
-    if (is_completed === undefined) return sendError(res, "is_completed is required", 400);
+    if (is_completed === undefined) return next(new AppError("is_completed is required", 400));
 
     const existing = await pool.query("SELECT * FROM tasks WHERE id = $1", [id]);
-    if (existing.rows.length === 0) return sendError(res, "Task not found", 404);
+    if (existing.rows.length === 0) return next(new AppError("Task not found", 404));
 
     const completedAt = is_completed ? new Date() : null;
     const result = await pool.query(
@@ -266,19 +261,18 @@ const completeTask = async (req, res) => {
       { id: task.id, is_completed: task.is_completed, completed_at: task.completed_at }
     );
   } catch (err) {
-    console.error("[completeTask]", err);
-    return sendError(res, "Failed to update task", 500);
+    next(err);
   }
 };
 
 /**
  * GET /api/v1/tasks/lead/:leadId
  */
-const getTasksByLead = async (req, res) => {
+const getTasksByLead = async (req, res, next) => {
   try {
     const { leadId } = req.params;
     const lead = await pool.query("SELECT id FROM leads WHERE id = $1", [leadId]);
-    if (lead.rows.length === 0) return sendError(res, "Lead not found", 404);
+    if (lead.rows.length === 0) return next(new AppError("Lead not found", 404));
 
     const result = await pool.query(
       `SELECT t.id, t.title, t.due_date, t.priority, t.is_completed, t.completed_at, t.notes,
@@ -289,8 +283,7 @@ const getTasksByLead = async (req, res) => {
     );
     return sendSuccess(res, "Tasks fetched", result.rows);
   } catch (err) {
-    console.error("[getTasksByLead]", err);
-    return sendError(res, "Failed to fetch tasks", 500);
+    next(err);
   }
 };
 

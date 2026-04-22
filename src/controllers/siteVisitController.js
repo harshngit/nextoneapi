@@ -1,12 +1,13 @@
 const { pool } = require("../config/db");
 const { sendSuccess, sendError, paginate } = require("../utils/response");
+const AppError = require("../utils/AppError");
 
 const VALID_STATUSES = ["scheduled", "done", "cancelled", "rescheduled", "no_show"];
 
 /**
  * GET /api/v1/site-visits
  */
-const getAllSiteVisits = async (req, res) => {
+const getAllSiteVisits = async (req, res, next) => {
   try {
     const { status, assigned_to, project_id, from, to, page = 1, per_page = 20 } = req.query;
     const { role, id: callerId } = req.user;
@@ -51,27 +52,26 @@ const getAllSiteVisits = async (req, res) => {
 
     return res.json(paginate(dataResult.rows, total, parseInt(page), parseInt(per_page)));
   } catch (err) {
-    console.error("[getAllSiteVisits]", err);
-    return sendError(res, "Failed to fetch site visits", 500);
+    next(err);
   }
 };
 
 /**
  * POST /api/v1/site-visits
  */
-const createSiteVisit = async (req, res) => {
+const createSiteVisit = async (req, res, next) => {
   const client = await pool.connect();
   try {
     const { lead_id, project_id, visit_date, visit_time, assigned_to, notes, transport_arranged } = req.body;
     if (!lead_id || !project_id || !visit_date || !visit_time) {
-      return sendError(res, "lead_id, project_id, visit_date, and visit_time are required", 400);
+      return next(new AppError("lead_id, project_id, visit_date, and visit_time are required", 400));
     }
 
     const lead = await pool.query("SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [lead_id]);
-    if (lead.rows.length === 0) return sendError(res, "Lead not found", 404);
+    if (lead.rows.length === 0) return next(new AppError("Lead not found", 404));
 
     const project = await pool.query("SELECT id FROM projects WHERE id = $1", [project_id]);
-    if (project.rows.length === 0) return sendError(res, "Project not found", 404);
+    if (project.rows.length === 0) return next(new AppError("Project not found", 404));
 
     const execId = assigned_to || lead.rows[0].assigned_to;
 
@@ -98,8 +98,7 @@ const createSiteVisit = async (req, res) => {
     return sendSuccess(res, "Site visit scheduled successfully", result.rows[0], 201);
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("[createSiteVisit]", err);
-    return sendError(res, "Failed to schedule site visit", 500);
+    next(err);
   } finally {
     client.release();
   }
@@ -108,7 +107,7 @@ const createSiteVisit = async (req, res) => {
 /**
  * GET /api/v1/site-visits/:id
  */
-const getSiteVisitById = async (req, res) => {
+const getSiteVisitById = async (req, res, next) => {
   try {
     const { id } = req.params;
     const result = await pool.query(
@@ -126,7 +125,7 @@ const getSiteVisitById = async (req, res) => {
       [id]
     );
 
-    if (result.rows.length === 0) return sendError(res, "Site visit not found", 404);
+    if (result.rows.length === 0) return next(new AppError("Site visit not found", 404));
 
     const sv = result.rows[0];
     return sendSuccess(res, "Site visit fetched", {
@@ -142,23 +141,22 @@ const getSiteVisitById = async (req, res) => {
       } : null,
     });
   } catch (err) {
-    console.error("[getSiteVisitById]", err);
-    return sendError(res, "Failed to fetch site visit", 500);
+    next(err);
   }
 };
 
 /**
  * PUT /api/v1/site-visits/:id
  */
-const updateSiteVisit = async (req, res) => {
+const updateSiteVisit = async (req, res, next) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
     const { visit_date, visit_time, assigned_to, notes, transport_arranged, reschedule_reason } = req.body;
 
     const existing = await pool.query("SELECT * FROM site_visits WHERE id = $1", [id]);
-    if (existing.rows.length === 0) return sendError(res, "Site visit not found", 404);
-    if (existing.rows[0].status === "done") return sendError(res, "Cannot update a completed site visit", 400);
+    if (existing.rows.length === 0) return next(new AppError("Site visit not found", 404));
+    if (existing.rows[0].status === "done") return next(new AppError("Cannot update a completed site visit", 400));
 
     const isReschedule = (visit_date && visit_date !== existing.rows[0].visit_date) ||
                          (visit_time && visit_time !== existing.rows[0].visit_time);
@@ -191,8 +189,7 @@ const updateSiteVisit = async (req, res) => {
     return sendSuccess(res, msg, result.rows[0]);
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("[updateSiteVisit]", err);
-    return sendError(res, "Failed to update site visit", 500);
+    next(err);
   } finally {
     client.release();
   }
@@ -201,21 +198,21 @@ const updateSiteVisit = async (req, res) => {
 /**
  * PATCH /api/v1/site-visits/:id/status
  */
-const updateSiteVisitStatus = async (req, res) => {
+const updateSiteVisitStatus = async (req, res, next) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
     const { status, note } = req.body;
 
     if (!status || !VALID_STATUSES.includes(status)) {
-      return sendError(res, `Invalid status. Must be one of: ${VALID_STATUSES.join(", ")}`, 400);
+      return next(new AppError(`Invalid status. Must be one of: ${VALID_STATUSES.join(", ")}`, 400));
     }
     if (["cancelled", "no_show"].includes(status) && !note) {
-      return sendError(res, "note is required when cancelling or marking no_show", 400);
+      return next(new AppError("note is required when cancelling or marking no_show", 400));
     }
 
     const existing = await pool.query("SELECT * FROM site_visits WHERE id = $1", [id]);
-    if (existing.rows.length === 0) return sendError(res, "Site visit not found", 404);
+    if (existing.rows.length === 0) return next(new AppError("Site visit not found", 404));
 
     await client.query("BEGIN");
     await client.query("UPDATE site_visits SET status = $1, updated_at = NOW() WHERE id = $2", [status, id]);
@@ -233,8 +230,7 @@ const updateSiteVisitStatus = async (req, res) => {
     return sendSuccess(res, `Site visit marked as ${status}`);
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("[updateSiteVisitStatus]", err);
-    return sendError(res, "Failed to update visit status", 500);
+    next(err);
   } finally {
     client.release();
   }
@@ -243,32 +239,32 @@ const updateSiteVisitStatus = async (req, res) => {
 /**
  * POST /api/v1/site-visits/:id/feedback
  */
-const submitFeedback = async (req, res) => {
+const submitFeedback = async (req, res, next) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
     const { rating, client_reaction, interested_in, next_step, remarks } = req.body;
 
     if (!client_reaction || !next_step) {
-      return sendError(res, "client_reaction and next_step are required", 400);
+      return next(new AppError("client_reaction and next_step are required", 400));
     }
 
     const VALID_REACTIONS = ["very_positive", "positive", "neutral", "negative", "not_interested"];
     const VALID_NEXT_STEPS = ["negotiation", "follow_up", "send_proposal", "booked", "lost"];
 
     if (!VALID_REACTIONS.includes(client_reaction)) {
-      return sendError(res, `Invalid client_reaction. Must be: ${VALID_REACTIONS.join(", ")}`, 400);
+      return next(new AppError(`Invalid client_reaction. Must be: ${VALID_REACTIONS.join(", ")}`, 400));
     }
     if (!VALID_NEXT_STEPS.includes(next_step)) {
-      return sendError(res, `Invalid next_step. Must be: ${VALID_NEXT_STEPS.join(", ")}`, 400);
+      return next(new AppError(`Invalid next_step. Must be: ${VALID_NEXT_STEPS.join(", ")}`, 400));
     }
 
     const visit = await pool.query("SELECT * FROM site_visits WHERE id = $1", [id]);
-    if (visit.rows.length === 0) return sendError(res, "Site visit not found", 404);
-    if (visit.rows[0].status !== "done") return sendError(res, "Feedback can only be submitted for completed visits", 400);
+    if (visit.rows.length === 0) return next(new AppError("Site visit not found", 404));
+    if (visit.rows[0].status !== "done") return next(new AppError("Feedback can only be submitted for completed visits", 400));
 
     const existingFeedback = await pool.query("SELECT id FROM site_visit_feedback WHERE site_visit_id = $1", [id]);
-    if (existingFeedback.rows.length > 0) return sendError(res, "Feedback already submitted for this visit", 400);
+    if (existingFeedback.rows.length > 0) return next(new AppError("Feedback already submitted for this visit", 400));
 
     await client.query("BEGIN");
     const result = await client.query(
@@ -288,8 +284,7 @@ const submitFeedback = async (req, res) => {
     return sendSuccess(res, "Visit feedback submitted successfully", result.rows[0], 201);
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("[submitFeedback]", err);
-    return sendError(res, "Failed to submit feedback", 500);
+    next(err);
   } finally {
     client.release();
   }
@@ -298,11 +293,11 @@ const submitFeedback = async (req, res) => {
 /**
  * GET /api/v1/site-visits/lead/:leadId
  */
-const getVisitsByLead = async (req, res) => {
+const getVisitsByLead = async (req, res, next) => {
   try {
     const { leadId } = req.params;
     const lead = await pool.query("SELECT id FROM leads WHERE id = $1", [leadId]);
-    if (lead.rows.length === 0) return sendError(res, "Lead not found", 404);
+    if (lead.rows.length === 0) return next(new AppError("Lead not found", 404));
 
     const result = await pool.query(
       `SELECT sv.id, sv.visit_date, sv.visit_time, sv.status, sv.transport_arranged,
@@ -327,8 +322,7 @@ const getVisitsByLead = async (req, res) => {
       } : null,
     })));
   } catch (err) {
-    console.error("[getVisitsByLead]", err);
-    return sendError(res, "Failed to fetch visits", 500);
+    next(err);
   }
 };
 

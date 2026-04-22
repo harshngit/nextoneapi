@@ -72,9 +72,9 @@ router.post("/register", authenticate, authController.register);
  * @swagger
  * /api/v1/auth/login:
  *   post:
- *     summary: Login with email and password
+ *     summary: Login with email/phone and password
  *     description: >
- *       Authenticates a user with their email and password.
+ *       Authenticates a user with either their email or phone number along with a password.
  *       Returns a short-lived JWT access token and a long-lived refresh token.
  *       Store the refresh token securely (httpOnly cookie recommended for web,
  *       secure storage for mobile).
@@ -86,9 +86,17 @@ router.post("/register", authenticate, authController.register);
  *         application/json:
  *           schema:
  *             $ref: '#/components/schemas/LoginRequest'
- *           example:
- *             email: "rahul.sharma@nextonerealty.com"
- *             password: "StrongPass@123"
+ *           examples:
+ *             EmailLogin:
+ *               summary: Login using Email
+ *               value:
+ *                 email: "rahul.sharma@nextonerealty.com"
+ *                 password: "StrongPass@123"
+ *             PhoneLogin:
+ *               summary: Login using Phone Number
+ *               value:
+ *                 phone_number: "+919876543210"
+ *                 password: "StrongPass@123"
  *     responses:
  *       200:
  *         description: Login successful
@@ -108,10 +116,11 @@ router.post("/register", authenticate, authController.register);
  *                   first_name: "Rahul"
  *                   last_name: "Sharma"
  *                   email: "rahul.sharma@nextonerealty.com"
+ *                   phone_number: "+919876543210"
  *                   role: "sales_executive"
  *                   is_active: true
  *       400:
- *         description: Missing email or password
+ *         description: Missing credentials
  *       401:
  *         description: Invalid credentials or account deactivated
  *         content:
@@ -120,7 +129,7 @@ router.post("/register", authenticate, authController.register);
  *               $ref: '#/components/schemas/ErrorResponse'
  *             example:
  *               success: false
- *               message: "Invalid email or password"
+ *               message: "Invalid credentials"
  */
 router.post("/login", authController.login);
 

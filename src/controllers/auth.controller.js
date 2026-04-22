@@ -1,7 +1,8 @@
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { pool } = require("../config/db");
-const { sendSuccess, sendError } = require("../utils/response");
+const { sendSuccess } = require("../utils/response");
+const AppError = require("../utils/AppError");
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -28,7 +29,7 @@ const generateResetToken = () =>
  * POST /api/auth/register
  * Roles: super_admin, admin
  */
-const register = async (req, res) => {
+const register = async (req, res, next) => {
   try {
     const { role: requestedRole } = req.body;
 
@@ -36,7 +37,7 @@ const register = async (req, res) => {
     // Exception: super_admin can be created without a token (req.user will be undefined)
     if (requestedRole !== "super_admin") {
       if (!req.user || !["super_admin", "admin"].includes(req.user.role)) {
-        return sendError(res, "You do not have permission to register users", 403);
+        return next(new AppError("You do not have permission to register users", 403));
       }
     }
 
@@ -46,22 +47,22 @@ const register = async (req, res) => {
     } = req.body;
 
     if (!first_name || !last_name || !email || !password || !role) {
-      return sendError(res, "first_name, last_name, email, password and role are required", 400);
+      return next(new AppError("first_name, last_name, email, password and role are required", 400));
     }
 
     const validRoles = ["super_admin", "admin", "sales_manager", "sales_executive", "external_caller"];
     if (!validRoles.includes(role)) {
-      return sendError(res, `Invalid role. Must be one of: ${validRoles.join(", ")}`, 400);
+      return next(new AppError(`Invalid role. Must be one of: ${validRoles.join(", ")}`, 400));
     }
 
     // Prevent non-super_admin from creating super_admin
     if (role === "super_admin" && req.user && req.user.role !== "super_admin") {
-      return sendError(res, "Only Super Admin can create another Super Admin", 403);
+      return next(new AppError("Only Super Admin can create another Super Admin", 403));
     }
 
     const existing = await pool.query("SELECT id FROM users WHERE email = $1", [email.toLowerCase()]);
     if (existing.rows.length > 0) {
-      return sendError(res, "A user with this email already exists", 400);
+      return next(new AppError("A user with this email already exists", 400));
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
@@ -81,32 +82,41 @@ const register = async (req, res) => {
 
     return sendSuccess(res, "User registered successfully", result.rows[0], 201);
   } catch (err) {
-    console.error("[register]", err);
-    return sendError(res, "Failed to register user", 500);
+    next(err);
   }
 };
 
 /**
  * POST /api/auth/login
  */
-const login = async (req, res) => {
+const login = async (req, res, next) => {
   try {
-    const { email, password } = req.body;
-    if (!email || !password) {
-      return sendError(res, "Email and password are required", 400);
+    const { email, phone_number, password } = req.body;
+    
+    if ((!email && !phone_number) || !password) {
+      return next(new AppError("Email or phone number, and password are required", 400));
     }
 
-    const result = await pool.query(
-      "SELECT * FROM users WHERE email = $1",
-      [email.toLowerCase()]
-    );
+    let result;
+    if (email) {
+      result = await pool.query(
+        "SELECT * FROM users WHERE email = $1",
+        [email.toLowerCase()]
+      );
+    } else {
+      result = await pool.query(
+        "SELECT * FROM users WHERE phone_number = $1",
+        [phone_number]
+      );
+    }
+    
     const user = result.rows[0];
 
-    if (!user) return sendError(res, "Invalid email or password", 401);
-    if (!user.is_active) return sendError(res, "Your account has been deactivated. Contact admin.", 401);
+    if (!user) return next(new AppError("Invalid credentials", 401));
+    if (!user.is_active) return next(new AppError("Your account has been deactivated. Contact admin.", 401));
 
     const isValid = await bcrypt.compare(password, user.password_hash);
-    if (!isValid) return sendError(res, "Invalid email or password", 401);
+    if (!isValid) return next(new AppError("Invalid credentials", 401));
 
     const accessToken  = generateAccessToken(user);
     const refreshToken = generateRefreshToken(user);
@@ -130,18 +140,17 @@ const login = async (req, res) => {
       user:          safeUser,
     });
   } catch (err) {
-    console.error("[login]", err);
-    return sendError(res, "Login failed", 500);
+    next(err);
   }
 };
 
 /**
  * POST /api/auth/logout
  */
-const logout = async (req, res) => {
+const logout = async (req, res, next) => {
   try {
     const { refresh_token } = req.body;
-    if (!refresh_token) return sendError(res, "Refresh token is required", 400);
+    if (!refresh_token) return next(new AppError("Refresh token is required", 400));
 
     await pool.query(
       "DELETE FROM refresh_tokens WHERE user_id = $1 AND token = $2",
@@ -150,25 +159,24 @@ const logout = async (req, res) => {
 
     return sendSuccess(res, "Logged out successfully");
   } catch (err) {
-    console.error("[logout]", err);
-    return sendError(res, "Logout failed", 500);
+    next(err);
   }
 };
 
 /**
  * POST /api/auth/refresh-token
  */
-const refreshToken = async (req, res) => {
+const refreshToken = async (req, res, next) => {
   try {
     const { refresh_token } = req.body;
-    if (!refresh_token) return sendError(res, "Refresh token is required", 400);
+    if (!refresh_token) return next(new AppError("Refresh token is required", 400));
 
     // Verify token signature
     let decoded;
     try {
       decoded = jwt.verify(refresh_token, process.env.JWT_REFRESH_SECRET);
     } catch {
-      return sendError(res, "Invalid or expired refresh token", 401);
+      return next(new AppError("Invalid or expired refresh token", 401));
     }
 
     // Check token exists in DB
@@ -177,7 +185,7 @@ const refreshToken = async (req, res) => {
       [decoded.id, refresh_token]
     );
     if (stored.rows.length === 0) {
-      return sendError(res, "Invalid or expired refresh token", 401);
+      return next(new AppError("Invalid or expired refresh token", 401));
     }
 
     const userResult = await pool.query(
@@ -185,7 +193,7 @@ const refreshToken = async (req, res) => {
       [decoded.id]
     );
     if (userResult.rows.length === 0) {
-      return sendError(res, "User not found or inactive", 401);
+      return next(new AppError("User not found or inactive", 401));
     }
 
     const newAccessToken = generateAccessToken(userResult.rows[0]);
@@ -195,15 +203,14 @@ const refreshToken = async (req, res) => {
       expires_in:   process.env.JWT_EXPIRES_IN || "7d",
     });
   } catch (err) {
-    console.error("[refreshToken]", err);
-    return sendError(res, "Token refresh failed", 500);
+    next(err);
   }
 };
 
 /**
  * GET /api/auth/me
  */
-const getMe = async (req, res) => {
+const getMe = async (req, res, next) => {
   try {
     const result = await pool.query(
       `SELECT id, email, first_name, last_name, phone_number, role,
@@ -211,33 +218,32 @@ const getMe = async (req, res) => {
        FROM users WHERE id = $1`,
       [req.user.id]
     );
-    if (result.rows.length === 0) return sendError(res, "User not found", 404);
+    if (result.rows.length === 0) return next(new AppError("User not found", 404));
     return sendSuccess(res, "User profile fetched", result.rows[0]);
   } catch (err) {
-    console.error("[getMe]", err);
-    return sendError(res, "Failed to fetch profile", 500);
+    next(err);
   }
 };
 
 /**
  * PUT /api/auth/change-password
  */
-const changePassword = async (req, res) => {
+const changePassword = async (req, res, next) => {
   try {
     const { current_password, new_password } = req.body;
     if (!current_password || !new_password) {
-      return sendError(res, "current_password and new_password are required", 400);
+      return next(new AppError("current_password and new_password are required", 400));
     }
     if (new_password.length < 8) {
-      return sendError(res, "New password must be at least 8 characters", 400);
+      return next(new AppError("New password must be at least 8 characters", 400));
     }
 
     const result = await pool.query("SELECT password_hash FROM users WHERE id = $1", [req.user.id]);
     const isValid = await bcrypt.compare(current_password, result.rows[0].password_hash);
-    if (!isValid) return sendError(res, "Current password is incorrect", 401);
+    if (!isValid) return next(new AppError("Current password is incorrect", 401));
 
     const isSame = await bcrypt.compare(new_password, result.rows[0].password_hash);
-    if (isSame) return sendError(res, "New password cannot be same as current password", 400);
+    if (isSame) return next(new AppError("New password cannot be same as current password", 400));
 
     const newHash = await bcrypt.hash(new_password, 12);
     await pool.query("UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2", [newHash, req.user.id]);
@@ -247,18 +253,17 @@ const changePassword = async (req, res) => {
 
     return sendSuccess(res, "Password changed successfully. Please log in again.");
   } catch (err) {
-    console.error("[changePassword]", err);
-    return sendError(res, "Failed to change password", 500);
+    next(err);
   }
 };
 
 /**
  * POST /api/auth/forgot-password
  */
-const forgotPassword = async (req, res) => {
+const forgotPassword = async (req, res, next) => {
   try {
     const { email } = req.body;
-    if (!email) return sendError(res, "Email is required", 400);
+    if (!email) return next(new AppError("Email is required", 400));
 
     const result = await pool.query(
       "SELECT id FROM users WHERE email = $1 AND is_active = true",
@@ -284,22 +289,21 @@ const forgotPassword = async (req, res) => {
 
     return sendSuccess(res, "If this email is registered, a reset link has been sent.");
   } catch (err) {
-    console.error("[forgotPassword]", err);
-    return sendError(res, "Failed to process request", 500);
+    next(err);
   }
 };
 
 /**
  * POST /api/auth/reset-password
  */
-const resetPassword = async (req, res) => {
+const resetPassword = async (req, res, next) => {
   try {
     const { token, new_password } = req.body;
     if (!token || !new_password) {
-      return sendError(res, "token and new_password are required", 400);
+      return next(new AppError("token and new_password are required", 400));
     }
     if (new_password.length < 8) {
-      return sendError(res, "Password must be at least 8 characters", 400);
+      return next(new AppError("Password must be at least 8 characters", 400));
     }
 
     const result = await pool.query(
@@ -308,7 +312,7 @@ const resetPassword = async (req, res) => {
       [token]
     );
     if (result.rows.length === 0) {
-      return sendError(res, "Reset token is invalid or has expired", 400);
+      return next(new AppError("Reset token is invalid or has expired", 400));
     }
 
     const userId = result.rows[0].user_id;
@@ -320,8 +324,7 @@ const resetPassword = async (req, res) => {
 
     return sendSuccess(res, "Password reset successfully. Please log in.");
   } catch (err) {
-    console.error("[resetPassword]", err);
-    return sendError(res, "Failed to reset password", 500);
+    next(err);
   }
 };
 

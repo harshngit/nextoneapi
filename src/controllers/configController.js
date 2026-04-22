@@ -1,5 +1,6 @@
 const { pool } = require("../config/db");
 const { sendSuccess, sendError, paginate } = require("../utils/response");
+const AppError = require("../utils/AppError");
 
 // ─── Constants ────────────────────────────────────────────────
 const CONFIGURABLE_ROLES = ["admin", "sales_manager", "sales_executive", "external_caller"];
@@ -29,7 +30,7 @@ const writeAudit = async (client, { action, description, performed_by, target_us
 /**
  * GET /api/v1/config/roles
  */
-const getRoles = async (req, res) => {
+const getRoles = async (req, res, next) => {
   try {
     const result = await pool.query(
       `SELECT role, display_name, permissions FROM role_permissions ORDER BY
@@ -42,15 +43,14 @@ const getRoles = async (req, res) => {
     );
     return sendSuccess(res, "Roles and permissions fetched", result.rows);
   } catch (err) {
-    console.error("[getRoles]", err);
-    return sendError(res, "Failed to fetch roles", 500);
+    next(err);
   }
 };
 
 /**
  * PUT /api/v1/config/roles/:role
  */
-const updateRolePermissions = async (req, res) => {
+const updateRolePermissions = async (req, res, next) => {
   const client = await pool.connect();
   try {
     const { role } = req.params;
@@ -58,27 +58,27 @@ const updateRolePermissions = async (req, res) => {
     const { role: callerRole, id: callerId } = req.user;
 
     if (!CONFIGURABLE_ROLES.includes(role)) {
-      return sendError(res, `Invalid role. Configurable roles: ${CONFIGURABLE_ROLES.join(", ")}`, 400);
+      return next(new AppError(`Invalid role. Configurable roles: ${CONFIGURABLE_ROLES.join(", ")}`, 400));
     }
     // Admin cannot update admin permissions — only super_admin can
     if (role === "admin" && callerRole !== "super_admin") {
-      return sendError(res, "Only Super Admin can update admin permissions", 403);
+      return next(new AppError("Only Super Admin can update admin permissions", 403));
     }
     if (!permissions || typeof permissions !== "object") {
-      return sendError(res, "permissions object is required", 400);
+      return next(new AppError("permissions object is required", 400));
     }
 
     // Validate permission structure
     for (const [module, perms] of Object.entries(permissions)) {
       if (!MODULES.includes(module)) {
-        return sendError(res, `Invalid module: ${module}. Valid: ${MODULES.join(", ")}`, 400);
+        return next(new AppError(`Invalid module: ${module}. Valid: ${MODULES.join(", ")}`, 400));
       }
       for (const key of Object.keys(perms)) {
         if (!PERMISSION_KEYS.includes(key)) {
-          return sendError(res, `Invalid permission key: ${key}. Valid: ${PERMISSION_KEYS.join(", ")}`, 400);
+          return next(new AppError(`Invalid permission key: ${key}. Valid: ${PERMISSION_KEYS.join(", ")}`, 400));
         }
         if (typeof perms[key] !== "boolean") {
-          return sendError(res, `Permission values must be boolean`, 400);
+          return next(new AppError(`Permission values must be boolean`, 400));
         }
       }
     }
@@ -108,8 +108,7 @@ const updateRolePermissions = async (req, res) => {
     return sendSuccess(res, `Permissions updated for ${role}`, result.rows[0]);
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("[updateRolePermissions]", err);
-    return sendError(res, "Failed to update permissions", 500);
+    next(err);
   } finally {
     client.release();
   }
@@ -118,33 +117,32 @@ const updateRolePermissions = async (req, res) => {
 /**
  * GET /api/v1/config/lead-sources
  */
-const getLeadSources = async (req, res) => {
+const getLeadSources = async (req, res, next) => {
   try {
     const result = await pool.query(
       "SELECT id, name, is_active, created_at FROM lead_sources ORDER BY name ASC"
     );
     return sendSuccess(res, "Lead sources fetched", result.rows);
   } catch (err) {
-    console.error("[getLeadSources]", err);
-    return sendError(res, "Failed to fetch lead sources", 500);
+    next(err);
   }
 };
 
 /**
  * POST /api/v1/config/lead-sources
  */
-const createLeadSource = async (req, res) => {
+const createLeadSource = async (req, res, next) => {
   const client = await pool.connect();
   try {
     const { name } = req.body;
-    if (!name || !name.trim()) return sendError(res, "name is required", 400);
+    if (!name || !name.trim()) return next(new AppError("name is required", 400));
 
     const existing = await pool.query(
       "SELECT id FROM lead_sources WHERE LOWER(name) = LOWER($1)",
       [name.trim()]
     );
     if (existing.rows.length > 0) {
-      return sendError(res, `Lead source '${name.trim()}' already exists`, 400);
+      return next(new AppError(`Lead source '${name.trim()}' already exists`, 400));
     }
 
     await client.query("BEGIN");
@@ -163,8 +161,7 @@ const createLeadSource = async (req, res) => {
     return sendSuccess(res, "Lead source added successfully", result.rows[0], 201);
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("[createLeadSource]", err);
-    return sendError(res, "Failed to add lead source", 500);
+    next(err);
   } finally {
     client.release();
   }
@@ -173,27 +170,27 @@ const createLeadSource = async (req, res) => {
 /**
  * PUT /api/v1/config/lead-sources/:id
  */
-const updateLeadSource = async (req, res) => {
+const updateLeadSource = async (req, res, next) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
     const { name, is_active } = req.body;
 
     const existing = await pool.query("SELECT * FROM lead_sources WHERE id = $1", [id]);
-    if (existing.rows.length === 0) return sendError(res, "Lead source not found", 404);
+    if (existing.rows.length === 0) return next(new AppError("Lead source not found", 404));
 
     if (name) {
       const dupe = await pool.query(
         "SELECT id FROM lead_sources WHERE LOWER(name) = LOWER($1) AND id != $2",
         [name.trim(), id]
       );
-      if (dupe.rows.length > 0) return sendError(res, `Lead source '${name}' already exists`, 400);
+      if (dupe.rows.length > 0) return next(new AppError(`Lead source '${name}' already exists`, 400));
     }
 
     const updates = []; const params = []; let idx = 1;
     if (name !== undefined)      { updates.push(`name = $${idx++}`);      params.push(name.trim()); }
     if (is_active !== undefined) { updates.push(`is_active = $${idx++}`); params.push(is_active); }
-    if (updates.length === 0) return sendError(res, "No fields to update", 400);
+    if (updates.length === 0) return next(new AppError("No fields to update", 400));
     updates.push(`updated_at = NOW()`);
     params.push(id);
 
@@ -213,8 +210,7 @@ const updateLeadSource = async (req, res) => {
     return sendSuccess(res, "Lead source updated successfully", result.rows[0]);
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("[updateLeadSource]", err);
-    return sendError(res, "Failed to update lead source", 500);
+    next(err);
   } finally {
     client.release();
   }
@@ -223,13 +219,13 @@ const updateLeadSource = async (req, res) => {
 /**
  * DELETE /api/v1/config/lead-sources/:id
  */
-const deleteLeadSource = async (req, res) => {
+const deleteLeadSource = async (req, res, next) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
 
     const existing = await pool.query("SELECT * FROM lead_sources WHERE id = $1", [id]);
-    if (existing.rows.length === 0) return sendError(res, "Lead source not found", 404);
+    if (existing.rows.length === 0) return next(new AppError("Lead source not found", 404));
 
     // Check if any leads are using this source
     const inUse = await pool.query(
@@ -238,11 +234,10 @@ const deleteLeadSource = async (req, res) => {
     );
     const count = parseInt(inUse.rows[0].count);
     if (count > 0) {
-      return sendError(
-        res,
+      return next(new AppError(
         `Cannot delete — ${count} lead${count > 1 ? "s are" : " is"} using this source. Deactivate it instead.`,
         400
-      );
+      ));
     }
 
     await client.query("BEGIN");
@@ -258,8 +253,7 @@ const deleteLeadSource = async (req, res) => {
     return sendSuccess(res, "Lead source removed successfully");
   } catch (err) {
     await client.query("ROLLBACK");
-    console.error("[deleteLeadSource]", err);
-    return sendError(res, "Failed to remove lead source", 500);
+    next(err);
   } finally {
     client.release();
   }
@@ -268,14 +262,14 @@ const deleteLeadSource = async (req, res) => {
 /**
  * GET /api/v1/config/modules
  */
-const getModules = async (req, res) => {
+const getModules = async (req, res, next) => {
   return sendSuccess(res, "Modules fetched", MODULE_META);
 };
 
 /**
  * GET /api/v1/config/general
  */
-const getGeneralSettings = async (req, res) => {
+const getGeneralSettings = async (req, res, next) => {
   try {
     const result = await pool.query("SELECT * FROM system_settings LIMIT 1");
     if (result.rows.length === 0) {
@@ -291,8 +285,7 @@ const getGeneralSettings = async (req, res) => {
     }
     return sendSuccess(res, "General settings fetched", result.rows[0]);
   } catch (err) {
-    console.error("[getGeneralSettings]", err);
-    return sendError(res, "Failed to fetch settings", 500);
+    next(err);
   }
 };
 

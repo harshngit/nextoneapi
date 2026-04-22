@@ -42,6 +42,22 @@ const options = {
             password: { type: "string", example: "password123" },
           },
         },
+        LoginResponse: {
+          type: "object",
+          properties: {
+            success: { type: "boolean", example: true },
+            message: { type: "string", example: "Login successful" },
+            data: {
+              type: "object",
+              properties: {
+                access_token: { type: "string" },
+                refresh_token: { type: "string" },
+                expires_in: { type: "string", example: "7d" },
+                user: { $ref: "#/components/schemas/User" },
+              },
+            },
+          },
+        },
         ForgotPasswordRequest: {
           type: "object",
           required: ["email"],

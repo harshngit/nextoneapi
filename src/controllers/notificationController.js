@@ -1,6 +1,7 @@
 const { pool } = require("../config/db");
 const { sendSuccess, sendError, paginate } = require("../utils/response");
 const { emitToUser } = require("../config/socket");
+const AppError = require("../utils/AppError");
 
 /**
  * Helper — create a notification in DB and push via WebSocket
@@ -19,7 +20,7 @@ const createNotification = async (userId, { type, title, message, reference_id, 
 /**
  * GET /api/v1/notifications
  */
-const getNotifications = async (req, res) => {
+const getNotifications = async (req, res, next) => {
   try {
     const { is_read, type, page = 1, per_page = 20 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(per_page);
@@ -46,15 +47,14 @@ const getNotifications = async (req, res) => {
 
     return res.json(paginate(dataResult.rows, total, parseInt(page), parseInt(per_page)));
   } catch (err) {
-    console.error("[getNotifications]", err);
-    return sendError(res, "Failed to fetch notifications", 500);
+    next(err);
   }
 };
 
 /**
  * GET /api/v1/notifications/unread-count
  */
-const getUnreadCount = async (req, res) => {
+const getUnreadCount = async (req, res, next) => {
   try {
     const result = await pool.query(
       "SELECT COUNT(*) FROM notifications WHERE user_id = $1 AND is_read = false",
@@ -62,15 +62,14 @@ const getUnreadCount = async (req, res) => {
     );
     return sendSuccess(res, "Unread count fetched", { unread_count: parseInt(result.rows[0].count) });
   } catch (err) {
-    console.error("[getUnreadCount]", err);
-    return sendError(res, "Failed to fetch count", 500);
+    next(err);
   }
 };
 
 /**
  * PATCH /api/v1/notifications/read-all
  */
-const markAllRead = async (req, res) => {
+const markAllRead = async (req, res, next) => {
   try {
     const result = await pool.query(
       "UPDATE notifications SET is_read = true WHERE user_id = $1 AND is_read = false",
@@ -78,25 +77,23 @@ const markAllRead = async (req, res) => {
     );
     return sendSuccess(res, `${result.rowCount} notifications marked as read`);
   } catch (err) {
-    console.error("[markAllRead]", err);
-    return sendError(res, "Failed to mark notifications", 500);
+    next(err);
   }
 };
 
 /**
  * PATCH /api/v1/notifications/:id/read
  */
-const markOneRead = async (req, res) => {
+const markOneRead = async (req, res, next) => {
   try {
     const result = await pool.query(
       "UPDATE notifications SET is_read = true WHERE id = $1 AND user_id = $2 RETURNING id",
       [req.params.id, req.user.id]
     );
-    if (result.rows.length === 0) return sendError(res, "Notification not found", 404);
+    if (result.rows.length === 0) return next(new AppError("Notification not found", 404));
     return sendSuccess(res, "Notification marked as read");
   } catch (err) {
-    console.error("[markOneRead]", err);
-    return sendError(res, "Failed to mark notification", 500);
+    next(err);
   }
 };
 
