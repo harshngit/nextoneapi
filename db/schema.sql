@@ -33,8 +33,6 @@ CREATE TABLE IF NOT EXISTS users (
   phone_number          VARCHAR(20) UNIQUE NOT NULL,
   password_hash         TEXT NOT NULL,
   role                  user_role NOT NULL DEFAULT 'sales_executive',
-  language_preferences  TEXT[] DEFAULT '{}',
-  regions               TEXT[] DEFAULT '{}',
   is_active             BOOLEAN DEFAULT TRUE,
   last_login            TIMESTAMP WITH TIME ZONE,
   created_at            TIMESTAMP WITH TIME ZONE DEFAULT NOW(),

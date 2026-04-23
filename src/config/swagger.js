@@ -77,8 +77,6 @@ const options = {
             first_name: { type: "string" },
             last_name: { type: "string" },
             phone_number: { type: "string" },
-            language_preferences: { type: "array", items: { type: "string" }, example: ["en", "hi"] },
-            regions: { type: "array", items: { type: "string" }, example: ["IN", "US"] },
           },
         },
         User: {
@@ -90,8 +88,6 @@ const options = {
             last_name: { type: "string" },
             phone_number: { type: "string" },
             role: { type: "string" },
-            language_preferences: { type: "array", items: { type: "string" } },
-            regions: { type: "array", items: { type: "string" } },
             is_active: { type: "boolean" },
             created_at: { type: "string", format: "date-time" },
             updated_at: { type: "string", format: "date-time" },

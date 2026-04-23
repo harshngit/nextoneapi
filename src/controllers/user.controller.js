@@ -8,7 +8,7 @@ const AppError = require("../utils/AppError");
  */
 const getAllUsers = async (req, res, next) => {
   try {
-    const { role, is_active, region, search, manager_id, page = 1, per_page = 20 } = req.query;
+    const { role, is_active, search, manager_id, page = 1, per_page = 20 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(per_page);
 
     let conditions = [];
@@ -22,7 +22,6 @@ const getAllUsers = async (req, res, next) => {
     }
 
     if (role)       { conditions.push(`role = $${idx++}`);       params.push(role); }
-    if (region)     { conditions.push(`$${idx++} = ANY(regions)`); params.push(region); }
     if (manager_id && req.user.role !== "sales_manager") {
                       conditions.push(`manager_id = $${idx++}`); params.push(manager_id); }
     if (is_active !== undefined) {
@@ -42,7 +41,7 @@ const getAllUsers = async (req, res, next) => {
 
     const dataResult = await pool.query(
       `SELECT id, first_name, last_name, email, phone_number, role,
-              language_preferences, regions, is_active, last_login, manager_id, created_at
+              is_active, last_login, manager_id, created_at
        FROM users ${where}
        ORDER BY created_at DESC
        LIMIT $${idx++} OFFSET $${idx++}`,
@@ -62,7 +61,7 @@ const createUser = async (req, res, next) => {
   try {
     const {
       first_name, last_name, email, password, phone_number,
-      role, language_preferences, regions, manager_id,
+      role, manager_id,
     } = req.body;
 
     if (!first_name || !last_name || !email || !password || !role) {
@@ -92,14 +91,12 @@ const createUser = async (req, res, next) => {
     const result = await pool.query(
       `INSERT INTO users
         (first_name, last_name, email, password_hash, phone_number, role,
-         language_preferences, regions, manager_id, is_active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true)
+         manager_id, is_active)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,true)
        RETURNING id, email, role, first_name, last_name, created_at`,
       [
         first_name.trim(), last_name.trim(), email.toLowerCase(),
         passwordHash, phone_number || null, role,
-        language_preferences ? (Array.isArray(language_preferences) ? language_preferences : [language_preferences]) : ["en"],
-        regions ? (Array.isArray(regions) ? regions : [regions]) : [],
         manager_id || null,
       ]
     );
@@ -125,7 +122,7 @@ const getUserById = async (req, res, next) => {
 
     const result = await pool.query(
       `SELECT u.id, u.first_name, u.last_name, u.email, u.phone_number, u.role,
-              u.language_preferences, u.regions, u.is_active, u.last_login,
+              u.is_active, u.last_login,
               u.manager_id, u.created_at, u.updated_at,
               m.first_name AS manager_first_name, m.last_name AS manager_last_name
        FROM users u
@@ -170,7 +167,7 @@ const updateUser = async (req, res, next) => {
     const existing = await pool.query("SELECT id, manager_id FROM users WHERE id = $1", [id]);
     if (existing.rows.length === 0) return next(new AppError("User not found", 404));
 
-    const { first_name, last_name, phone_number, language_preferences, regions, manager_id } = req.body;
+    const { first_name, last_name, phone_number, manager_id } = req.body;
 
     const updates = [];
     const params = [];
@@ -179,14 +176,6 @@ const updateUser = async (req, res, next) => {
     if (first_name)           { updates.push(`first_name = $${idx++}`);           params.push(first_name.trim()); }
     if (last_name)            { updates.push(`last_name = $${idx++}`);            params.push(last_name.trim()); }
     if (phone_number)         { updates.push(`phone_number = $${idx++}`);         params.push(phone_number); }
-    if (language_preferences) { 
-      updates.push(`language_preferences = $${idx++}`); 
-      params.push(Array.isArray(language_preferences) ? language_preferences : [language_preferences]); 
-    }
-    if (regions) { 
-      updates.push(`regions = $${idx++}`); 
-      params.push(Array.isArray(regions) ? regions : [regions]); 
-    }
     if (manager_id !== undefined && ["super_admin", "admin"].includes(callerRole)) {
                                 updates.push(`manager_id = $${idx++}`);           params.push(manager_id || null); }
 
@@ -197,7 +186,7 @@ const updateUser = async (req, res, next) => {
 
     const result = await pool.query(
       `UPDATE users SET ${updates.join(", ")} WHERE id = $${idx}
-       RETURNING id, first_name, last_name, email, phone_number, role, regions, is_active, updated_at`,
+       RETURNING id, first_name, last_name, email, phone_number, role, is_active, updated_at`,
       params
     );
 

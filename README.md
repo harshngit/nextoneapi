@@ -4,7 +4,7 @@ A production-ready REST API built with **Node.js**, **Express.js**, and **Postgr
 
 ## Features
 - **Auth**: Register, Login (email or phone), Auth Me, Forgot Password, Change Password
-- **User Management**: Get All, Get By ID, Update (with language preferences & regions), Soft Delete
+- **User Management**: Get All, Get By ID, Update, Soft Delete
 - **JWT Authentication** with role-based authorization
 - **Swagger UI** docs at `/api-docs`
 - **PostgreSQL** with parameterized queries

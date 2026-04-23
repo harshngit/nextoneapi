@@ -41,12 +41,6 @@ const { authenticate, authorize } = require("../middleware/auth");
  *         description: Filter by active status
  *         example: true
  *       - in: query
- *         name: region
- *         schema:
- *           type: string
- *         description: Filter by region
- *         example: Mumbai
- *       - in: query
  *         name: search
  *         schema:
  *           type: string
@@ -84,7 +78,6 @@ const { authenticate, authorize } = require("../middleware/auth");
  *                   email: "rahul.sharma@nextonerealty.com"
  *                   role: "sales_executive"
  *                   is_active: true
- *                   regions: ["Mumbai"]
  *               pagination:
  *                 total: 45
  *                 page: 1
@@ -132,7 +125,6 @@ router.get(
  *                 password: "TempPass@789"
  *                 phone_number: "+919123456789"
  *                 role: "sales_executive"
- *                 regions: ["Mumbai", "Thane"]
  *                 manager_id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
  *             SalesManager:
  *               summary: Create a Sales Manager
@@ -143,7 +135,6 @@ router.get(
  *                 password: "TempPass@321"
  *                 phone_number: "+919012345678"
  *                 role: "sales_manager"
- *                 regions: ["Pune"]
  *     responses:
  *       201:
  *         description: User created successfully
@@ -211,8 +202,6 @@ router.post(
  *                 email: "rahul.sharma@nextonerealty.com"
  *                 phone_number: "+919876543210"
  *                 role: "sales_executive"
- *                 language_preferences: "en"
- *                 regions: ["Mumbai", "Pune"]
  *                 is_active: true
  *                 last_login: "2025-04-20T10:30:00Z"
  *                 manager:
@@ -256,8 +245,6 @@ router.get("/:id", authenticate, userController.getUserById);
  *             first_name: "Rahul"
  *             last_name: "Sharma"
  *             phone_number: "+919876543999"
- *             language_preferences: "hi"
- *             regions: ["Mumbai", "Navi Mumbai"]
  *             manager_id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
  *     responses:
  *       200:

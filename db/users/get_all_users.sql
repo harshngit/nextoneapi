@@ -18,7 +18,7 @@ WHERE is_active = true
 -- Fetch paginated users
 SELECT
   id, email, first_name, last_name, phone_number, role,
-  language_preferences, regions, is_active, last_login,
+  is_active, last_login,
   created_at, updated_at
 FROM users
 ORDER BY created_at DESC
