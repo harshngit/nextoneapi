@@ -56,6 +56,13 @@ const { authenticate } = require("../middleware/auth");
  *             - sales_executive
  *             - external_caller
  *           example: "super_admin"
+ *           description: >
+ *             Available roles:
+ *             `super_admin` — Full system access. No token required to create.
+ *             `admin` — Administrative access. No token required to create.
+ *             `sales_manager` — Manages a team of sales executives. Token required.
+ *             `sales_executive` — Handles leads and site visits. Token required.
+ *             `external_caller` — Limited access for external callers. Token required.
  *
  *     RegisterResponse:
  *       type: object
@@ -228,6 +235,98 @@ const { authenticate } = require("../middleware/auth");
  *         error:
  *           type: string
  *           example: "Detailed error description"
+ *
+ *     PaginatedResponse:
+ *       type: object
+ *       properties:
+ *         success:
+ *           type: boolean
+ *           example: true
+ *         data:
+ *           type: array
+ *           items:
+ *             type: object
+ *         pagination:
+ *           type: object
+ *           properties:
+ *             total:
+ *               type: integer
+ *             page:
+ *               type: integer
+ *             per_page:
+ *               type: integer
+ *             total_pages:
+ *               type: integer
+ *
+ *     UpdateRoleRequest:
+ *       type: object
+ *       required:
+ *         - role
+ *       properties:
+ *         role:
+ *           type: string
+ *           enum:
+ *             - super_admin
+ *             - admin
+ *             - sales_manager
+ *             - sales_executive
+ *             - external_caller
+ *           example: "sales_manager"
+ *
+ *     UpdateUserRequest:
+ *       type: object
+ *       properties:
+ *         first_name:
+ *           type: string
+ *         last_name:
+ *           type: string
+ *         phone_number:
+ *           type: string
+ *         manager_id:
+ *           type: string
+ *           format: uuid
+ *
+ *     CreateUserRequest:
+ *       type: object
+ *       required:
+ *         - first_name
+ *         - last_name
+ *         - email
+ *         - password
+ *         - phone_number
+ *         - role
+ *       properties:
+ *         first_name:
+ *           type: string
+ *           example: "Priya"
+ *         last_name:
+ *           type: string
+ *           example: "Mehta"
+ *         email:
+ *           type: string
+ *           format: email
+ *           example: "priya.mehta@nextonerealty.com"
+ *         password:
+ *           type: string
+ *           minLength: 8
+ *           example: "TempPass@789"
+ *         phone_number:
+ *           type: string
+ *           example: "+919123456789"
+ *         role:
+ *           type: string
+ *           enum:
+ *             - super_admin
+ *             - admin
+ *             - sales_manager
+ *             - sales_executive
+ *             - external_caller
+ *           example: "sales_executive"
+ *         manager_id:
+ *           type: string
+ *           format: uuid
+ *           description: Required when role is sales_executive
+ *           example: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
  */
 
 // ─────────────────────────────────────────────────────────────
@@ -242,9 +341,15 @@ const { authenticate } = require("../middleware/auth");
  *     description: >
  *       Creates a new user account.
  *
- *       **No token required when creating `super_admin`** — this is the
- *       first-time setup. For all other roles a valid Bearer token from
- *       a super_admin or admin is required.
+ *       **Token requirement by role:**
+ *
+ *       | Role | Token Required |
+ *       |------|---------------|
+ *       | `super_admin` | ❌ No token needed |
+ *       | `admin` | ❌ No token needed |
+ *       | `sales_manager` | ✅ Bearer token required (super_admin or admin) |
+ *       | `sales_executive` | ✅ Bearer token required (super_admin or admin) |
+ *       | `external_caller` | ✅ Bearer token required (super_admin or admin) |
  *     tags: [Auth]
  *     security: []
  *     requestBody:
@@ -255,7 +360,7 @@ const { authenticate } = require("../middleware/auth");
  *             $ref: '#/components/schemas/RegisterRequest'
  *           examples:
  *             SuperAdmin:
- *               summary: Create Super Admin (no token needed)
+ *               summary: "Create Super Admin — no token needed"
  *               value:
  *                 first_name: "Shubham"
  *                 last_name: "Shinde"
@@ -264,7 +369,7 @@ const { authenticate } = require("../middleware/auth");
  *                 password: "Shinde@123"
  *                 role: "super_admin"
  *             Admin:
- *               summary: Create Admin (token required)
+ *               summary: "Create Admin — no token needed"
  *               value:
  *                 first_name: "Amit"
  *                 last_name: "Joshi"
@@ -273,7 +378,7 @@ const { authenticate } = require("../middleware/auth");
  *                 password: "TempPass@321"
  *                 role: "admin"
  *             SalesManager:
- *               summary: Create Sales Manager (token required)
+ *               summary: "Create Sales Manager — token required"
  *               value:
  *                 first_name: "Priya"
  *                 last_name: "Mehta"
@@ -282,7 +387,7 @@ const { authenticate } = require("../middleware/auth");
  *                 password: "TempPass@321"
  *                 role: "sales_manager"
  *             SalesExecutive:
- *               summary: Create Sales Executive (token required)
+ *               summary: "Create Sales Executive — token required"
  *               value:
  *                 first_name: "Rahul"
  *                 last_name: "Sharma"
@@ -291,7 +396,7 @@ const { authenticate } = require("../middleware/auth");
  *                 password: "TempPass@123"
  *                 role: "sales_executive"
  *             ExternalCaller:
- *               summary: Create External Caller (token required)
+ *               summary: "Create External Caller — token required"
  *               value:
  *                 first_name: "Neha"
  *                 last_name: "Patil"
@@ -330,7 +435,7 @@ const { authenticate } = require("../middleware/auth");
  *                   success: false
  *                   message: "Invalid role. Must be one of: super_admin, admin, sales_manager, sales_executive, external_caller"
  *       403:
- *         description: Forbidden
+ *         description: Token required for this role
  *         content:
  *           application/json:
  *             example:

@@ -18,14 +18,14 @@ app.use(express.json());
 app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // ─── Routes ───────────────────────────────────────────────────
-app.use("/api/v1/auth",         require("./routes/auth.routes"));
-app.use("/api/v1/users",        require("./routes/user.routes"));
-app.use("/api/v1/leads",        require("./routes/leadRoutes"));
-app.use("/api/v1/projects",     require("./routes/projectRoutes"));
-app.use("/api/v1/site-visits",  require("./routes/siteVisitRoutes"));
-app.use("/api/v1/tasks",        require("./routes/taskRoutes"));
-app.use("/api/v1/notifications",require("./routes/notificationRoutes"));
-app.use("/api/v1/dashboard",    require("./routes/dashboardRoutes"));
+app.use("/api/v1/auth",          require("./routes/auth.routes"));
+app.use("/api/v1/users",         require("./routes/user.routes"));
+app.use("/api/v1/leads",         require("./routes/leadRoutes"));
+app.use("/api/v1/projects",      require("./routes/projectRoutes"));
+app.use("/api/v1/site-visits",   require("./routes/siteVisitRoutes"));
+app.use("/api/v1/tasks",         require("./routes/taskRoutes"));
+app.use("/api/v1/notifications", require("./routes/notificationRoutes"));
+app.use("/api/v1/dashboard",     require("./routes/dashboardRoutes"));
 
 // ─── 404 Not Found Handler ──────────────────────────────────────
 app.all("*", (req, res, next) => {

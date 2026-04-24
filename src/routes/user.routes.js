@@ -19,10 +19,10 @@ const { authenticate, authorize } = require("../middleware/auth");
  *   get:
  *     summary: List all users
  *     description: >
- *       Returns a paginated list of all users in the system.
+ *       Returns a list of all users in the system.
  *       Super Admin and Admin can see all users.
  *       Sales Manager can only see users under their team.
- *       Supports filtering by role, region, active status, and search by name/email.
+ *       Supports filtering by role and active status.
  *     tags: [Users & Team Management]
  *     security:
  *       - BearerAuth: []
@@ -40,35 +40,13 @@ const { authenticate, authorize } = require("../middleware/auth");
  *           type: boolean
  *         description: Filter by active status
  *         example: true
- *       - in: query
- *         name: search
- *         schema:
- *           type: string
- *         description: Search by name or email (partial match)
- *         example: rahul
- *       - in: query
- *         name: manager_id
- *         schema:
- *           type: string
- *           format: uuid
- *         description: Filter team members under a specific Sales Manager
- *       - in: query
- *         name: page
- *         schema:
- *           type: integer
- *           default: 1
- *       - in: query
- *         name: per_page
- *         schema:
- *           type: integer
- *           default: 20
  *     responses:
  *       200:
  *         description: List of users returned successfully
  *         content:
  *           application/json:
  *             schema:
- *               $ref: '#/components/schemas/PaginatedResponse'
+ *               $ref: '#/components/schemas/SuccessResponse'
  *             example:
  *               success: true
  *               data:
@@ -78,11 +56,6 @@ const { authenticate, authorize } = require("../middleware/auth");
  *                   email: "rahul.sharma@nextonerealty.com"
  *                   role: "sales_executive"
  *                   is_active: true
- *               pagination:
- *                 total: 45
- *                 page: 1
- *                 per_page: 20
- *                 total_pages: 3
  *       401:
  *         description: Unauthorized
  *       403:
@@ -93,75 +66,6 @@ router.get(
   authenticate,
   authorize("super_admin", "admin", "sales_manager"),
   userController.getAllUsers
-);
-
-/**
- * @swagger
- * /api/v1/users:
- *   post:
- *     summary: Create a new user
- *     description: >
- *       Creates a new user account in the system.
- *       Only Super Admin and Admin can create users.
- *       When creating a sales_executive, you must provide the manager_id
- *       to assign them under a Sales Manager.
- *       A welcome email with login credentials is sent to the user's email.
- *     tags: [Users & Team Management]
- *     security:
- *       - BearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/CreateUserRequest'
- *           examples:
- *             SalesExecutive:
- *               summary: Create a Sales Executive
- *               value:
- *                 first_name: "Priya"
- *                 last_name: "Mehta"
- *                 email: "priya.mehta@nextonerealty.com"
- *                 password: "TempPass@789"
- *                 phone_number: "+919123456789"
- *                 role: "sales_executive"
- *                 manager_id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
- *             SalesManager:
- *               summary: Create a Sales Manager
- *               value:
- *                 first_name: "Amit"
- *                 last_name: "Joshi"
- *                 email: "amit.joshi@nextonerealty.com"
- *                 password: "TempPass@321"
- *                 phone_number: "+919012345678"
- *                 role: "sales_manager"
- *     responses:
- *       201:
- *         description: User created successfully
- *         content:
- *           application/json:
- *             example:
- *               success: true
- *               message: "User created successfully. Welcome email sent."
- *               data:
- *                 id: "c3d4e5f6-a7b8-9012-cdef-234567890123"
- *                 email: "priya.mehta@nextonerealty.com"
- *                 role: "sales_executive"
- *       400:
- *         description: Validation error or duplicate email
- *         content:
- *           application/json:
- *             example:
- *               success: false
- *               message: "A user with this email already exists"
- *       403:
- *         description: Insufficient permissions
- */
-router.post(
-  "/",
-  authenticate,
-  authorize("super_admin", "admin"),
-  userController.createUser
 );
 
 /**

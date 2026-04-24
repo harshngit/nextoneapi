@@ -27,14 +27,20 @@ const generateResetToken = () =>
 
 /**
  * POST /api/v1/auth/register
+ *
+ * Token rules:
+ *  - super_admin : no token required (first-time setup)
+ *  - admin       : no token required (onboarding setup)
+ *  - all others  : valid Bearer token from a super_admin or admin is required
  */
 const register = async (req, res, next) => {
   try {
     const { role: requestedRole } = req.body;
 
-    // super_admin can be created without a token (first-time setup)
-    // All other roles require a valid admin/super_admin token
-    if (requestedRole !== "super_admin") {
+    const noTokenRoles = ["super_admin", "admin"];
+
+    if (!noTokenRoles.includes(requestedRole)) {
+      // All roles other than super_admin and admin require a valid token
       if (!req.user || !["super_admin", "admin"].includes(req.user.role)) {
         return next(new AppError("You do not have permission to register users", 403));
       }
@@ -51,7 +57,7 @@ const register = async (req, res, next) => {
       return next(new AppError(`Invalid role. Must be one of: ${validRoles.join(", ")}`, 400));
     }
 
-    // Prevent non-super_admin from creating another super_admin
+    // Prevent non-super_admin from creating another super_admin (when a token is present)
     if (role === "super_admin" && req.user && req.user.role !== "super_admin") {
       return next(new AppError("Only Super Admin can create another Super Admin", 403));
     }
