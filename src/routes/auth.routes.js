@@ -351,7 +351,8 @@ const { authenticate } = require("../middleware/auth");
  *       | `sales_executive` | ✅ Bearer token required (super_admin or admin) |
  *       | `external_caller` | ✅ Bearer token required (super_admin or admin) |
  *     tags: [Auth]
- *     security: []
+ *     security:
+ *       - BearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
@@ -442,7 +443,7 @@ const { authenticate } = require("../middleware/auth");
  *               success: false
  *               message: "You do not have permission to register users"
  */
-router.post("/register", authController.register);
+router.post("/register", authenticate, authController.register);
 
 /**
  * @swagger

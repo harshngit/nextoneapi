@@ -37,10 +37,9 @@ const register = async (req, res, next) => {
   try {
     const { role: requestedRole } = req.body;
 
-    const noTokenRoles = ["super_admin", "admin"];
-
-    if (!noTokenRoles.includes(requestedRole)) {
-      // All roles other than super_admin and admin require a valid token
+    // super_admin and admin can be created without a token (first-time setup)
+    // All other roles require a valid admin/super_admin token
+    if (!["super_admin", "admin"].includes(requestedRole)) {
       if (!req.user || !["super_admin", "admin"].includes(req.user.role)) {
         return next(new AppError("You do not have permission to register users", 403));
       }

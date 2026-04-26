@@ -5,8 +5,8 @@ const AppError = require("../utils/AppError");
 
 const authenticate = async (req, res, next) => {
   try {
-    // Bypass authentication for super_admin registration
-    if (req.path === "/register" && req.body && req.body.role === "super_admin") {
+    // Bypass authentication for super_admin and admin registration
+    if (req.path === "/register" && req.body && ["super_admin", "admin"].includes(req.body.role)) {
       return next();
     }
 
