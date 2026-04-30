@@ -9,8 +9,7 @@ const { authenticate, authorize } = require("../middleware/auth");
  *   name: Dashboard & Reporting
  *   description: >
  *     Real-time dashboard metrics and reports.
- *     Dashboard data is pushed via WebSocket when underlying data changes
- *     (lead status update, new booking, visit completed, etc).
+ *     Dashboard data is pushed via WebSocket when underlying data changes.
  *
  *     **WebSocket Event — `dashboard:update`**
  *     ```json
@@ -18,17 +17,20 @@ const { authenticate, authorize } = require("../middleware/auth");
  *     ```
  */
 
+// ─────────────────────────────────────────────────────────────────────────────
+// NEW DASHBOARD ENDPOINTS (matching the UI design)
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
  * @swagger
- * /api/v1/dashboard/overview:
+ * /api/v1/dashboard/stats:
  *   get:
- *     summary: Lead funnel overview — counts per lifecycle stage
+ *     summary: Top KPI cards — Total Leads, Site Visits, Follow Ups, Projects with % change
  *     description: >
- *       Returns total lead counts grouped by status stage.
- *       Super Admin / Admin see all leads; Sales Manager sees team leads;
- *       Sales Executive sees own leads. Supports date range filtering.
- *       Also subscribed via WebSocket — emits `dashboard:update` with type `lead_funnel`
- *       whenever a lead status changes.
+ *       Returns the 4 main KPI stat cards shown at the top of the dashboard.
+ *       Each value comes with a % change vs the previous period of equal length.
+ *       Role-scoped: sales_executive sees own data; sales_manager sees team data;
+ *       admin/super_admin see everything.
  *     tags: [Dashboard & Reporting]
  *     security:
  *       - BearerAuth: []
@@ -38,13 +40,71 @@ const { authenticate, authorize } = require("../middleware/auth");
  *         schema:
  *           type: string
  *           format: date
- *         example: "2025-04-01"
+ *         description: Start date (default = first day of current month)
+ *         example: "2025-06-01"
  *       - in: query
  *         name: to
  *         schema:
  *           type: string
  *           format: date
- *         example: "2025-04-30"
+ *         description: End date (default = today)
+ *         example: "2025-06-30"
+ *       - in: query
+ *         name: project_id
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Optional project filter
+ *     responses:
+ *       200:
+ *         description: KPI stats returned
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 period: { from: "2025-06-01", to: "2025-06-30" }
+ *                 stats:
+ *                   total_leads:
+ *                     value: 2845
+ *                     change: 12.5
+ *                     prev_value: 2529
+ *                   total_site_visits:
+ *                     value: 45
+ *                     change: -4.3
+ *                     prev_value: 47
+ *                   total_follow_ups:
+ *                     value: 156
+ *                     change: 18.2
+ *                     prev_value: 132
+ *                   total_projects:
+ *                     value: 12
+ *                     change: 5.7
+ *                     prev_value: 11
+ */
+router.get("/stats", authenticate, dashboardController.getDashboardStats);
+
+/**
+ * @swagger
+ * /api/v1/dashboard/revenue:
+ *   get:
+ *     summary: Revenue / lead trend chart data (week / month / year)
+ *     description: >
+ *       Returns time-series data for the Revenue chart.
+ *       Use `range=week` for daily points, `range=month` for last 6 months (default),
+ *       `range=year` for last 5 years.
+ *     tags: [Dashboard & Reporting]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: range
+ *         schema:
+ *           type: string
+ *           enum: [week, month, year]
+ *           default: month
+ *         description: Aggregation period
+ *         example: month
  *       - in: query
  *         name: project_id
  *         schema:
@@ -52,25 +112,241 @@ const { authenticate, authorize } = require("../middleware/auth");
  *           format: uuid
  *     responses:
  *       200:
- *         description: Lead funnel data returned
+ *         description: Revenue trend returned
  *         content:
  *           application/json:
  *             example:
  *               success: true
  *               data:
- *                 period: { from: "2025-04-01", to: "2025-04-30" }
- *                 total: 120
- *                 funnel:
- *                   new: 18
- *                   contacted: 25
- *                   interested: 22
- *                   follow_up: 15
- *                   site_visit_scheduled: 12
- *                   site_visit_done: 10
- *                   negotiation: 8
- *                   booked: 6
- *                   lost: 4
- *                 conversion_rate: 5.0
+ *                 range_type: month
+ *                 data:
+ *                   - label: "Jan 2025"
+ *                     total_leads: 380
+ *                     booked: 4
+ *                     site_visits: 22
+ *                   - label: "Feb 2025"
+ *                     total_leads: 510
+ *                     booked: 6
+ *                     site_visits: 28
+ */
+router.get("/revenue", authenticate, dashboardController.getRevenueTrend);
+
+/**
+ * @swagger
+ * /api/v1/dashboard/lead-sources:
+ *   get:
+ *     summary: Lead source distribution for the donut chart
+ *     description: >
+ *       Returns lead counts grouped by source (Facebook, Google Ads, 99acres,
+ *       MagicBricks, Referral, Walk-in, Website, Other) with percentages.
+ *     tags: [Dashboard & Reporting]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: from
+ *         schema:
+ *           type: string
+ *           format: date
+ *         example: "2025-06-01"
+ *       - in: query
+ *         name: to
+ *         schema:
+ *           type: string
+ *           format: date
+ *         example: "2025-06-30"
+ *       - in: query
+ *         name: project_id
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Lead sources returned
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 period: { from: "2025-06-01", to: "2025-06-30" }
+ *                 total: 2845
+ *                 sources:
+ *                   - source: "Facebook"
+ *                     count: 820
+ *                     booked: 45
+ *                     percentage: 28.8
+ *                   - source: "Google Ads"
+ *                     count: 610
+ *                     booked: 38
+ *                     percentage: 21.4
+ */
+router.get("/lead-sources", authenticate, dashboardController.getLeadSources);
+
+/**
+ * @swagger
+ * /api/v1/dashboard/lead-pipeline:
+ *   get:
+ *     summary: Lead pipeline — current distribution across all stages
+ *     description: >
+ *       Returns current (not date-filtered) lead counts across pipeline stages
+ *       for the Lead Pipeline card: Qualified, Site Visit, Negotiation, Booking,
+ *       Closed Won, Closed Lost.
+ *     tags: [Dashboard & Reporting]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: project_id
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Pipeline data returned
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 total: 850
+ *                 stages:
+ *                   - label: "Qualified"
+ *                     key: "new"
+ *                     value: 150
+ *                   - label: "Site Visit"
+ *                     key: "site_visit"
+ *                     value: 145
+ *                   - label: "Negotiation"
+ *                     key: "negotiation"
+ *                     value: 80
+ *                   - label: "Booking"
+ *                     key: "booking"
+ *                     value: 45
+ *                   - label: "Closed Won"
+ *                     key: "closed_won"
+ *                     value: 89
+ *                   - label: "Closed Lost"
+ *                     key: "closed_lost"
+ *                     value: 341
+ */
+router.get("/lead-pipeline", authenticate, dashboardController.getLeadPipeline);
+
+/**
+ * @swagger
+ * /api/v1/dashboard/recent-activity:
+ *   get:
+ *     summary: Recent activity feed (bookings, payments, status changes, etc.)
+ *     description: >
+ *       Returns the latest activity items for the Recent Activity card.
+ *       Includes lead activities and site visit updates.
+ *     tags: [Dashboard & Reporting]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 10
+ *       - in: query
+ *         name: project_id
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Recent activities returned
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 - id: "uuid"
+ *                   activity_type: "lead_activity"
+ *                   sub_type: "status_change"
+ *                   message: "Lead Karthik Menon moved to booked"
+ *                   lead_name: "Karthik Menon"
+ *                   project_name: "Lodha Park"
+ *                   performed_by: "Rahul Sharma"
+ *                   unit_info: "Unit T-301"
+ *                   created_at: "2025-06-28T08:00:00Z"
+ */
+router.get("/recent-activity", authenticate, dashboardController.getRecentActivity);
+
+/**
+ * @swagger
+ * /api/v1/dashboard/upcoming-site-visits:
+ *   get:
+ *     summary: Upcoming scheduled site visits list
+ *     description: >
+ *       Returns upcoming site visits for the Upcoming Site Visits card.
+ *       Sorted by visit_date ASC.
+ *     tags: [Dashboard & Reporting]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 10
+ *     responses:
+ *       200:
+ *         description: Upcoming site visits returned
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 - id: "sv-uuid"
+ *                   lead_name: "Rajesh Khanna"
+ *                   lead_phone: "9876543210"
+ *                   project_name: "Lodha Park"
+ *                   project_locality: "Worli"
+ *                   visit_date: "2025-06-28"
+ *                   visit_time: "10:00:00"
+ *                   status: "scheduled"
+ *                   assigned_to_name: "Priya Sharma"
+ */
+router.get("/upcoming-site-visits", authenticate, dashboardController.getUpcomingSiteVisits);
+
+/**
+ * @swagger
+ * /api/v1/dashboard/commission-overview:
+ *   get:
+ *     summary: Commission overview (coming soon placeholder)
+ *     description: Placeholder endpoint for future real-time commission tracking.
+ *     tags: [Dashboard & Reporting]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Commission overview placeholder
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 status: "coming_soon"
+ *                 message: "Real-time commission tracking"
+ */
+router.get("/commission-overview", authenticate, dashboardController.getCommissionOverview);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LEGACY ENDPOINTS (kept for backward compatibility)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * @swagger
+ * /api/v1/dashboard/overview:
+ *   get:
+ *     summary: "[Legacy] Lead funnel overview"
+ *     description: >
+ *       Legacy endpoint. Use `/api/v1/dashboard/stats` and `/api/v1/dashboard/lead-pipeline`
+ *       for the new dashboard design.
+ *     tags: [Dashboard & Reporting]
+ *     security:
+ *       - BearerAuth: []
  */
 router.get("/overview", authenticate, dashboardController.getOverview);
 
@@ -79,51 +355,9 @@ router.get("/overview", authenticate, dashboardController.getOverview);
  * /api/v1/dashboard/team-performance:
  *   get:
  *     summary: Team-wise lead counts and conversion rates
- *     description: >
- *       Returns performance stats for each team member.
- *       Admin / Super Admin see all teams; Sales Manager sees their team only.
- *       Emits `dashboard:update` with type `team_performance` via WebSocket
- *       when any team lead is updated.
  *     tags: [Dashboard & Reporting]
  *     security:
  *       - BearerAuth: []
- *     parameters:
- *       - in: query
- *         name: manager_id
- *         schema:
- *           type: string
- *           format: uuid
- *         description: Filter by specific manager's team (Admin only)
- *       - in: query
- *         name: from
- *         schema:
- *           type: string
- *           format: date
- *         example: "2025-04-01"
- *       - in: query
- *         name: to
- *         schema:
- *           type: string
- *           format: date
- *         example: "2025-04-30"
- *     responses:
- *       200:
- *         description: Team performance returned
- *         content:
- *           application/json:
- *             example:
- *               success: true
- *               data:
- *                 - user_id: "user-uuid-001"
- *                   full_name: "Rahul Sharma"
- *                   role: "sales_executive"
- *                   total_leads: 45
- *                   contacted: 38
- *                   site_visits_done: 12
- *                   booked: 5
- *                   lost: 8
- *                   conversion_rate: 11.1
- *                   pending_tasks: 7
  */
 router.get(
   "/team-performance",
@@ -136,49 +370,10 @@ router.get(
  * @swagger
  * /api/v1/dashboard/site-visits:
  *   get:
- *     summary: Site visit analytics
- *     description: >
- *       Returns site visit counts by status and upcoming visits.
- *       Emits `dashboard:update` with type `site_visits` when visit status changes.
+ *     summary: Site visit analytics summary
  *     tags: [Dashboard & Reporting]
  *     security:
  *       - BearerAuth: []
- *     parameters:
- *       - in: query
- *         name: from
- *         schema:
- *           type: string
- *           format: date
- *         example: "2025-04-01"
- *       - in: query
- *         name: to
- *         schema:
- *           type: string
- *           format: date
- *         example: "2025-04-30"
- *     responses:
- *       200:
- *         description: Site visit analytics returned
- *         content:
- *           application/json:
- *             example:
- *               success: true
- *               data:
- *                 summary:
- *                   scheduled: 8
- *                   done: 12
- *                   cancelled: 3
- *                   rescheduled: 2
- *                   no_show: 1
- *                   total: 26
- *                 completion_rate: 46.2
- *                 upcoming:
- *                   - id: "sv-uuid-005"
- *                     lead_name: "Suresh Patel"
- *                     project_name: "Skyline Heights"
- *                     visit_date: "2025-04-22"
- *                     visit_time: "11:00"
- *                     assigned_to: "Rahul Sharma"
  */
 router.get("/site-visits", authenticate, dashboardController.getSiteVisitAnalytics);
 
@@ -187,29 +382,9 @@ router.get("/site-visits", authenticate, dashboardController.getSiteVisitAnalyti
  * /api/v1/dashboard/followup-tracker:
  *   get:
  *     summary: Pending and overdue follow-up stats
- *     description: >
- *       Returns follow-up task stats — pending, overdue, and due today.
- *       Emits `dashboard:update` with type `followup_tracker` when tasks are updated.
  *     tags: [Dashboard & Reporting]
  *     security:
  *       - BearerAuth: []
- *     responses:
- *       200:
- *         description: Follow-up tracker data returned
- *         content:
- *           application/json:
- *             example:
- *               success: true
- *               data:
- *                 total_pending: 28
- *                 overdue: 6
- *                 due_today: 9
- *                 due_this_week: 13
- *                 by_user:
- *                   - user_id: "user-uuid-001"
- *                     full_name: "Rahul Sharma"
- *                     pending: 7
- *                     overdue: 2
  */
 router.get("/followup-tracker", authenticate, dashboardController.getFollowupTracker);
 
@@ -218,71 +393,9 @@ router.get("/followup-tracker", authenticate, dashboardController.getFollowupTra
  * /api/v1/reports/leads:
  *   get:
  *     summary: Filtered lead report
- *     description: >
- *       Returns a detailed lead report filtered by date range, source, status, and assigned user.
- *       Useful for exporting and reviewing sales pipeline data.
  *     tags: [Dashboard & Reporting]
  *     security:
  *       - BearerAuth: []
- *     parameters:
- *       - in: query
- *         name: from
- *         required: true
- *         schema:
- *           type: string
- *           format: date
- *         example: "2025-04-01"
- *       - in: query
- *         name: to
- *         required: true
- *         schema:
- *           type: string
- *           format: date
- *         example: "2025-04-30"
- *       - in: query
- *         name: status
- *         schema:
- *           type: string
- *       - in: query
- *         name: source
- *         schema:
- *           type: string
- *       - in: query
- *         name: assigned_to
- *         schema:
- *           type: string
- *           format: uuid
- *       - in: query
- *         name: project_id
- *         schema:
- *           type: string
- *           format: uuid
- *     responses:
- *       200:
- *         description: Lead report returned
- *         content:
- *           application/json:
- *             example:
- *               success: true
- *               data:
- *                 summary:
- *                   total: 120
- *                   booked: 6
- *                   lost: 14
- *                 by_source:
- *                   - source: "Facebook"
- *                     count: 45
- *                     booked: 3
- *                   - source: "Walk-in"
- *                     count: 20
- *                     booked: 2
- *                 leads:
- *                   - id: "lead-uuid-001"
- *                     name: "Suresh Patel"
- *                     status: "booked"
- *                     source: "Facebook"
- *                     assigned_to: "Rahul Sharma"
- *                     created_at: "2025-04-10T09:00:00Z"
  */
 router.get(
   "/reports/leads",
@@ -296,51 +409,9 @@ router.get(
  * /api/v1/reports/conversion:
  *   get:
  *     summary: Lead conversion rate report
- *     description: >
- *       Returns conversion rate metrics broken down by source, project,
- *       and team member for the given date range.
  *     tags: [Dashboard & Reporting]
  *     security:
  *       - BearerAuth: []
- *     parameters:
- *       - in: query
- *         name: from
- *         required: true
- *         schema:
- *           type: string
- *           format: date
- *         example: "2025-04-01"
- *       - in: query
- *         name: to
- *         required: true
- *         schema:
- *           type: string
- *           format: date
- *         example: "2025-04-30"
- *     responses:
- *       200:
- *         description: Conversion rate report returned
- *         content:
- *           application/json:
- *             example:
- *               success: true
- *               data:
- *                 overall_conversion_rate: 5.0
- *                 by_source:
- *                   - source: "Facebook"
- *                     total: 45
- *                     booked: 3
- *                     rate: 6.7
- *                 by_project:
- *                   - project: "Skyline Heights"
- *                     total: 38
- *                     booked: 4
- *                     rate: 10.5
- *                 by_executive:
- *                   - name: "Rahul Sharma"
- *                     total: 45
- *                     booked: 5
- *                     rate: 11.1
  */
 router.get(
   "/reports/conversion",
