@@ -26,11 +26,11 @@ const calcWorkingHours = (checkIn, checkOut) => {
 
 const getUserMeta = async (userId) => {
   const r = await pool.query(
-    `SELECT id, first_name, last_name, role, email, phone FROM users WHERE id=$1`, [userId]
+    `SELECT id, first_name, last_name, role, email, phone_number FROM users WHERE id=$1`, [userId]
   )
   if (!r.rows.length) return null
   const u = r.rows[0]
-  return { id: u.id, full_name: `${u.first_name} ${u.last_name||''}`.trim(), role: u.role, email: u.email, phone: u.phone }
+  return { id: u.id, full_name: `${u.first_name} ${u.last_name||''}`.trim(), role: u.role, email: u.email, phone: u.phone_number }
 }
 
 const buildPhotoUrl = (file) => {
@@ -229,12 +229,12 @@ const getByDate = async (req, res, next) => {
 
     const [recs, noRec] = await Promise.all([
       pool.query(
-        `SELECT a.*, CONCAT(u.first_name,' ',u.last_name) AS full_name, u.role, u.email, u.phone
+        `SELECT a.*, CONCAT(u.first_name,' ',u.last_name) AS full_name, u.role, u.email, u.phone_number
          FROM attendance a JOIN users u ON u.id=a.user_id
          WHERE a.date=$1 ORDER BY u.first_name ASC`, [date]
       ),
       pool.query(
-        `SELECT u.id, CONCAT(u.first_name,' ',u.last_name) AS full_name, u.role, u.email, u.phone
+        `SELECT u.id, CONCAT(u.first_name,' ',u.last_name) AS full_name, u.role, u.email, u.phone_number
          FROM users u WHERE u.is_active=true
            AND u.id NOT IN (SELECT user_id FROM attendance WHERE date=$1)
          ORDER BY u.first_name ASC`, [date]
@@ -405,7 +405,7 @@ const getAll = async (req, res, next) => {
     const where=`WHERE ${conds.join(' AND ')}`
     const [cnt,data,sum]=await Promise.all([
       pool.query(`SELECT COUNT(*) FROM attendance a ${where}`,params),
-      pool.query(`SELECT a.*,CONCAT(u.first_name,' ',u.last_name) AS full_name,u.role,u.email,u.phone FROM attendance a JOIN users u ON u.id=a.user_id ${where} ORDER BY a.date DESC,u.first_name ASC LIMIT $${idx++} OFFSET $${idx++}`,[...params,parseInt(per_page),offset]),
+      pool.query(`SELECT a.*,CONCAT(u.first_name,' ',u.last_name) AS full_name,u.role,u.email,u.phone_number FROM attendance a JOIN users u ON u.id=a.user_id ${where} ORDER BY a.date DESC,u.first_name ASC LIMIT $${idx++} OFFSET $${idx++}`,[...params,parseInt(per_page),offset]),
       pool.query(`SELECT COUNT(*) FILTER (WHERE status IN('present','late')) AS present,COUNT(*) FILTER (WHERE status='absent') AS absent,COUNT(*) FILTER (WHERE status IN('on_leave','half_day')) AS on_leave,COUNT(*) FILTER (WHERE status='late') AS late FROM attendance a ${where}`,params),
     ])
     const s=sum.rows[0]
@@ -525,7 +525,7 @@ const exportExcel = async (req, res, next) => {
     const usrP = user_id ? [user_id] : []
 
     const [allRecs, usersRes] = await Promise.all([
-      pool.query(`SELECT a.*,CONCAT(u.first_name,' ',u.last_name) AS full_name,u.role,u.email,u.phone FROM attendance a JOIN users u ON u.id=a.user_id WHERE a.date BETWEEN $1 AND $2 ${uF} ORDER BY a.date ASC,u.first_name ASC`, uP),
+      pool.query(`SELECT a.*,CONCAT(u.first_name,' ',u.last_name) AS full_name,u.role,u.email,u.phone_number FROM attendance a JOIN users u ON u.id=a.user_id WHERE a.date BETWEEN $1 AND $2 ${uF} ORDER BY a.date ASC,u.first_name ASC`, uP),
       pool.query(`SELECT id,first_name,last_name,role,email FROM users WHERE is_active=true ${usrF} ORDER BY first_name ASC`, usrP),
     ])
 
