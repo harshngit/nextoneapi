@@ -9,8 +9,8 @@ const AppError = require('../utils/AppError')
 
 const resolveStatus = async (checkInTime) => {
   try {
-    const cfg = await pool.query(`SELECT value FROM system_config WHERE key='office_checkin_late'`)
-    const lateStr   = cfg.rows[0]?.value || '09:30'
+    const cfg = await pool.query(`SELECT office_checkin_late FROM system_settings LIMIT 1`)
+    const lateStr   = cfg.rows[0]?.office_checkin_late || '09:30'
     const [lh, lm]  = lateStr.split(':').map(Number)
     const checkIn   = new Date(checkInTime)
     const lateLimit = new Date(checkIn)
