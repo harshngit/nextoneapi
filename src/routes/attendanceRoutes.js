@@ -573,4 +573,98 @@ router.patch('/:id',   authenticate, authorize(...ADMIN), ctrl.updateAttendance)
  */
 router.delete('/:id',  authenticate, authorize('super_admin'), ctrl.deleteAttendance)
 
+
+/**
+ * @swagger
+ * /api/v1/attendance/pending:
+ *   get:
+ *     summary: Get pending approvals for a date (admin)
+ *     description: >
+ *       Returns records that need admin attention: not checked out,
+ *       absent, or late. Defaults to today.
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: date
+ *         schema: { type: string, format: date }
+ *         description: Defaults to today
+ *         example: "2025-06-28"
+ *     responses:
+ *       200:
+ *         description: Pending records
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 date: "2025-06-28"
+ *                 summary:
+ *                   not_checked_out: 5
+ *                   absent: 3
+ *                   late: 4
+ *                   total: 12
+ *                 records: []
+ */
+router.get('/pending', authenticate, authorize(...ADMIN), ctrl.getPendingApprovals)
+
+/**
+ * @swagger
+ * /api/v1/attendance/{id}/approve:
+ *   patch:
+ *     summary: Approve / change attendance status (admin/super_admin only)
+ *     description: >
+ *       Admin can review and change the status of any attendance record.
+ *       Use cases: mark an absent as on_leave, change late to present, etc.
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *         description: Attendance record ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [status]
+ *             properties:
+ *               status:
+ *                 type: string
+ *                 enum: [present, absent, on_leave, half_day, late]
+ *                 example: present
+ *               reason:
+ *                 type: string
+ *                 example: "Employee was on field visit"
+ *     responses:
+ *       200:
+ *         description: Status updated
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: Status updated to "present" successfully
+ *               data:
+ *                 attendance: {}
+ *                 employee:
+ *                   full_name: "Rahul Sharma"
+ *                   role: "sales_executive"
+ *                 change:
+ *                   old_status: "absent"
+ *                   new_status: "present"
+ *                   reason: "Employee was on field visit"
+ *                   approved_by: "Admin Name"
+ *                   approved_at: "2025-06-28T10:00:00.000Z"
+ *       400:
+ *         description: Invalid status
+ *       404:
+ *         description: Record not found
+ */
+router.patch('/:id/approve', authenticate, authorize(...ADMIN), ctrl.approveStatus)
+
 module.exports = router

@@ -54,14 +54,22 @@ const STATUS_FONT = {
   on_leave:'3730A3', half_day:'9F1239', weekend:'6B7280',
 }
 
+const applyHeaderStyle = (cell, argb = 'FF1E40AF') => {
+  cell.fill      = { type:'pattern', pattern:'solid', fgColor:{ argb } }
+  cell.font      = { bold:true, color:{ argb:'FFFFFFFF' }, size:11 }
+  cell.alignment = { vertical:'middle', horizontal:'center', wrapText:true }
+  cell.border    = { top:{style:'thin'}, bottom:{style:'thin'}, left:{style:'thin'}, right:{style:'thin'} }
+}
+
 const styleHeader = (row, argb = 'FF1E40AF') => {
-  row.eachCell(cell => {
-    cell.fill      = { type:'pattern', pattern:'solid', fgColor:{ argb } }
-    cell.font      = { bold:true, color:{ argb:'FFFFFFFF' }, size:11 }
-    cell.alignment = { vertical:'middle', horizontal:'center', wrapText:true }
-    cell.border    = { top:{style:'thin'}, bottom:{style:'thin'}, left:{style:'thin'}, right:{style:'thin'} }
-  })
-  row.height = 30
+  // Handles both a full Row and a single Cell
+  if (row && typeof row.eachCell === 'function') {
+    row.eachCell({ includeEmpty: true }, cell => applyHeaderStyle(cell, argb))
+    row.height = 30
+  } else if (row && row.value !== undefined) {
+    // It's a single Cell
+    applyHeaderStyle(row, argb)
+  }
 }
 
 const fmtTime = (ts) => ts ? new Date(ts).toLocaleTimeString('en-IN',{ hour:'2-digit', minute:'2-digit', hour12:true }) : '-'
@@ -319,7 +327,7 @@ const getByMonth = async (req, res, next) => {
           absent:              wd.filter(d=>d.status==='absent').length,
           on_leave:            wd.filter(d=>['on_leave','half_day'].includes(d.status)).length,
           late:                wd.filter(d=>d.status==='late').length,
-          total_working_hours: parseFloat(wd.reduce((s,d)=>s+(d.working_hours||0),0).toFixed(2)),
+          total_working_hours: parseFloat(wd.reduce((s,d)=>s+(parseFloat(d.working_hours)||0),0).toFixed(2)),
           working_days:        wd.length,
         },
       }
@@ -567,7 +575,7 @@ const exportExcel = async (req, res, next) => {
       if(STATUS_FILL[r.status]) stCell.fill=STATUS_FILL[r.status]
       stCell.font={bold:true,size:10,color:{argb:`FF${STATUS_FONT[r.status]||'111827'}`}}
       stCell.alignment={horizontal:'center',vertical:'middle'}
-      if(i%2===0) row.eachCell(cell=>{if(!cell.fill?.fgColor?.argb||cell.fill.fgColor.argb==='00000000') cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFF9FAFB'}}})
+      if(i%2===0 && typeof row.eachCell==='function') row.eachCell(cell=>{if(!cell.fill?.fgColor?.argb||cell.fill.fgColor.argb==='00000000') cell.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFF9FAFB'}}})
     })
     ws1.autoFilter={from:'A2',to:'L2'}
 
@@ -661,13 +669,14 @@ const exportExcel = async (req, res, next) => {
     sr.rows.forEach((r,i)=>{
       const pct=parseInt(r.total_days)>0?((parseInt(r.present)/parseInt(r.total_days))*100).toFixed(1):0
       const row=ws3.addRow({sno:i+1,name:r.full_name,role:r.role?.replace(/_/g,' '),present:parseInt(r.present),late:parseInt(r.late),absent:parseInt(r.absent),leave:parseInt(r.on_leave),wh:`${parseFloat(r.total_wh).toFixed(1)}h`,pct:`${pct}%`,last:r.last_present?fmtDate(r.last_present):'-',email:r.email})
-      row.height=20; row.eachCell(c=>{c.alignment={vertical:'middle',horizontal:'center'}})
+      row.height=20
+      if(typeof row.eachCell==='function'){row.eachCell(c=>{c.alignment={vertical:'middle',horizontal:'center'}})}
       row.getCell(2).alignment={vertical:'middle',horizontal:'left'}; row.getCell(3).alignment={vertical:'middle',horizontal:'left'}
       const pn=parseFloat(pct)
       const pc=row.getCell('pct')
       pc.fill={type:'pattern',pattern:'solid',fgColor:{argb:pn>=90?'FFD1FAE5':pn>=75?'FFFEF3C7':'FFFEE2E2'}}
       pc.font={bold:true,color:{argb:`FF${pn>=90?'065F46':pn>=75?'92400E':'991B1B'}`}}
-      if(i%2===0) row.eachCell(c=>{if(!c.fill?.fgColor?.argb||c.fill.fgColor.argb==='00000000') c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFF9FAFB'}}})
+      if(i%2===0 && typeof row.eachCell==='function') row.eachCell(c=>{if(!c.fill?.fgColor?.argb||c.fill.fgColor.argb==='00000000') c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFF9FAFB'}}})
     })
     ws3.autoFilter={from:'A2',to:'K2'}
 
@@ -686,7 +695,7 @@ const exportExcel = async (req, res, next) => {
       const row=ws4.addRow({sno:i+1,name:r.full_name,role:r.role?.replace(/_/g,' '),date:fmtDate(d),in:fmtTime(r.check_in_time),out:fmtTime(r.check_out_time),wh:r.working_hours?`${r.working_hours}h`:'-',loc:r.checkin_address||'-'})
       row.height=20
       const ic=row.getCell('in'); ic.fill=STATUS_FILL.late; ic.font={bold:true,color:{argb:'FF92400E'}}; ic.alignment={horizontal:'center',vertical:'middle'}
-      if(i%2===0) row.eachCell(c=>{if(!c.fill?.fgColor?.argb||c.fill.fgColor.argb==='00000000') c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFFFFBEB'}}})
+      if(i%2===0 && typeof row.eachCell==='function') row.eachCell(c=>{if(!c.fill?.fgColor?.argb||c.fill.fgColor.argb==='00000000') c.fill={type:'pattern',pattern:'solid',fgColor:{argb:'FFFFFBEB'}}})
     })
     ws4.autoFilter={from:'A2',to:'H2'}
 
@@ -710,10 +719,119 @@ const markAbsentEOD = async () => {
   } catch(err) { console.error('[markAbsentEOD]',err) }
 }
 
+
+// ─── APPROVE / CHANGE STATUS (admin/super_admin only) ────────────────────────
+/**
+ * PATCH /api/v1/attendance/:id/approve
+ * Body: { status: 'present'|'absent'|'on_leave'|'half_day'|'late', reason? }
+ * Only super_admin and admin can call this.
+ * Use case: employee checks in, admin reviews and approves/changes status.
+ */
+const approveStatus = async (req, res, next) => {
+  try {
+    const { id } = req.params
+    const { status, reason } = req.body
+
+    const validStatuses = ['present', 'absent', 'on_leave', 'half_day', 'late']
+    if (!status || !validStatuses.includes(status)) {
+      return next(new AppError(`status is required and must be one of: ${validStatuses.join(', ')}`, 400))
+    }
+
+    // Check record exists
+    const existing = await pool.query(
+      `SELECT a.*, CONCAT(u.first_name,' ',u.last_name) AS full_name, u.role, u.email
+       FROM attendance a
+       JOIN users u ON u.id = a.user_id
+       WHERE a.id = $1`, [id]
+    )
+    if (!existing.rows.length) return next(new AppError('Attendance record not found', 404))
+
+    const rec       = existing.rows[0]
+    const oldStatus = rec.status
+
+    const result = await pool.query(
+      `UPDATE attendance SET
+         status          = $1,
+         manual_reason   = $2,
+         is_manual_entry = true,
+         manual_by       = $3,
+         updated_at      = NOW()
+       WHERE id = $4 RETURNING *`,
+      [status, reason || `Status changed from ${oldStatus} to ${status} by admin`, req.user.id, id]
+    )
+
+    const approvedBy = await getUserMeta(req.user.id)
+
+    return sendSuccess(res, `Status updated to "${status}" successfully`, {
+      attendance: result.rows[0],
+      employee: {
+        full_name: rec.full_name,
+        role:      rec.role,
+        email:     rec.email,
+      },
+      change: {
+        old_status: oldStatus,
+        new_status: status,
+        reason:     reason || null,
+        approved_by: approvedBy?.full_name,
+        approved_at: new Date().toISOString(),
+      },
+    })
+  } catch (err) {
+    next(err)
+  }
+}
+
+/**
+ * GET /api/v1/attendance/pending
+ * Returns today's records that are missing check-out (still "open") 
+ * or records flagged for admin review.
+ * Admin uses this to see who needs approval.
+ */
+const getPendingApprovals = async (req, res, next) => {
+  try {
+    const { date = new Date().toISOString().split('T')[0] } = req.query
+
+    const result = await pool.query(
+      `SELECT
+         a.*,
+         CONCAT(u.first_name,' ',u.last_name) AS full_name,
+         u.role, u.email, u.phone_number
+       FROM attendance a
+       JOIN users u ON u.id = a.user_id
+       WHERE a.date = $1
+         AND (
+           -- Checked in but not out yet (past office hours)
+           (a.check_in_time IS NOT NULL AND a.check_out_time IS NULL)
+           OR
+           -- Not checked in at all (absent — may need approval as leave)
+           (a.check_in_time IS NULL AND a.status = 'absent')
+           OR
+           -- Flagged late
+           (a.status = 'late')
+         )
+       ORDER BY u.first_name ASC`,
+      [date]
+    )
+
+    const summary = {
+      not_checked_out:  result.rows.filter(r => r.check_in_time && !r.check_out_time).length,
+      absent:           result.rows.filter(r => !r.check_in_time && r.status === 'absent').length,
+      late:             result.rows.filter(r => r.status === 'late').length,
+      total:            result.rows.length,
+    }
+
+    return sendSuccess(res, 'Pending approvals fetched', { date, summary, records: result.rows })
+  } catch (err) {
+    next(err)
+  }
+}
+
 module.exports = {
   uploadPhoto, checkIn, checkOut, getToday, getMyAttendance,
   getByDate, getByMonth, getByUser, getAll,
   getCalendar, getSummary, getLateArrivals,
   markLeave, manualEntry, updateAttendance, deleteAttendance,
   exportExcel, markAbsentEOD,
+  approveStatus, getPendingApprovals,
 }
