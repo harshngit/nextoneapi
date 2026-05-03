@@ -53,7 +53,7 @@ const getAllLeads = async (req, res, next) => {
     const total = parseInt(countResult.rows[0].count);
 
     const dataResult = await pool.query(
-      `SELECT l.id, l.name, l.phone, l.email, l.status, l.source, l.budget,
+      `SELECT l.id, l.name, l.phone, l.alternate_phone_number, l.email, l.status, l.source, l.budget,
               l.location_preference, l.project_id, l.assigned_to, l.created_at,
               p.name AS project_name,
               CONCAT(u.first_name, ' ', u.last_name) AS assigned_name
@@ -78,16 +78,16 @@ const getAllLeads = async (req, res, next) => {
 const createLead = async (req, res, next) => {
   const client = await pool.connect();
   try {
-    const { name, phone, email, source, project_id, assigned_to, budget, location_preference, notes } = req.body;
+    const { name, phone, alternate_phone_number, email, source, project_id, assigned_to, budget, location_preference, notes } = req.body;
     if (!name || !phone) return next(new AppError("name and phone are required", 400));
 
     await client.query("BEGIN");
 
     const result = await client.query(
-      `INSERT INTO leads (name, phone, email, source, project_id, assigned_to, budget, location_preference, status, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'new',$9)
+      `INSERT INTO leads (name, phone, alternate_phone_number, email, source, project_id, assigned_to, budget, location_preference, status, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'new',$10)
        RETURNING *`,
-      [name.trim(), phone, email || null, source || null, project_id || null, assigned_to || null, budget || null, location_preference || null, req.user.id]
+      [name.trim(), phone, alternate_phone_number || null, email || null, source || null, project_id || null, assigned_to || null, budget || null, location_preference || null, req.user.id]
     );
 
     const lead = result.rows[0];
@@ -150,7 +150,7 @@ const getLeadById = async (req, res, next) => {
 const updateLead = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { name, phone, email, source, project_id, budget, location_preference } = req.body;
+    const { name, phone, alternate_phone_number, email, source, project_id, budget, location_preference } = req.body;
 
     const existing = await pool.query("SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [id]);
     if (existing.rows.length === 0) return next(new AppError("Lead not found", 404));
@@ -163,6 +163,7 @@ const updateLead = async (req, res, next) => {
     const updates = []; const params = []; let idx = 1;
     if (name)                { updates.push(`name = $${idx++}`);                params.push(name.trim()); }
     if (phone)               { updates.push(`phone = $${idx++}`);               params.push(phone); }
+    if (alternate_phone_number !== undefined) { updates.push(`alternate_phone_number = $${idx++}`); params.push(alternate_phone_number); }
     if (email !== undefined) { updates.push(`email = $${idx++}`);               params.push(email); }
     if (source)              { updates.push(`source = $${idx++}`);              params.push(source); }
     if (project_id !== undefined) { updates.push(`project_id = $${idx++}`);     params.push(project_id); }

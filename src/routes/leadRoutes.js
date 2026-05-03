@@ -131,6 +131,10 @@ router.get("/", authenticate, leadController.getAllLeads);
  *               phone:
  *                 type: string
  *                 example: "+919876543210"
+ *               alternate_phone_number:
+ *                 type: string
+ *                 example: "+919876543211"
+ *                 description: Optional alternate contact number (can be same as primary phone)
  *               email:
  *                 type: string
  *                 format: email
@@ -160,6 +164,7 @@ router.get("/", authenticate, leadController.getAllLeads);
  *           example:
  *             name: "Suresh Patel"
  *             phone: "+919876543210"
+ *             alternate_phone_number: "+919876543211"
  *             email: "suresh.patel@gmail.com"
  *             source: "Facebook"
  *             project_id: "proj-uuid-001"
@@ -264,6 +269,8 @@ router.get("/:id", authenticate, leadController.getLeadById);
  *                 type: string
  *               phone:
  *                 type: string
+ *               alternate_phone_number:
+ *                 type: string
  *               email:
  *                 type: string
  *               source:
@@ -277,6 +284,7 @@ router.get("/:id", authenticate, leadController.getLeadById);
  *                 type: string
  *           example:
  *             phone: "+919876543999"
+ *             alternate_phone_number: "+919876543999"
  *             budget: "1Cr+"
  *             location_preference: "Bandra"
  *     responses:
