@@ -12,7 +12,8 @@ const pool = new Pool({
                              : false,
   max:                     20,
   idleTimeoutMillis:       30000,
-  connectionTimeoutMillis: 2000,
+  connectionTimeoutMillis: 10000,  // FIX: was 2000 — too short for Render cold starts; increased to 10s
+  acquireTimeoutMillis:    15000,  // FIX: added — max time to wait for a connection from the pool
 });
 
 pool.on('connect', () => {

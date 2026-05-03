@@ -363,7 +363,7 @@ const getLeadSources = async (req, res, next) => {
         source: r.source,
         count: parseInt(r.count),
         booked: parseInt(r.booked),
-        percentage: parseFloat(r.percentage),
+        percentage: r.percentage != null ? parseFloat(r.percentage) : 0, // FIX: guard null when 0 leads exist
       })),
     });
   } catch (err) {
