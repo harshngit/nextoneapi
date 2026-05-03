@@ -110,7 +110,7 @@ const LEAD_STATUS_COLOR = {
 
 const buildLeadsSheet = async (wb, user, start, end, projectId) => {
   const admin = isAdmin(user)
-  const conditions = [`l.is_archived = false`, `l.created_at::date BETWEEN '${start}' AND '${end}'`]
+  const conditions = [`l.is_archived = false`, `l.created_at::date BETWEEN $1 AND $2`]
   const params  = [start, end]
   let   idx     = 3
   if (!admin) { conditions.push(`l.assigned_to = $${idx++}`); params.push(user.id) }
@@ -118,7 +118,7 @@ const buildLeadsSheet = async (wb, user, start, end, projectId) => {
 
   const rows = await pool.query(
     `SELECT l.id, l.name, l.phone, l.alternate_phone_number, l.email,
-            l.status, l.source, l.budget, l.location_preference, l.notes,
+            l.status, l.source, l.budget, l.location_preference,
             l.created_at, l.updated_at,
             CONCAT(u.first_name,' ',u.last_name) AS assigned_to_name,
             CONCAT(c.first_name,' ',c.last_name) AS created_by_name,
@@ -136,7 +136,7 @@ const buildLeadsSheet = async (wb, user, start, end, projectId) => {
     views: [{ state: 'frozen', xSplit: 0, ySplit: 2 }],
     properties: { tabColor: { argb: 'FF3B82F6' } },
   })
-  addTitle(ws, `Leads Export  |  ${fmtDate(start)} – ${fmtDate(end)}${admin ? '' : `  |  ${user.first_name} ${user.last_name}`}`, 16, 'FF1D4ED8')
+  addTitle(ws, `Leads Export  |  ${fmtDate(start)} – ${fmtDate(end)}${admin ? '' : `  |  ${user.first_name} ${user.last_name}`}`, 15, 'FF1D4ED8')
 
   ws.columns = [
     { key: 'sno',      width: 5  },
@@ -147,11 +147,10 @@ const buildLeadsSheet = async (wb, user, start, end, projectId) => {
     { key: 'project',  width: 22 }, { key: 'city',     width: 14 },
     { key: 'assigned', width: 20 }, { key: 'created_by',width:18 },
     { key: 'created',  width: 18 }, { key: 'updated',  width: 18 },
-    { key: 'notes',    width: 30 },
   ]
   const h = ws.getRow(2)
   h.values = ['#','Name','Phone','Alt Phone','Email','Status','Source','Budget',
-    'Location Pref','Project','City','Assigned To','Created By','Created At','Updated At','Notes']
+    'Location Pref','Project','City','Assigned To','Created By','Created At','Updated At']
   styleHeader(h, 'FF1D4ED8')
 
   rows.rows.forEach((r, i) => {
@@ -163,7 +162,6 @@ const buildLeadsSheet = async (wb, user, start, end, projectId) => {
       project: r.project_name || '—', city: r.project_city || '—',
       assigned: r.assigned_to_name || '—', created_by: r.created_by_name || '—',
       created: fmtDateTime(r.created_at), updated: fmtDateTime(r.updated_at),
-      notes: r.notes || '—',
     })
     row.height = 20
     const sc2 = row.getCell('status')
@@ -221,7 +219,7 @@ const SV_STATUS_COLOR = {
 
 const buildSiteVisitsSheet = async (wb, user, start, end, projectId) => {
   const admin = isAdmin(user)
-  const conditions = [`sv.visit_date BETWEEN '${start}' AND '${end}'`]
+  const conditions = [`sv.visit_date BETWEEN $1 AND $2`]
   const params = [start, end]
   let idx = 3
   if (!admin) { conditions.push(`sv.assigned_to = $${idx++}`); params.push(user.id) }
@@ -297,7 +295,7 @@ const buildSiteVisitsSheet = async (wb, user, start, end, projectId) => {
 
 const buildFollowUpsSheet = async (wb, user, start, end) => {
   const admin = isAdmin(user)
-  const conditions = [`t.due_date::date BETWEEN '${start}' AND '${end}'`]
+  const conditions = [`t.due_date::date BETWEEN $1 AND $2`]
   const params = [start, end]
   let idx = 3
   if (!admin) { conditions.push(`t.assigned_to = $${idx++}`); params.push(user.id) }
