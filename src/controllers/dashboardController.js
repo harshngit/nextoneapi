@@ -314,6 +314,25 @@ const getRevenueTrend = async (req, res, next) => {
  * GET /api/v1/dashboard/lead-sources
  * Returns lead count grouped by source for the donut chart
  */
+// Fixed source list — names must match frontend defaultSources exactly
+const LEAD_SOURCE_CONFIG = [
+  { source: "Facebook",      color: "#3B82F6" }, // blue
+  { source: "Instagram",     color: "#EC4899" }, // pink
+  { source: "Google Ads",    color: "#F97316" }, // orange
+  { source: "YouTube",       color: "#EF4444" }, // red
+  { source: "LinkedIn",      color: "#0EA5E9" }, // sky blue
+  { source: "WhatsApp",      color: "#22C55E" }, // green
+  { source: "Twitter / X",   color: "#64748B" }, // slate
+  { source: "Website",       color: "#8B5CF6" }, // violet
+  { source: "IVR",           color: "#14B8A6" }, // teal
+  { source: "Walk-in",       color: "#EAB308" }, // yellow
+  { source: "Referral",      color: "#F43F5E" }, // rose
+  { source: "99acres",       color: "#A855F7" }, // purple
+  { source: "Housing.com",   color: "#06B6D4" }, // cyan
+  { source: "MagicBricks",   color: "#F59E0B" }, // amber
+  { source: "NoBroker",      color: "#10B981" }, // emerald
+];
+
 const getLeadSources = async (req, res, next) => {
   try {
     const { role, id: callerId } = req.user;
@@ -341,30 +360,49 @@ const getLeadSources = async (req, res, next) => {
 
     const where = `WHERE ${conditions.join(" AND ")}`;
 
+    // Map any source not in our known list → NULL (ignored) so counts stay clean
+    const knownSources = LEAD_SOURCE_CONFIG.map((s) => s.source);
+    const knownList = knownSources.map((s) => `'${s.replace("'", "''")}'`).join(", ");
+
     const result = await pool.query(
       `SELECT
-         COALESCE(l.source, 'Other') AS source,
+         l.source,
          COUNT(*) AS count,
-         COUNT(*) FILTER (WHERE l.status = 'booked') AS booked,
-         ROUND(COUNT(*) * 100.0 / SUM(COUNT(*)) OVER (), 1) AS percentage
+         COUNT(*) FILTER (WHERE l.status = 'booked') AS booked
        FROM leads l
        ${where}
-       GROUP BY source
-       ORDER BY count DESC`,
+         AND l.source IN (${knownList})
+       GROUP BY l.source`,
       params
     );
 
-    const total = result.rows.reduce((sum, r) => sum + parseInt(r.count), 0);
+    // Build a lookup map from DB results
+    const dbMap = {};
+    for (const row of result.rows) {
+      dbMap[row.source] = {
+        count:  parseInt(row.count),
+        booked: parseInt(row.booked),
+      };
+    }
+
+    // Always return all 15 sources in fixed order, with 0s for missing ones
+    const total = Object.values(dbMap).reduce((sum, r) => sum + r.count, 0);
+
+    const sources = LEAD_SOURCE_CONFIG.map(({ source, color }) => {
+      const data   = dbMap[source] || { count: 0, booked: 0 };
+      return {
+        source,
+        color,
+        count:      data.count,
+        booked:     data.booked,
+        percentage: total > 0 ? parseFloat(((data.count / total) * 100).toFixed(1)) : 0,
+      };
+    });
 
     return sendSuccess(res, "Lead sources fetched", {
       period: range,
       total,
-      sources: result.rows.map((r) => ({
-        source: r.source,
-        count: parseInt(r.count),
-        booked: parseInt(r.booked),
-        percentage: r.percentage != null ? parseFloat(r.percentage) : 0, // FIX: guard null when 0 leads exist
-      })),
+      sources,
     });
   } catch (err) {
     next(err);
