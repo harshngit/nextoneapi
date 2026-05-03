@@ -35,180 +35,185 @@ const broadcastDashboardUpdate = (type, data, userId = null) => {
 const getDashboardStats = async (req, res, next) => {
   try {
     const { role, id: callerId } = req.user;
-    const { from, to, project_id } = req.query;
-    const range = {
-      from: from || defaultRange().from,
-      to: to || defaultRange().to,
+    const { project_id } = req.query;
+
+    // ── Role-based scoping ─────────────────────────────────────────────────
+    // Builds WHERE clauses so each role sees their own slice of data
+    // Admin / Super Admin → all data (no extra condition)
+    // Sales Manager       → their team's data
+    // Sales Executive     → only their own assigned records
+
+    const buildLeadScope = () => {
+      const conds = ['is_archived = false'];
+      const params = [];
+      let idx = 1;
+      if (role === 'sales_executive') {
+        conds.push(`assigned_to = $${idx++}`); params.push(callerId);
+      } else if (role === 'sales_manager') {
+        conds.push(`assigned_to IN (SELECT id FROM users WHERE manager_id = $${idx++})`); params.push(callerId);
+      }
+      if (project_id) { conds.push(`project_id = $${idx++}`); params.push(project_id); }
+      return { where: `WHERE ${conds.join(' AND ')}`, params };
     };
 
-    // Calculate previous period of same length for % change
-    const fromDate = new Date(range.from);
-    const toDate = new Date(range.to);
-    const diffMs = toDate - fromDate;
-    const prevTo = new Date(fromDate - 1);
-    const prevFrom = new Date(prevTo - diffMs);
-    const prevRange = {
-      from: prevFrom.toISOString().split("T")[0],
-      to: prevTo.toISOString().split("T")[0],
+    const buildSvScope = () => {
+      const conds = [];
+      const params = [];
+      let idx = 1;
+      if (role === 'sales_executive') {
+        conds.push(`assigned_to = $${idx++}`); params.push(callerId);
+      } else if (role === 'sales_manager') {
+        conds.push(`assigned_to IN (SELECT id FROM users WHERE manager_id = $${idx++})`); params.push(callerId);
+      }
+      return {
+        where: conds.length ? `WHERE ${conds.join(' AND ')}` : '',
+        params,
+      };
     };
 
-    // Build role-based filter for leads
-    let leadConditions = ["is_archived = false"];
-    let leadPrevConditions = ["is_archived = false"];
-    const leadParams = [range.from, range.to];
-    const leadPrevParams = [prevRange.from, prevRange.to];
-    let idx = 3;
+    const buildTaskScope = () => {
+      const conds = [];
+      const params = [];
+      let idx = 1;
+      if (role === 'sales_executive') {
+        conds.push(`t.assigned_to = $${idx++}`); params.push(callerId);
+      } else if (role === 'sales_manager') {
+        conds.push(`t.assigned_to IN (SELECT id FROM users WHERE manager_id = $${idx++})`); params.push(callerId);
+      }
+      return {
+        where: conds.length ? `WHERE ${conds.join(' AND ')}` : '',
+        params,
+      };
+    };
 
-    if (role === "sales_executive") {
-      leadConditions.push(`assigned_to = $${idx}`);
-      leadPrevConditions.push(`assigned_to = $${idx}`);
-      leadParams.push(callerId);
-      leadPrevParams.push(callerId);
-      idx++;
-    } else if (role === "sales_manager") {
-      leadConditions.push(`assigned_to IN (SELECT id FROM users WHERE manager_id = $${idx})`);
-      leadPrevConditions.push(`assigned_to IN (SELECT id FROM users WHERE manager_id = $${idx})`);
-      leadParams.push(callerId);
-      leadPrevParams.push(callerId);
-      idx++;
-    }
-    if (project_id) {
-      leadConditions.push(`project_id = $${idx}`);
-      leadPrevConditions.push(`project_id = $${idx}`);
-      leadParams.push(project_id);
-      leadPrevParams.push(project_id);
-      idx++;
-    }
+    const leadScope = buildLeadScope();
+    const svScope   = buildSvScope();
+    const taskScope = buildTaskScope();
 
-    // Build role-based filter for site visits
-    let svConditions = [];
-    let svPrevConditions = [];
-    const svParams = [range.from, range.to];
-    const svPrevParams = [prevRange.from, prevRange.to];
-    let svIdx = 3;
-
-    if (role === "sales_executive") {
-      svConditions.push(`assigned_to = $${svIdx}`);
-      svPrevConditions.push(`assigned_to = $${svIdx}`);
-      svParams.push(callerId);
-      svPrevParams.push(callerId);
-      svIdx++;
-    } else if (role === "sales_manager") {
-      svConditions.push(`assigned_to IN (SELECT id FROM users WHERE manager_id = $${svIdx})`);
-      svPrevConditions.push(`assigned_to IN (SELECT id FROM users WHERE manager_id = $${svIdx})`);
-      svParams.push(callerId);
-      svPrevParams.push(callerId);
-      svIdx++;
-    }
-
-    const svWhere =
-      svConditions.length > 0
-        ? `WHERE visit_date BETWEEN $1 AND $2 AND ${svConditions.join(" AND ")}`
-        : `WHERE visit_date BETWEEN $1 AND $2`;
-    const svPrevWhere =
-      svPrevConditions.length > 0
-        ? `WHERE visit_date BETWEEN $1 AND $2 AND ${svPrevConditions.join(" AND ")}`
-        : `WHERE visit_date BETWEEN $1 AND $2`;
-
-    const leadWhere = `WHERE ${[...leadConditions, "created_at::date BETWEEN $1 AND $2"].join(" AND ")}`;
-    const leadPrevWhere = `WHERE ${[...leadPrevConditions, "created_at::date BETWEEN $1 AND $2"].join(" AND ")}`;
-
-    // Follow-ups: tasks with type follow_up or notes containing follow_up (use tasks table)
-    let taskConditions = ["t.is_completed = false"];
-    let taskPrevConditions = ["t.is_completed = false"];
-    const taskParams = [range.from, range.to];
-    const taskPrevParams = [prevRange.from, prevRange.to];
-    let tIdx = 3;
-
-    if (role === "sales_executive") {
-      taskConditions.push(`t.assigned_to = $${tIdx}`);
-      taskPrevConditions.push(`t.assigned_to = $${tIdx}`);
-      taskParams.push(callerId);
-      taskPrevParams.push(callerId);
-      tIdx++;
-    } else if (role === "sales_manager") {
-      taskConditions.push(`t.assigned_to IN (SELECT id FROM users WHERE manager_id = $${tIdx})`);
-      taskPrevConditions.push(`t.assigned_to IN (SELECT id FROM users WHERE manager_id = $${tIdx})`);
-      taskParams.push(callerId);
-      taskPrevParams.push(callerId);
-      tIdx++;
-    }
-
-    const taskWhere = `WHERE ${[...taskConditions, "t.due_date::date BETWEEN $1 AND $2"].join(" AND ")}`;
-    const taskPrevWhere = `WHERE ${[...taskPrevConditions, "t.due_date::date BETWEEN $1 AND $2"].join(" AND ")}`;
-
+    // ── All queries in one Promise.all ─────────────────────────────────────
     const [
-      leadsResult,
-      leadsPrevResult,
-      svResult,
-      svPrevResult,
-      followupsResult,
-      followupsPrevResult,
-      projectsResult,
-      projectsPrevResult,
+      leadsAll,
+      svAll,
+      tasksAll,
+      projectsAll,
     ] = await Promise.all([
-      // Current period leads
-      pool.query(`SELECT COUNT(*) AS total FROM leads ${leadWhere}`, leadParams),
-      // Previous period leads
-      pool.query(`SELECT COUNT(*) AS total FROM leads ${leadPrevWhere}`, leadPrevParams),
-      // Current period site visits
-      pool.query(`SELECT COUNT(*) AS total FROM site_visits ${svWhere}`, svParams),
-      // Previous period site visits
-      pool.query(`SELECT COUNT(*) AS total FROM site_visits ${svPrevWhere}`, svPrevParams),
-      // Current period follow-ups (pending tasks in range)
-      pool.query(`SELECT COUNT(*) AS total FROM tasks t ${taskWhere}`, taskParams),
-      // Previous period follow-ups
-      pool.query(`SELECT COUNT(*) AS total FROM tasks t ${taskPrevWhere}`, taskPrevParams),
-      // Current active projects
+
+      // ── LEADS: total + every status breakdown ──────────────────────────
       pool.query(
-        `SELECT COUNT(*) AS total FROM projects WHERE status IN ('active','upcoming') AND created_at::date <= $1`,
-        [range.to]
+        `SELECT
+           COUNT(*)                                                                     AS total,
+           COUNT(*) FILTER (WHERE status = 'new')                                      AS new,
+           COUNT(*) FILTER (WHERE status = 'contacted')                                AS contacted,
+           COUNT(*) FILTER (WHERE status = 'interested')                               AS interested,
+           COUNT(*) FILTER (WHERE status = 'follow_up')                                AS follow_up,
+           COUNT(*) FILTER (WHERE status = 'site_visit_scheduled')                     AS site_visit_scheduled,
+           COUNT(*) FILTER (WHERE status = 'site_visit_done')                          AS site_visit_done,
+           COUNT(*) FILTER (WHERE status = 'negotiation')                              AS negotiation,
+           COUNT(*) FILTER (WHERE status = 'booked')                                   AS booked,
+           COUNT(*) FILTER (WHERE status = 'lost')                                     AS lost
+         FROM leads
+         ${leadScope.where}`,
+        leadScope.params
       ),
-      // Previous active projects
+
+      // ── SITE VISITS: total + every status breakdown ────────────────────
       pool.query(
-        `SELECT COUNT(*) AS total FROM projects WHERE status IN ('active','upcoming') AND created_at::date <= $1`,
-        [prevRange.to]
+        `SELECT
+           COUNT(*)                                                                     AS total,
+           COUNT(*) FILTER (WHERE status = 'scheduled')                                AS scheduled,
+           COUNT(*) FILTER (WHERE status = 'done')                                     AS done,
+           COUNT(*) FILTER (WHERE status = 'cancelled')                                AS cancelled,
+           COUNT(*) FILTER (WHERE status = 'rescheduled')                              AS rescheduled,
+           COUNT(*) FILTER (WHERE status = 'no_show')                                  AS no_show,
+           COUNT(*) FILTER (WHERE visit_date >= CURRENT_DATE
+                             AND status IN ('scheduled','rescheduled'))                AS upcoming
+         FROM site_visits
+         ${svScope.where}`,
+        svScope.params
+      ),
+
+      // ── FOLLOW-UPS / TASKS: total + status breakdown ───────────────────
+      pool.query(
+        `SELECT
+           COUNT(*)                                                                     AS total,
+           COUNT(*) FILTER (WHERE t.is_completed = false)                              AS pending,
+           COUNT(*) FILTER (WHERE t.is_completed = true)                               AS completed,
+           COUNT(*) FILTER (WHERE t.is_completed = false AND t.due_date < NOW())       AS overdue,
+           COUNT(*) FILTER (WHERE t.is_completed = false
+                             AND t.due_date::date = CURRENT_DATE)                      AS due_today,
+           COUNT(*) FILTER (WHERE t.priority = 'high'
+                             AND t.is_completed = false)                               AS high_priority
+         FROM tasks t
+         ${taskScope.where}`,
+        taskScope.params
+      ),
+
+      // ── PROJECTS: total + every status breakdown (no role filter) ──────
+      pool.query(
+        `SELECT
+           COUNT(*)                                                                     AS total,
+           COUNT(*) FILTER (WHERE status = 'active')                                   AS active,
+           COUNT(*) FILTER (WHERE status = 'inactive')                                 AS inactive,
+           COUNT(*) FILTER (WHERE status = 'upcoming')                                 AS upcoming,
+           COUNT(*) FILTER (WHERE status = 'completed')                                AS completed
+         FROM projects`
       ),
     ]);
 
-    const calcChange = (current, previous) => {
-      const curr = parseInt(current);
-      const prev = parseInt(previous);
-      if (prev === 0) return curr > 0 ? 100 : 0;
-      return parseFloat((((curr - prev) / prev) * 100).toFixed(1));
-    };
+    const L  = leadsAll.rows[0];
+    const SV = svAll.rows[0];
+    const T  = tasksAll.rows[0];
+    const P  = projectsAll.rows[0];
 
-    const totalLeads = parseInt(leadsResult.rows[0].total);
-    const prevLeads = parseInt(leadsPrevResult.rows[0].total);
-    const totalSiteVisits = parseInt(svResult.rows[0].total);
-    const prevSiteVisits = parseInt(svPrevResult.rows[0].total);
-    const totalFollowUps = parseInt(followupsResult.rows[0].total);
-    const prevFollowUps = parseInt(followupsPrevResult.rows[0].total);
-    const totalProjects = parseInt(projectsResult.rows[0].total);
-    const prevProjects = parseInt(projectsPrevResult.rows[0].total);
-
-    return sendSuccess(res, "Dashboard stats fetched", {
-      period: range,
+    return sendSuccess(res, 'Dashboard stats fetched', {
       stats: {
+
+        // ── Leads ────────────────────────────────────────────────────────
         total_leads: {
-          value: totalLeads,
-          change: calcChange(totalLeads, prevLeads),
-          prev_value: prevLeads,
+          value:                  parseInt(L.total),
+          new:                    parseInt(L.new),
+          contacted:              parseInt(L.contacted),
+          interested:             parseInt(L.interested),
+          follow_up:              parseInt(L.follow_up),
+          site_visit_scheduled:   parseInt(L.site_visit_scheduled),
+          site_visit_done:        parseInt(L.site_visit_done),
+          negotiation:            parseInt(L.negotiation),
+          booked:                 parseInt(L.booked),
+          lost:                   parseInt(L.lost),
+          conversion_rate:
+            parseInt(L.total) > 0
+              ? parseFloat(((parseInt(L.booked) / parseInt(L.total)) * 100).toFixed(1))
+              : 0,
         },
+
+        // ── Site Visits ──────────────────────────────────────────────────
         total_site_visits: {
-          value: totalSiteVisits,
-          change: calcChange(totalSiteVisits, prevSiteVisits),
-          prev_value: prevSiteVisits,
+          value:       parseInt(SV.total),
+          scheduled:   parseInt(SV.scheduled),
+          done:        parseInt(SV.done),
+          cancelled:   parseInt(SV.cancelled),
+          rescheduled: parseInt(SV.rescheduled),
+          no_show:     parseInt(SV.no_show),
+          upcoming:    parseInt(SV.upcoming),
         },
+
+        // ── Follow-ups / Tasks ───────────────────────────────────────────
         total_follow_ups: {
-          value: totalFollowUps,
-          change: calcChange(totalFollowUps, prevFollowUps),
-          prev_value: prevFollowUps,
+          value:         parseInt(T.total),
+          pending:       parseInt(T.pending),
+          completed:     parseInt(T.completed),
+          overdue:       parseInt(T.overdue),
+          due_today:     parseInt(T.due_today),
+          high_priority: parseInt(T.high_priority),
         },
+
+        // ── Projects ─────────────────────────────────────────────────────
         total_projects: {
-          value: totalProjects,
-          change: calcChange(totalProjects, prevProjects),
-          prev_value: prevProjects,
+          value:     parseInt(P.total),
+          active:    parseInt(P.active),
+          inactive:  parseInt(P.inactive),
+          upcoming:  parseInt(P.upcoming),
+          completed: parseInt(P.completed),
         },
       },
     });
