@@ -17,6 +17,7 @@ const getAllProjects = async (req, res, next) => {
     let idx = 1;
 
     if (status) { conditions.push(`p.status = $${idx++}`);          params.push(status); }
+    else { conditions.push(`p.status != 'inactive'`); }
     if (city)   { conditions.push(`p.city ILIKE $${idx++}`);        params.push(`%${city}%`); }
     if (search) { conditions.push(`(p.name ILIKE $${idx} OR p.developer ILIKE $${idx})`); params.push(`%${search}%`); idx++; }
 
