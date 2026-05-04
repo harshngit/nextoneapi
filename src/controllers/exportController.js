@@ -41,26 +41,48 @@ const isAdmin = (user) => ADMIN_ROLES.includes(user?.role)
 
 /** Apply a coloured header row */
 const styleHeader = (row, argb = 'FF1E3A8A') => {
-  row.height = 26
-  row.eachCell(cell => {
-    cell.fill   = { type: 'pattern', pattern: 'solid', fgColor: { argb } }
-    cell.font   = { bold: true, size: 10, color: { argb: 'FFFFFFFF' } }
+  // eachCell only iterates already-committed cells — use getCell by index instead
+  // If row is a Cell object (called with getCell result), style it directly
+  if (typeof row.eachCell !== 'function') {
+    // Called with a single Cell — style it directly
+    const cell = row
+    cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb } }
+    cell.font      = { bold: true, size: 10, color: { argb: 'FFFFFFFF' } }
     cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: false }
-    cell.border = {
+    cell.border    = {
       top: { style: 'thin' }, bottom: { style: 'thin' },
       left: { style: 'thin' }, right: { style: 'thin' },
     }
-  })
+    return
+  }
+  row.height = 26
+  const colCount = row.values ? row.values.length - 1 : (row.actualCellCount || 20)
+  for (let c = 1; c <= colCount; c++) {
+    const cell = row.getCell(c)
+    cell.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb } }
+    cell.font      = { bold: true, size: 10, color: { argb: 'FFFFFFFF' } }
+    cell.alignment = { vertical: 'middle', horizontal: 'center', wrapText: false }
+    cell.border    = {
+      top: { style: 'thin' }, bottom: { style: 'thin' },
+      left: { style: 'thin' }, right: { style: 'thin' },
+    }
+  }
 }
 
 /** Alternating row shading */
 const shadeRow = (row, idx) => {
-  if (idx % 2 === 0) {
-    row.eachCell(cell => {
-      if (!cell.fill?.fgColor?.argb || cell.fill.fgColor.argb === '00000000') {
+  if (idx % 2 !== 0) return
+  // eachCell may skip empty cells — iterate by worksheet column count instead
+  const ws = row.worksheet
+  const colCount = ws ? ws.columnCount || ws.actualColumnCount || 20 : 20
+  for (let c = 1; c <= colCount; c++) {
+    try {
+      const cell = row.getCell(c)
+      const argb = cell.fill?.fgColor?.argb
+      if (!argb || argb === '00000000' || argb === 'FF000000') {
         cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF8FAFC' } }
       }
-    })
+    } catch (_) { /* skip */ }
   }
 }
 
@@ -198,7 +220,11 @@ const buildLeadsSheet = async (wb, user, start, end, projectId) => {
   })
   const totRow = ws2.addRow({ status: 'TOTAL', count: total, pct: '100%' })
   totRow.height = 24
-  totRow.eachCell(c => { c.font = { bold: true, size: 11 }; c.alignment = { horizontal: 'center', vertical: 'middle' } })
+  for (let c = 1; c <= 3; c++) {
+    const cell = totRow.getCell(c)
+    cell.font      = { bold: true, size: 11 }
+    cell.alignment = { horizontal: 'center', vertical: 'middle' }
+  }
 
   ws2.autoFilter = { from: 'A2', to: 'C2' }
   ws.autoFilter  = { from: 'A2', to: 'P2' }
@@ -715,4 +741,4 @@ const exportAll = async (req, res, next) => {
 module.exports = {
   exportLeads, exportSiteVisits, exportFollowUps,
   exportProjects, exportUsers, exportAttendance, exportAll,
-} 
+}
