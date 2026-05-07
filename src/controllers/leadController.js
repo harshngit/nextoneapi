@@ -1,7 +1,12 @@
 /**
  * leadController.js — Nextone Reality
- * Email notifications fire ONLY after confirmed DB writes.
- * Emails are non-blocking (fire-and-forget) — they never fail an API response.
+ * Fixes:
+ *  1. fetchLeadWithProject — explicit column aliases so lead.email
+ *     (client email) never gets overwritten by u.email (assignee email)
+ *  2. Null guard on lead.name before .split() in email dispatch
+ *  3. Added convertLead — manual convert lead to booking (PATCH /:id/convert)
+ *
+ * Email notifications fire ONLY after confirmed DB writes (setImmediate).
  */
 
 const { pool }        = require("../config/db");
@@ -15,7 +20,7 @@ const VALID_STATUSES = [
   "negotiation", "booked", "lost",
 ];
 
-// ─── Helper — log to activity table ──────────────────────────────────────────
+// ─── Helper — activity log ────────────────────────────────────────────────────
 const logActivity = async (client, leadId, type, note, performedBy) => {
   await client.query(
     `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, $2, $3, $4)`,
@@ -23,40 +28,64 @@ const logActivity = async (client, leadId, type, note, performedBy) => {
   );
 };
 
-// ─── Helper — fetch email addresses for notification ─────────────────────────
+// ─── Helper — fetch assignee + admin emails ───────────────────────────────────
 const getEmailContext = async (assignedToId) => {
   const emailData = { assigneeEmail: null, adminEmails: [] };
-
   if (assignedToId) {
     const assignee = await pool.query(
-      "SELECT email FROM users WHERE id = $1 AND is_active = true",
-      [assignedToId]
+      "SELECT email FROM users WHERE id = $1 AND is_active = true", [assignedToId]
     );
     if (assignee.rows.length) emailData.assigneeEmail = assignee.rows[0].email;
   }
-
   const admins = await pool.query(
     "SELECT email FROM users WHERE role IN ('admin','super_admin') AND is_active = true"
   );
   emailData.adminEmails = admins.rows.map(r => r.email);
-
   return emailData;
 };
 
-// ─── Helper — fetch full lead row (with project name) ────────────────────────
+// ─── Helper — fetch full lead (explicit aliases, NO column collision) ─────────
+//
+// ROOT BUG FIX: Using `l.*` with `u.email AS assigned_email` caused the pg
+// driver to overwrite l.email (client email) with u.email (staff email)
+// because both resolve to the key "email" in the result object.
+//
+// Fix: list every lead column explicitly, aliasing the client email as
+// `lead_email`, then re-expose it as `email` in the returned JS object.
+//
 const fetchLeadWithProject = async (leadId) => {
   const result = await pool.query(
-    `SELECT l.*,
-            p.name AS project_name,
-            CONCAT(u.first_name,' ',u.last_name) AS assigned_name,
-            u.email AS assigned_email
+    `SELECT
+       l.id,
+       l.name,
+       l.phone,
+       l.alternate_phone_number,
+       l.email            AS lead_email,
+       l.status,
+       l.source,
+       l.budget,
+       l.location_preference,
+       l.project_id,
+       l.assigned_to,
+       l.created_by,
+       l.is_archived,
+       l.is_converted,
+       l.converted_at,
+       l.created_at,
+       l.updated_at,
+       p.name             AS project_name,
+       CONCAT(u.first_name,' ',u.last_name) AS assigned_name,
+       u.email            AS assigned_email
      FROM leads l
      LEFT JOIN projects p ON p.id = l.project_id
-     LEFT JOIN users u    ON u.id  = l.assigned_to
+     LEFT JOIN users u    ON u.id = l.assigned_to
      WHERE l.id = $1`,
     [leadId]
   );
-  return result.rows[0] || null;
+  if (!result.rows[0]) return null;
+  const row = result.rows[0];
+  // Always expose the CLIENT's email under the standard `email` key
+  return { ...row, email: row.lead_email };
 };
 
 /**
@@ -99,8 +128,9 @@ const getAllLeads = async (req, res, next) => {
     const total = parseInt(countResult.rows[0].count);
 
     const dataResult = await pool.query(
-      `SELECT l.id, l.name, l.phone, l.alternate_phone_number, l.email, l.status, l.source, l.budget,
-              l.location_preference, l.project_id, l.assigned_to, l.created_at,
+      `SELECT l.id, l.name, l.phone, l.alternate_phone_number, l.email, l.status,
+              l.source, l.budget, l.location_preference, l.project_id, l.assigned_to,
+              l.is_converted, l.created_at,
               p.name AS project_name,
               CONCAT(u.first_name, ' ', u.last_name) AS assigned_name
        FROM leads l
@@ -120,7 +150,7 @@ const getAllLeads = async (req, res, next) => {
 
 /**
  * POST /api/v1/leads
- * ✉ Sends email: Lead Created + Lead Assigned (if applicable)
+ * Email → Internal: New Lead detail  |  Client: Welcome email
  */
 const createLead = async (req, res, next) => {
   const client = await pool.connect();
@@ -145,41 +175,40 @@ const createLead = async (req, res, next) => {
     const lead = result.rows[0];
     await logActivity(client, lead.id, "note", notes || "Lead created", req.user.id);
     if (assigned_to) {
-      await logActivity(client, lead.id, "assignment", `Lead assigned to user`, req.user.id);
+      await logActivity(client, lead.id, "assignment", "Lead assigned to user", req.user.id);
     }
 
     await client.query("COMMIT");
 
-    // ── ✉ Email after successful DB commit ───────────────────────────────────
+    // ── ✉ Fire-and-forget emails (never blocks the API response) ─────────────
     setImmediate(async () => {
       try {
-        const fullLead   = await fetchLeadWithProject(lead.id);
+        const fullLead = await fetchLeadWithProject(lead.id);
+        if (!fullLead) return;  // null guard
+
         const { adminEmails } = await getEmailContext(null);
         const creatorRow = await pool.query(
           "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1",
           [req.user.id]
         );
-        const createdByName = creatorRow.rows[0]?.name || "System";
 
-        const emailData = {
-          lead:         { ...fullLead },
-          assignedTo:   fullLead?.assigned_name || null,
-          createdBy:    createdByName,
-          assigneeEmail: fullLead?.assigned_email || null,
+        // → Internal staff + → Client welcome email
+        await emailService.notifyLeadCreated({
+          lead:          fullLead,           // fullLead.email = client email ✅
+          assignedTo:    fullLead.assigned_name  || null,
+          createdBy:     creatorRow.rows[0]?.name || "System",
+          assigneeEmail: fullLead.assigned_email || null,
           adminEmails,
-        };
+        });
 
-        // Notify admins + assignee of new lead
-        await emailService.notifyLeadCreated(emailData);
-
-        // If assigned, also send dedicated assignment email to assignee
-        if (assigned_to && fullLead?.assigned_email) {
+        // Dedicated assignment email to the exec (separate from the welcome email)
+        if (assigned_to && fullLead.assigned_email) {
           const assignerRow = await pool.query(
             "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1",
             [req.user.id]
           );
           await emailService.notifyLeadAssigned({
-            lead:          { ...fullLead },
+            lead:          fullLead,
             assigneeName:  fullLead.assigned_name,
             assignerName:  assignerRow.rows[0]?.name || "System",
             assigneeEmail: fullLead.assigned_email,
@@ -210,10 +239,13 @@ const getLeadById = async (req, res, next) => {
     const { role, id: callerId } = req.user;
 
     const result = await pool.query(
-      `SELECT l.*,
-              p.name AS project_name, p.city AS project_city, p.locality AS project_locality,
-              CONCAT(u.first_name, ' ', u.last_name) AS assigned_name,
-              u.phone_number AS assigned_phone
+      `SELECT
+         l.id, l.name, l.phone, l.alternate_phone_number, l.email,
+         l.status, l.source, l.budget, l.location_preference,
+         l.project_id, l.assigned_to, l.is_converted, l.converted_at, l.created_at,
+         p.name AS project_name, p.city AS project_city, p.locality AS project_locality,
+         CONCAT(u.first_name, ' ', u.last_name) AS assigned_name,
+         u.phone_number AS assigned_phone
        FROM leads l
        LEFT JOIN projects p ON p.id = l.project_id
        LEFT JOIN users u ON u.id = l.assigned_to
@@ -244,14 +276,15 @@ const getLeadById = async (req, res, next) => {
 
 /**
  * PUT /api/v1/leads/:id
- * (No email — only info fields updated, not status/assignment)
  */
 const updateLead = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { name, phone, alternate_phone_number, email, source, project_id, budget, location_preference } = req.body;
 
-    const existing = await pool.query("SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [id]);
+    const existing = await pool.query(
+      "SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [id]
+    );
     if (existing.rows.length === 0) return next(new AppError("Lead not found", 404));
 
     const { role, id: callerId } = req.user;
@@ -260,22 +293,21 @@ const updateLead = async (req, res, next) => {
     }
 
     const updates = []; const params = []; let idx = 1;
-    if (name)                { updates.push(`name = $${idx++}`);                params.push(name.trim()); }
-    if (phone)               { updates.push(`phone = $${idx++}`);               params.push(phone); }
+    if (name)                         { updates.push(`name = $${idx++}`);                params.push(name.trim()); }
+    if (phone)                        { updates.push(`phone = $${idx++}`);               params.push(phone); }
     if (alternate_phone_number !== undefined) { updates.push(`alternate_phone_number = $${idx++}`); params.push(alternate_phone_number); }
-    if (email !== undefined) { updates.push(`email = $${idx++}`);               params.push(email); }
-    if (source)              { updates.push(`source = $${idx++}`);              params.push(source); }
-    if (project_id !== undefined) { updates.push(`project_id = $${idx++}`);     params.push(project_id); }
-    if (budget)              { updates.push(`budget = $${idx++}`);              params.push(budget); }
-    if (location_preference) { updates.push(`location_preference = $${idx++}`); params.push(location_preference); }
+    if (email !== undefined)          { updates.push(`email = $${idx++}`);               params.push(email); }
+    if (source)                       { updates.push(`source = $${idx++}`);              params.push(source); }
+    if (project_id !== undefined)     { updates.push(`project_id = $${idx++}`);          params.push(project_id); }
+    if (budget)                       { updates.push(`budget = $${idx++}`);              params.push(budget); }
+    if (location_preference)          { updates.push(`location_preference = $${idx++}`); params.push(location_preference); }
 
     if (updates.length === 0) return next(new AppError("No fields to update", 400));
     updates.push(`updated_at = NOW()`);
     params.push(id);
 
     const result = await pool.query(
-      `UPDATE leads SET ${updates.join(", ")} WHERE id = $${idx} RETURNING *`,
-      params
+      `UPDATE leads SET ${updates.join(", ")} WHERE id = $${idx} RETURNING *`, params
     );
     return sendSuccess(res, "Lead updated successfully", result.rows[0]);
   } catch (err) {
@@ -300,7 +332,7 @@ const deleteLead = async (req, res, next) => {
 
 /**
  * PATCH /api/v1/leads/:id/status
- * ✉ Sends email: Lead Status Changed
+ * Email → Internal: Status change detail  |  Client: Friendly update
  */
 const updateLeadStatus = async (req, res, next) => {
   const client = await pool.connect();
@@ -318,8 +350,6 @@ const updateLeadStatus = async (req, res, next) => {
     if (existing.rows.length === 0) return next(new AppError("Lead not found", 404));
 
     const oldStatus = existing.rows[0].status;
-
-    // No email if status not actually changing
     if (oldStatus === status) {
       return sendSuccess(res, "Status is already set to this value", { id, status });
     }
@@ -341,22 +371,25 @@ const updateLeadStatus = async (req, res, next) => {
     );
     await client.query("COMMIT");
 
-    // ── ✉ Email after successful DB commit ───────────────────────────────────
+    // ── ✉ Email ───────────────────────────────────────────────────────────────
     setImmediate(async () => {
       try {
         const fullLead = await fetchLeadWithProject(id);
+        if (!fullLead) return;
+
         const { adminEmails } = await getEmailContext(null);
         const changedByRow = await pool.query(
           "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1", [callerId]
         );
 
         await emailService.notifyLeadStatusChanged({
-          lead:         fullLead,
+          lead:          fullLead,           // fullLead.email = client email ✅
           oldStatus,
-          newStatus:    status,
-          changedBy:    changedByRow.rows[0]?.name || "System",
-          note:         note || null,
-          assigneeEmail: fullLead?.assigned_email || null,
+          newStatus:     status,
+          changedBy:     changedByRow.rows[0]?.name || "System",
+          note:          note || null,
+          assignedTo:    fullLead.assigned_name  || null,
+          assigneeEmail: fullLead.assigned_email || null,
           adminEmails,
         });
       } catch (emailErr) {
@@ -376,14 +409,13 @@ const updateLeadStatus = async (req, res, next) => {
 
 /**
  * PATCH /api/v1/leads/:id/assign
- * ✉ Sends email: Lead Assigned
+ * Email → Internal only: Lead assigned to executive
  */
 const assignLead = async (req, res, next) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
     const { assigned_to, note } = req.body;
-
     if (!assigned_to) return next(new AppError("assigned_to is required", 400));
 
     const leadResult = await pool.query(
@@ -392,8 +424,6 @@ const assignLead = async (req, res, next) => {
     if (leadResult.rows.length === 0) return next(new AppError("Lead not found", 404));
 
     const prevAssignee = leadResult.rows[0].assigned_to;
-
-    // No email if assigning to same person
     const sameAssignee = prevAssignee === assigned_to;
 
     const userResult = await pool.query(
@@ -417,11 +447,11 @@ const assignLead = async (req, res, next) => {
     );
     await client.query("COMMIT");
 
-    // ── ✉ Email only if assignment actually changed ───────────────────────
     if (!sameAssignee) {
       setImmediate(async () => {
         try {
           const fullLead    = await fetchLeadWithProject(id);
+          if (!fullLead) return;
           const assignerRow = await pool.query(
             "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1", [callerId]
           );
@@ -437,9 +467,136 @@ const assignLead = async (req, res, next) => {
         }
       });
     }
-    // ─────────────────────────────────────────────────────────────────────────
 
     return sendSuccess(res, `Lead assigned to ${assignee.first_name} ${assignee.last_name}`);
+  } catch (err) {
+    await client.query("ROLLBACK");
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
+/**
+ * PATCH /api/v1/leads/:id/convert
+ *
+ * Manual lead-to-booking conversion.
+ *
+ * Automatic path: status set to "booked" via updateLeadStatus → booking email fires
+ * Manual path:    this endpoint → sets status = booked, is_converted = true,
+ *                 records booking_amount, optionally inserts into bookings table
+ *
+ * Body (all optional):
+ *   { note, booking_amount, project_id }
+ *
+ * Email → Internal: Booking confirmed (CRM detail)
+ *         Client:   Congratulations email
+ */
+const convertLead = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { note, booking_amount, project_id: overrideProjectId } = req.body;
+
+    const leadRow = await pool.query(
+      `SELECT
+         l.id, l.status, l.assigned_to, l.is_converted,
+         l.email AS lead_email,
+         l.name, l.phone, l.budget, l.location_preference, l.project_id,
+         p.name AS project_name,
+         CONCAT(u.first_name,' ',u.last_name) AS assigned_name,
+         u.email AS assigned_email
+       FROM leads l
+       LEFT JOIN projects p ON p.id = l.project_id
+       LEFT JOIN users u ON u.id = l.assigned_to
+       WHERE l.id = $1 AND l.is_archived = false`,
+      [id]
+    );
+    if (leadRow.rows.length === 0) return next(new AppError("Lead not found", 404));
+
+    const lead = { ...leadRow.rows[0], email: leadRow.rows[0].lead_email };
+
+    if (lead.is_converted) {
+      return next(new AppError("This lead has already been converted", 400));
+    }
+
+    const { role, id: callerId } = req.user;
+    if (role === "sales_executive" && lead.assigned_to !== callerId) {
+      return next(new AppError("Access denied", 403));
+    }
+
+    const finalProjectId = overrideProjectId || lead.project_id || null;
+    const oldStatus      = lead.status;
+
+    await client.query("BEGIN");
+
+    await client.query(
+      `UPDATE leads
+       SET status       = 'booked',
+           is_converted = true,
+           converted_at = NOW(),
+           project_id   = COALESCE($1, project_id),
+           updated_at   = NOW()
+       WHERE id = $2`,
+      [finalProjectId, id]
+    );
+
+    await logActivity(
+      client, id, "status_change",
+      note || `Lead manually converted to booking${booking_amount ? ` — Amount: ₹${booking_amount}` : ""}`,
+      callerId
+    );
+
+    // Insert into bookings table if it exists
+    const { rows: [{ exists: bookingsExists }] } = await client.query(
+      `SELECT EXISTS (
+         SELECT FROM information_schema.tables WHERE table_name = 'bookings'
+       ) AS exists`
+    );
+    if (bookingsExists) {
+      await client.query(
+        `INSERT INTO bookings (lead_id, project_id, booking_amount, created_by)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (lead_id) DO UPDATE SET booking_amount = EXCLUDED.booking_amount`,
+        [id, finalProjectId, booking_amount || null, callerId]
+      );
+    }
+
+    await client.query("COMMIT");
+
+    // ── ✉ Email ───────────────────────────────────────────────────────────────
+    setImmediate(async () => {
+      try {
+        const fullLead = await fetchLeadWithProject(id);
+        if (!fullLead) return;
+
+        const { adminEmails } = await getEmailContext(null);
+        const convertedByRow  = await pool.query(
+          "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1", [callerId]
+        );
+
+        await emailService.notifyLeadStatusChanged({
+          lead:          fullLead,
+          oldStatus,
+          newStatus:     "booked",
+          changedBy:     convertedByRow.rows[0]?.name || "System",
+          note:          note || "Lead converted to booking",
+          assignedTo:    fullLead.assigned_name  || null,
+          assigneeEmail: fullLead.assigned_email || null,
+          adminEmails,
+        });
+      } catch (emailErr) {
+        console.error("[Email] convertLead notification failed:", emailErr.message);
+      }
+    });
+    // ─────────────────────────────────────────────────────────────────────────
+
+    return sendSuccess(res, "Lead successfully converted to booking", {
+      id,
+      status:       "booked",
+      is_converted: true,
+      converted_at: new Date().toISOString(),
+    });
   } catch (err) {
     await client.query("ROLLBACK");
     next(err);
@@ -491,7 +648,9 @@ const addLeadActivity = async (req, res, next) => {
     }
     if (!note) return next(new AppError("note is required", 400));
 
-    const lead = await pool.query("SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [id]);
+    const lead = await pool.query(
+      "SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [id]
+    );
     if (lead.rows.length === 0) return next(new AppError("Lead not found", 404));
 
     const { role, id: callerId } = req.user;
@@ -524,6 +683,15 @@ const getLeadSources = async (req, res, next) => {
 };
 
 module.exports = {
-  getAllLeads, createLead, getLeadById, updateLead, deleteLead,
-  updateLeadStatus, assignLead, getLeadActivity, addLeadActivity, getLeadSources,
+  getAllLeads,
+  createLead,
+  getLeadById,
+  updateLead,
+  deleteLead,
+  updateLeadStatus,
+  assignLead,
+  convertLead,
+  getLeadActivity,
+  addLeadActivity,
+  getLeadSources,
 };

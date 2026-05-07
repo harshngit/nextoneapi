@@ -625,7 +625,7 @@ const clientWelcomeTemplate = (data) => {
 
   const body = `
     <h2 style="margin:0 0 6px;font-size:22px;color:${BRAND.primary};">
-      Welcome to ${BRAND.name}, ${lead.name.split(" ")[0]}! 🏠
+      Welcome to ${BRAND.name}, ${(lead.name || "").split(" ")[0] || lead.name || "there"}! 🏠
     </h2>
     <p style="margin:0 0 20px;color:${BRAND.muted};font-size:14px;">
       Thank you for your interest. We are delighted to assist you on your property journey.

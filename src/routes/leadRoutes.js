@@ -546,6 +546,52 @@ router.post("/:id/activity", authenticate, leadController.addLeadActivity);
  *               success: true
  *               data: ["Facebook", "Instagram", "Walk-in", "Referral", "99acres", "MagicBricks", "Housing.com"]
  */
+
+/**
+ * @swagger
+ * /api/v1/leads/{id}/convert:
+ *   patch:
+ *     summary: Manually convert a lead to a booking
+ *     description: >
+ *       Marks a lead as converted (status = booked, is_converted = true).
+ *       Use this for manual conversions. Automatic conversion also happens
+ *       when status is set to "booked" via the status endpoint.
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         example: "lead-uuid-001"
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               booking_amount:
+ *                 type: string
+ *                 example: "95L"
+ *               project_id:
+ *                 type: string
+ *                 format: uuid
+ *               note:
+ *                 type: string
+ *                 example: "Booked 2BHK in Tower A"
+ *     responses:
+ *       200:
+ *         description: Lead converted successfully
+ *       400:
+ *         description: Already converted
+ *       404:
+ *         description: Lead not found
+ */
+router.patch("/:id/convert", authenticate, authorize("super_admin", "admin", "sales_manager"), leadController.convertLead);
+
 router.get("/sources", authenticate, leadController.getLeadSources);
 
 module.exports = router;
