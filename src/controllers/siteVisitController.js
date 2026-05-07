@@ -1,8 +1,22 @@
-const { pool } = require("../config/db");
+/**
+ * siteVisitController.js — Nextone Reality
+ * Email notifications fire ONLY after confirmed DB writes.
+ */
+
+const { pool }       = require("../config/db");
 const { sendSuccess, sendError, paginate } = require("../utils/response");
-const AppError = require("../utils/AppError");
+const AppError       = require("../utils/AppError");
+const emailService   = require("../utils/emailService");
 
 const VALID_STATUSES = ["scheduled", "done", "cancelled", "rescheduled", "no_show"];
+
+// ─── Helper — fetch emails for notifications ──────────────────────────────────
+const getManagerEmails = async () => {
+  const result = await pool.query(
+    "SELECT email FROM users WHERE role IN ('admin','super_admin','sales_manager') AND is_active = true"
+  );
+  return result.rows.map(r => r.email);
+};
 
 /**
  * GET /api/v1/site-visits
@@ -20,17 +34,16 @@ const getAllSiteVisits = async (req, res, next) => {
     if (role === "sales_executive") { conditions.push(`sv.assigned_to = $${idx++}`); params.push(callerId); }
     else if (role === "sales_manager") { conditions.push(`u.manager_id = $${idx++}`); params.push(callerId); }
 
-    if (status)     { conditions.push(`sv.status = $${idx++}`);               params.push(status); }
-    if (assigned_to){ conditions.push(`sv.assigned_to = $${idx++}`);          params.push(assigned_to); }
-    if (project_id) { conditions.push(`sv.project_id = $${idx++}`);           params.push(project_id); }
-    if (from)       { conditions.push(`sv.visit_date >= $${idx++}`);          params.push(from); }
-    if (to)         { conditions.push(`sv.visit_date <= $${idx++}`);          params.push(to); }
+    if (status)     { conditions.push(`sv.status = $${idx++}`);      params.push(status); }
+    if (assigned_to){ conditions.push(`sv.assigned_to = $${idx++}`); params.push(assigned_to); }
+    if (project_id) { conditions.push(`sv.project_id = $${idx++}`);  params.push(project_id); }
+    if (from)       { conditions.push(`sv.visit_date >= $${idx++}`); params.push(from); }
+    if (to)         { conditions.push(`sv.visit_date <= $${idx++}`); params.push(to); }
 
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
     const countResult = await pool.query(
-      `SELECT COUNT(*) FROM site_visits sv
-       LEFT JOIN users u ON u.id = sv.assigned_to ${where}`, params
+      `SELECT COUNT(*) FROM site_visits sv LEFT JOIN users u ON u.id = sv.assigned_to ${where}`, params
     );
     const total = parseInt(countResult.rows[0].count);
 
@@ -58,6 +71,7 @@ const getAllSiteVisits = async (req, res, next) => {
 
 /**
  * POST /api/v1/site-visits
+ * ✉ Sends email: Site Visit Scheduled
  */
 const createSiteVisit = async (req, res, next) => {
   const client = await pool.connect();
@@ -67,13 +81,31 @@ const createSiteVisit = async (req, res, next) => {
       return next(new AppError("lead_id, project_id, visit_date, and visit_time are required", 400));
     }
 
-    const lead = await pool.query("SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [lead_id]);
+    const lead = await pool.query(
+      `SELECT l.*, CONCAT(u.first_name,' ',u.last_name) AS assigned_name, u.email AS assigned_email
+       FROM leads l LEFT JOIN users u ON u.id = l.assigned_to
+       WHERE l.id = $1 AND l.is_archived = false`,
+      [lead_id]
+    );
     if (lead.rows.length === 0) return next(new AppError("Lead not found", 404));
 
-    const project = await pool.query("SELECT id FROM projects WHERE id = $1", [project_id]);
+    const project = await pool.query("SELECT id, name, address, city FROM projects WHERE id = $1", [project_id]);
     if (project.rows.length === 0) return next(new AppError("Project not found", 404));
 
     const execId = assigned_to || lead.rows[0].assigned_to;
+
+    // Get assignee email (may differ from lead's current assignee)
+    let assigneeEmail = lead.rows[0].assigned_email;
+    let assigneeName  = lead.rows[0].assigned_name;
+    if (assigned_to && assigned_to !== lead.rows[0].assigned_to) {
+      const execRow = await pool.query(
+        "SELECT email, CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1", [assigned_to]
+      );
+      if (execRow.rows.length) {
+        assigneeEmail = execRow.rows[0].email;
+        assigneeName  = execRow.rows[0].name;
+      }
+    }
 
     await client.query("BEGIN");
 
@@ -83,10 +115,8 @@ const createSiteVisit = async (req, res, next) => {
       [lead_id, project_id, visit_date, visit_time, execId, notes || null, transport_arranged || false]
     );
 
-    // Auto-update lead status
     await client.query(
-      "UPDATE leads SET status = 'site_visit_scheduled', updated_at = NOW() WHERE id = $1",
-      [lead_id]
+      "UPDATE leads SET status = 'site_visit_scheduled', updated_at = NOW() WHERE id = $1", [lead_id]
     );
     await client.query(
       `INSERT INTO lead_activities (lead_id, type, note, performed_by)
@@ -95,6 +125,30 @@ const createSiteVisit = async (req, res, next) => {
     );
 
     await client.query("COMMIT");
+
+    // ── ✉ Email after successful DB commit ───────────────────────────────────
+    setImmediate(async () => {
+      try {
+        const adminEmails = await getManagerEmails();
+        const scheduledByRow = await pool.query(
+          "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1", [req.user.id]
+        );
+
+        await emailService.notifySiteVisitScheduled({
+          lead:         { ...lead.rows[0] },
+          project:      { ...project.rows[0] },
+          visit:        { ...result.rows[0] },
+          assignedTo:   assigneeName,
+          scheduledBy:  scheduledByRow.rows[0]?.name || "System",
+          assigneeEmail,
+          adminEmails,
+        });
+      } catch (emailErr) {
+        console.error("[Email] createSiteVisit notification failed:", emailErr.message);
+      }
+    });
+    // ─────────────────────────────────────────────────────────────────────────
+
     return sendSuccess(res, "Site visit scheduled successfully", result.rows[0], 201);
   } catch (err) {
     await client.query("ROLLBACK");
@@ -126,13 +180,13 @@ const getSiteVisitById = async (req, res, next) => {
     );
 
     if (result.rows.length === 0) return next(new AppError("Site visit not found", 404));
-
     const sv = result.rows[0];
+
     return sendSuccess(res, "Site visit fetched", {
       id: sv.id, visit_date: sv.visit_date, visit_time: sv.visit_time,
       status: sv.status, transport_arranged: sv.transport_arranged, notes: sv.notes,
       created_at: sv.created_at,
-      lead: { id: sv.lead_id, name: sv.lead_name, phone: sv.lead_phone, email: sv.lead_email },
+      lead:    { id: sv.lead_id,    name: sv.lead_name,    phone: sv.lead_phone,    email: sv.lead_email },
       project: { id: sv.project_id, name: sv.project_name, address: sv.project_address, city: sv.project_city },
       assigned_to: { id: sv.assigned_to, full_name: sv.assigned_name },
       feedback: sv.rating ? {
@@ -178,8 +232,7 @@ const updateSiteVisit = async (req, res, next) => {
 
     if (isReschedule) {
       await client.query(
-        `INSERT INTO lead_activities (lead_id, type, note, performed_by)
-         VALUES ($1, 'note', $2, $3)`,
+        `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, 'note', $2, $3)`,
         [existing.rows[0].lead_id, reschedule_reason || `Site visit rescheduled to ${visit_date}`, req.user.id]
       );
     }
@@ -197,6 +250,7 @@ const updateSiteVisit = async (req, res, next) => {
 
 /**
  * PATCH /api/v1/site-visits/:id/status
+ * ✉ Sends email: Site Visit Status Changed
  */
 const updateSiteVisitStatus = async (req, res, next) => {
   const client = await pool.connect();
@@ -211,22 +265,67 @@ const updateSiteVisitStatus = async (req, res, next) => {
       return next(new AppError("note is required when cancelling or marking no_show", 400));
     }
 
-    const existing = await pool.query("SELECT * FROM site_visits WHERE id = $1", [id]);
+    const existing = await pool.query(
+      `SELECT sv.*, l.name AS lead_name, l.phone AS lead_phone, l.email AS lead_email,
+              p.name AS project_name,
+              CONCAT(u.first_name,' ',u.last_name) AS assigned_name, u.email AS assigned_email
+       FROM site_visits sv
+       LEFT JOIN leads l ON l.id = sv.lead_id
+       LEFT JOIN projects p ON p.id = sv.project_id
+       LEFT JOIN users u ON u.id = sv.assigned_to
+       WHERE sv.id = $1`,
+      [id]
+    );
     if (existing.rows.length === 0) return next(new AppError("Site visit not found", 404));
+
+    const sv        = existing.rows[0];
+    const oldStatus = sv.status;
+
+    // No email if status not actually changing
+    if (oldStatus === status) {
+      return sendSuccess(res, "Status is already set to this value", { id, status });
+    }
 
     await client.query("BEGIN");
     await client.query("UPDATE site_visits SET status = $1, updated_at = NOW() WHERE id = $2", [status, id]);
 
-    const leadId = existing.rows[0].lead_id;
     if (status === "done") {
-      await client.query("UPDATE leads SET status = 'site_visit_done', updated_at = NOW() WHERE id = $1", [leadId]);
+      await client.query(
+        "UPDATE leads SET status = 'site_visit_done', updated_at = NOW() WHERE id = $1", [sv.lead_id]
+      );
     }
     await client.query(
       `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1,'note',$2,$3)`,
-      [leadId, note || `Site visit marked as ${status}`, req.user.id]
+      [sv.lead_id, note || `Site visit marked as ${status}`, req.user.id]
     );
 
     await client.query("COMMIT");
+
+    // ── ✉ Email after successful DB commit ───────────────────────────────────
+    setImmediate(async () => {
+      try {
+        const managerEmails = await getManagerEmails();
+        const updatedByRow = await pool.query(
+          "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1", [req.user.id]
+        );
+
+        await emailService.notifySiteVisitStatusChanged({
+          lead:          { id: sv.lead_id, name: sv.lead_name, phone: sv.lead_phone, email: sv.lead_email },
+          project:       { name: sv.project_name },
+          visit:         { visit_date: sv.visit_date, visit_time: sv.visit_time },
+          oldStatus,
+          newStatus:     status,
+          updatedBy:     updatedByRow.rows[0]?.name || "System",
+          note:          note || null,
+          assigneeEmail: sv.assigned_email,
+          adminEmails:   managerEmails,
+        });
+      } catch (emailErr) {
+        console.error("[Email] updateSiteVisitStatus notification failed:", emailErr.message);
+      }
+    });
+    // ─────────────────────────────────────────────────────────────────────────
+
     return sendSuccess(res, `Site visit marked as ${status}`);
   } catch (err) {
     await client.query("ROLLBACK");
@@ -238,6 +337,7 @@ const updateSiteVisitStatus = async (req, res, next) => {
 
 /**
  * POST /api/v1/site-visits/:id/feedback
+ * ✉ Sends email: Site Visit Feedback Submitted
  */
 const submitFeedback = async (req, res, next) => {
   const client = await pool.connect();
@@ -259,12 +359,24 @@ const submitFeedback = async (req, res, next) => {
       return next(new AppError(`Invalid next_step. Must be: ${VALID_NEXT_STEPS.join(", ")}`, 400));
     }
 
-    const visit = await pool.query("SELECT * FROM site_visits WHERE id = $1", [id]);
+    const visit = await pool.query(
+      `SELECT sv.*, l.name AS lead_name, l.phone AS lead_phone, l.email AS lead_email,
+              p.name AS project_name
+       FROM site_visits sv
+       LEFT JOIN leads l ON l.id = sv.lead_id
+       LEFT JOIN projects p ON p.id = sv.project_id
+       WHERE sv.id = $1`,
+      [id]
+    );
     if (visit.rows.length === 0) return next(new AppError("Site visit not found", 404));
-    if (visit.rows[0].status !== "done") return next(new AppError("Feedback can only be submitted for completed visits", 400));
+    if (visit.rows[0].status !== "done") {
+      return next(new AppError("Feedback can only be submitted for completed visits", 400));
+    }
 
     const existingFeedback = await pool.query("SELECT id FROM site_visit_feedback WHERE site_visit_id = $1", [id]);
-    if (existingFeedback.rows.length > 0) return next(new AppError("Feedback already submitted for this visit", 400));
+    if (existingFeedback.rows.length > 0) {
+      return next(new AppError("Feedback already submitted for this visit", 400));
+    }
 
     await client.query("BEGIN");
     const result = await client.query(
@@ -273,14 +385,40 @@ const submitFeedback = async (req, res, next) => {
       [id, rating || null, client_reaction, interested_in || null, next_step, remarks || null, req.user.id]
     );
 
-    // Log to lead activity
     await client.query(
-      `INSERT INTO lead_activities (lead_id, type, note, performed_by)
-       VALUES ($1,'note',$2,$3)`,
-      [visit.rows[0].lead_id, `Visit feedback: ${client_reaction} reaction. Next step: ${next_step}. ${remarks || ""}`, req.user.id]
+      `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1,'note',$2,$3)`,
+      [
+        visit.rows[0].lead_id,
+        `Visit feedback: ${client_reaction} reaction. Next step: ${next_step}. ${remarks || ""}`,
+        req.user.id,
+      ]
     );
 
     await client.query("COMMIT");
+
+    // ── ✉ Email after successful DB commit ───────────────────────────────────
+    setImmediate(async () => {
+      try {
+        const managerEmails = await getManagerEmails();
+        const submittedByRow = await pool.query(
+          "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1", [req.user.id]
+        );
+        const sv = visit.rows[0];
+
+        await emailService.notifySiteVisitFeedback({
+          lead:          { id: sv.lead_id, name: sv.lead_name, phone: sv.lead_phone, email: sv.lead_email },
+          project:       { name: sv.project_name },
+          visit:         { visit_date: sv.visit_date, visit_time: sv.visit_time },
+          feedback:      { rating, client_reaction, interested_in, next_step, remarks },
+          submittedBy:   submittedByRow.rows[0]?.name || "System",
+          managerEmails,
+        });
+      } catch (emailErr) {
+        console.error("[Email] submitFeedback notification failed:", emailErr.message);
+      }
+    });
+    // ─────────────────────────────────────────────────────────────────────────
+
     return sendSuccess(res, "Visit feedback submitted successfully", result.rows[0], 201);
   } catch (err) {
     await client.query("ROLLBACK");
@@ -326,4 +464,7 @@ const getVisitsByLead = async (req, res, next) => {
   }
 };
 
-module.exports = { getAllSiteVisits, createSiteVisit, getSiteVisitById, updateSiteVisit, updateSiteVisitStatus, submitFeedback, getVisitsByLead };
+module.exports = {
+  getAllSiteVisits, createSiteVisit, getSiteVisitById, updateSiteVisit,
+  updateSiteVisitStatus, submitFeedback, getVisitsByLead,
+};

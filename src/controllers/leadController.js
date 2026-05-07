@@ -1,15 +1,62 @@
-const { pool } = require("../config/db");
+/**
+ * leadController.js — Nextone Reality
+ * Email notifications fire ONLY after confirmed DB writes.
+ * Emails are non-blocking (fire-and-forget) — they never fail an API response.
+ */
+
+const { pool }        = require("../config/db");
 const { sendSuccess, paginate } = require("../utils/response");
-const AppError = require("../utils/AppError");
+const AppError        = require("../utils/AppError");
+const emailService    = require("../utils/emailService");
 
-const VALID_STATUSES = ["new", "contacted", "interested", "follow_up", "site_visit_scheduled", "site_visit_done", "negotiation", "booked", "lost"];
+const VALID_STATUSES = [
+  "new", "contacted", "interested", "follow_up",
+  "site_visit_scheduled", "site_visit_done",
+  "negotiation", "booked", "lost",
+];
 
-// Helper — log to activity table
+// ─── Helper — log to activity table ──────────────────────────────────────────
 const logActivity = async (client, leadId, type, note, performedBy) => {
   await client.query(
     `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, $2, $3, $4)`,
     [leadId, type, note, performedBy]
   );
+};
+
+// ─── Helper — fetch email addresses for notification ─────────────────────────
+const getEmailContext = async (assignedToId) => {
+  const emailData = { assigneeEmail: null, adminEmails: [] };
+
+  if (assignedToId) {
+    const assignee = await pool.query(
+      "SELECT email FROM users WHERE id = $1 AND is_active = true",
+      [assignedToId]
+    );
+    if (assignee.rows.length) emailData.assigneeEmail = assignee.rows[0].email;
+  }
+
+  const admins = await pool.query(
+    "SELECT email FROM users WHERE role IN ('admin','super_admin') AND is_active = true"
+  );
+  emailData.adminEmails = admins.rows.map(r => r.email);
+
+  return emailData;
+};
+
+// ─── Helper — fetch full lead row (with project name) ────────────────────────
+const fetchLeadWithProject = async (leadId) => {
+  const result = await pool.query(
+    `SELECT l.*,
+            p.name AS project_name,
+            CONCAT(u.first_name,' ',u.last_name) AS assigned_name,
+            u.email AS assigned_email
+     FROM leads l
+     LEFT JOIN projects p ON p.id = l.project_id
+     LEFT JOIN users u    ON u.id  = l.assigned_to
+     WHERE l.id = $1`,
+    [leadId]
+  );
+  return result.rows[0] || null;
 };
 
 /**
@@ -25,7 +72,6 @@ const getAllLeads = async (req, res, next) => {
     let params = [];
     let idx = 1;
 
-    // Role-based visibility
     if (role === "sales_executive") {
       conditions.push(`l.assigned_to = $${idx++}`);
       params.push(callerId);
@@ -74,30 +120,78 @@ const getAllLeads = async (req, res, next) => {
 
 /**
  * POST /api/v1/leads
+ * ✉ Sends email: Lead Created + Lead Assigned (if applicable)
  */
 const createLead = async (req, res, next) => {
   const client = await pool.connect();
   try {
-    const { name, phone, alternate_phone_number, email, source, project_id, assigned_to, budget, location_preference, notes } = req.body;
+    const { name, phone, alternate_phone_number, email, source, project_id,
+            assigned_to, budget, location_preference, notes } = req.body;
     if (!name || !phone) return next(new AppError("name and phone are required", 400));
 
     await client.query("BEGIN");
 
     const result = await client.query(
-      `INSERT INTO leads (name, phone, alternate_phone_number, email, source, project_id, assigned_to, budget, location_preference, status, created_by)
+      `INSERT INTO leads (name, phone, alternate_phone_number, email, source,
+                          project_id, assigned_to, budget, location_preference,
+                          status, created_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'new',$10)
        RETURNING *`,
-      [name.trim(), phone, alternate_phone_number || null, email || null, source || null, project_id || null, assigned_to || null, budget || null, location_preference || null, req.user.id]
+      [name.trim(), phone, alternate_phone_number || null, email || null, source || null,
+       project_id || null, assigned_to || null, budget || null, location_preference || null,
+       req.user.id]
     );
 
     const lead = result.rows[0];
-
     await logActivity(client, lead.id, "note", notes || "Lead created", req.user.id);
     if (assigned_to) {
       await logActivity(client, lead.id, "assignment", `Lead assigned to user`, req.user.id);
     }
 
     await client.query("COMMIT");
+
+    // ── ✉ Email after successful DB commit ───────────────────────────────────
+    setImmediate(async () => {
+      try {
+        const fullLead   = await fetchLeadWithProject(lead.id);
+        const { adminEmails } = await getEmailContext(null);
+        const creatorRow = await pool.query(
+          "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1",
+          [req.user.id]
+        );
+        const createdByName = creatorRow.rows[0]?.name || "System";
+
+        const emailData = {
+          lead:         { ...fullLead },
+          assignedTo:   fullLead?.assigned_name || null,
+          createdBy:    createdByName,
+          assigneeEmail: fullLead?.assigned_email || null,
+          adminEmails,
+        };
+
+        // Notify admins + assignee of new lead
+        await emailService.notifyLeadCreated(emailData);
+
+        // If assigned, also send dedicated assignment email to assignee
+        if (assigned_to && fullLead?.assigned_email) {
+          const assignerRow = await pool.query(
+            "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1",
+            [req.user.id]
+          );
+          await emailService.notifyLeadAssigned({
+            lead:          { ...fullLead },
+            assigneeName:  fullLead.assigned_name,
+            assignerName:  assignerRow.rows[0]?.name || "System",
+            assigneeEmail: fullLead.assigned_email,
+            note:          notes || null,
+          });
+        }
+      } catch (emailErr) {
+        console.error("[Email] createLead notification failed:", emailErr.message);
+      }
+    });
+    // ─────────────────────────────────────────────────────────────────────────
+
     return sendSuccess(res, "Lead created", lead, 201);
   } catch (err) {
     await client.query("ROLLBACK");
@@ -136,8 +230,12 @@ const getLeadById = async (req, res, next) => {
 
     return sendSuccess(res, "Lead fetched successfully", {
       ...lead,
-      assigned_to: lead.assigned_to ? { id: lead.assigned_to, full_name: lead.assigned_name, phone: lead.assigned_phone } : null,
-      project: lead.project_id ? { id: lead.project_id, name: lead.project_name, city: lead.project_city, locality: lead.project_locality } : null,
+      assigned_to: lead.assigned_to
+        ? { id: lead.assigned_to, full_name: lead.assigned_name, phone: lead.assigned_phone }
+        : null,
+      project: lead.project_id
+        ? { id: lead.project_id, name: lead.project_name, city: lead.project_city, locality: lead.project_locality }
+        : null,
     });
   } catch (err) {
     next(err);
@@ -146,6 +244,7 @@ const getLeadById = async (req, res, next) => {
 
 /**
  * PUT /api/v1/leads/:id
+ * (No email — only info fields updated, not status/assignment)
  */
 const updateLead = async (req, res, next) => {
   try {
@@ -201,6 +300,7 @@ const deleteLead = async (req, res, next) => {
 
 /**
  * PATCH /api/v1/leads/:id/status
+ * ✉ Sends email: Lead Status Changed
  */
 const updateLeadStatus = async (req, res, next) => {
   const client = await pool.connect();
@@ -212,8 +312,17 @@ const updateLeadStatus = async (req, res, next) => {
       return next(new AppError(`Invalid status. Must be one of: ${VALID_STATUSES.join(", ")}`, 400));
     }
 
-    const existing = await pool.query("SELECT id, status, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [id]);
+    const existing = await pool.query(
+      "SELECT id, status, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [id]
+    );
     if (existing.rows.length === 0) return next(new AppError("Lead not found", 404));
+
+    const oldStatus = existing.rows[0].status;
+
+    // No email if status not actually changing
+    if (oldStatus === status) {
+      return sendSuccess(res, "Status is already set to this value", { id, status });
+    }
 
     const { role, id: callerId } = req.user;
     if (role === "sales_executive" && existing.rows[0].assigned_to !== callerId) {
@@ -227,10 +336,34 @@ const updateLeadStatus = async (req, res, next) => {
     );
     await logActivity(
       client, id, "status_change",
-      note || `Status changed from ${existing.rows[0].status} to ${status}`,
+      note || `Status changed from ${oldStatus} to ${status}`,
       callerId
     );
     await client.query("COMMIT");
+
+    // ── ✉ Email after successful DB commit ───────────────────────────────────
+    setImmediate(async () => {
+      try {
+        const fullLead = await fetchLeadWithProject(id);
+        const { adminEmails } = await getEmailContext(null);
+        const changedByRow = await pool.query(
+          "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1", [callerId]
+        );
+
+        await emailService.notifyLeadStatusChanged({
+          lead:         fullLead,
+          oldStatus,
+          newStatus:    status,
+          changedBy:    changedByRow.rows[0]?.name || "System",
+          note:         note || null,
+          assigneeEmail: fullLead?.assigned_email || null,
+          adminEmails,
+        });
+      } catch (emailErr) {
+        console.error("[Email] updateLeadStatus notification failed:", emailErr.message);
+      }
+    });
+    // ─────────────────────────────────────────────────────────────────────────
 
     return sendSuccess(res, `Lead status updated to ${status}`, result.rows[0]);
   } catch (err) {
@@ -243,6 +376,7 @@ const updateLeadStatus = async (req, res, next) => {
 
 /**
  * PATCH /api/v1/leads/:id/assign
+ * ✉ Sends email: Lead Assigned
  */
 const assignLead = async (req, res, next) => {
   const client = await pool.connect();
@@ -252,11 +386,18 @@ const assignLead = async (req, res, next) => {
 
     if (!assigned_to) return next(new AppError("assigned_to is required", 400));
 
-    const leadResult = await pool.query("SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [id]);
+    const leadResult = await pool.query(
+      "SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [id]
+    );
     if (leadResult.rows.length === 0) return next(new AppError("Lead not found", 404));
 
+    const prevAssignee = leadResult.rows[0].assigned_to;
+
+    // No email if assigning to same person
+    const sameAssignee = prevAssignee === assigned_to;
+
     const userResult = await pool.query(
-      "SELECT id, first_name, last_name, manager_id FROM users WHERE id = $1 AND is_active = true",
+      "SELECT id, first_name, last_name, email, manager_id FROM users WHERE id = $1 AND is_active = true",
       [assigned_to]
     );
     if (userResult.rows.length === 0) return next(new AppError("User not found", 404));
@@ -275,6 +416,28 @@ const assignLead = async (req, res, next) => {
       callerId
     );
     await client.query("COMMIT");
+
+    // ── ✉ Email only if assignment actually changed ───────────────────────
+    if (!sameAssignee) {
+      setImmediate(async () => {
+        try {
+          const fullLead    = await fetchLeadWithProject(id);
+          const assignerRow = await pool.query(
+            "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1", [callerId]
+          );
+          await emailService.notifyLeadAssigned({
+            lead:          fullLead,
+            assigneeName:  `${assignee.first_name} ${assignee.last_name}`,
+            assignerName:  assignerRow.rows[0]?.name || "System",
+            assigneeEmail: assignee.email,
+            note:          note || null,
+          });
+        } catch (emailErr) {
+          console.error("[Email] assignLead notification failed:", emailErr.message);
+        }
+      });
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     return sendSuccess(res, `Lead assigned to ${assignee.first_name} ${assignee.last_name}`);
   } catch (err) {
@@ -354,11 +517,13 @@ const getLeadSources = async (req, res, next) => {
     const result = await pool.query(
       "SELECT DISTINCT source FROM leads WHERE source IS NOT NULL ORDER BY source"
     );
-    const sources = result.rows.map(r => r.source);
-    return sendSuccess(res, "Lead sources fetched", sources);
+    return sendSuccess(res, "Lead sources fetched", result.rows.map(r => r.source));
   } catch (err) {
     next(err);
   }
 };
 
-module.exports = { getAllLeads, createLead, getLeadById, updateLead, deleteLead, updateLeadStatus, assignLead, getLeadActivity, addLeadActivity, getLeadSources };
+module.exports = {
+  getAllLeads, createLead, getLeadById, updateLead, deleteLead,
+  updateLeadStatus, assignLead, getLeadActivity, addLeadActivity, getLeadSources,
+};

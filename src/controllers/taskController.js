@@ -1,9 +1,25 @@
-const { pool } = require("../config/db");
+/**
+ * taskController.js — Nextone Reality
+ * Email notifications fire ONLY after confirmed DB writes:
+ *   - createTask  → notifyFollowUpCreated (to assignee)
+ *   - completeTask (is_completed=true) → notifyFollowUpCompleted (to managers)
+ */
+
+const { pool }       = require("../config/db");
 const { sendSuccess, paginate } = require("../utils/response");
-const AppError = require("../utils/AppError");
+const AppError       = require("../utils/AppError");
 const { emitToUser } = require("../config/socket");
+const emailService   = require("../utils/emailService");
 
 const VALID_PRIORITIES = ["low", "medium", "high"];
+
+// ─── Helper — fetch manager emails for completion notifications ───────────────
+const getManagerEmails = async () => {
+  const result = await pool.query(
+    "SELECT email FROM users WHERE role IN ('admin','super_admin','sales_manager') AND is_active = true"
+  );
+  return result.rows.map(r => r.email);
+};
 
 /**
  * GET /api/v1/tasks
@@ -57,6 +73,7 @@ const getAllTasks = async (req, res, next) => {
 
 /**
  * POST /api/v1/tasks
+ * ✉ Sends email: Follow-Up Created (to assignee)
  */
 const createTask = async (req, res, next) => {
   try {
@@ -68,7 +85,12 @@ const createTask = async (req, res, next) => {
       return next(new AppError("priority must be low, medium, or high", 400));
     }
 
-    const lead = await pool.query("SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [lead_id]);
+    const lead = await pool.query(
+      `SELECT l.*, p.name AS project_name FROM leads l
+       LEFT JOIN projects p ON p.id = l.project_id
+       WHERE l.id = $1 AND l.is_archived = false`,
+      [lead_id]
+    );
     if (lead.rows.length === 0) return next(new AppError("Lead not found", 404));
 
     const execId = assigned_to || lead.rows[0].assigned_to || req.user.id;
@@ -86,8 +108,6 @@ const createTask = async (req, res, next) => {
       id: task.id, title: task.title, lead_id: task.lead_id,
       due_date: task.due_date, priority: task.priority,
     });
-
-    // Also emit notification:new
     emitToUser(execId, "notification:new", {
       type: "task_created",
       title: "New Task Assigned",
@@ -95,6 +115,34 @@ const createTask = async (req, res, next) => {
       reference_id: task.id,
       reference_type: "task",
     });
+
+    // ── ✉ Email after successful DB insert ───────────────────────────────────
+    setImmediate(async () => {
+      try {
+        // Fetch assignee details
+        const assigneeRow = await pool.query(
+          "SELECT email, CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1",
+          [execId]
+        );
+        if (!assigneeRow.rows.length || !assigneeRow.rows[0].email) return;
+
+        const createdByRow = await pool.query(
+          "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1",
+          [req.user.id]
+        );
+
+        await emailService.notifyFollowUpCreated({
+          task:          { ...task },
+          lead:          { ...lead.rows[0] },
+          assigneeName:  assigneeRow.rows[0].name,
+          createdBy:     createdByRow.rows[0]?.name || "System",
+          assigneeEmail: assigneeRow.rows[0].email,
+        });
+      } catch (emailErr) {
+        console.error("[Email] createTask notification failed:", emailErr.message);
+      }
+    });
+    // ─────────────────────────────────────────────────────────────────────────
 
     return sendSuccess(res, "Task created successfully", task, 201);
   } catch (err) {
@@ -108,7 +156,7 @@ const createTask = async (req, res, next) => {
 const getTodayTasks = async (req, res, next) => {
   try {
     const userId = req.user.id;
-    const today = new Date().toISOString().split("T")[0];
+    const today  = new Date().toISOString().split("T")[0];
 
     const [overdue, dueToday, completedToday] = await Promise.all([
       pool.query(
@@ -136,12 +184,12 @@ const getTodayTasks = async (req, res, next) => {
 
     return sendSuccess(res, "Today's tasks fetched", {
       summary: {
-        due_today: dueToday.rows.length,
-        overdue: overdue.rows.length,
+        due_today:       dueToday.rows.length,
+        overdue:         overdue.rows.length,
         completed_today: completedToday.rows.length,
       },
-      overdue: overdue.rows,
-      due_today: dueToday.rows,
+      overdue:         overdue.rows,
+      due_today:       dueToday.rows,
       completed_today: completedToday.rows,
     });
   } catch (err) {
@@ -231,6 +279,7 @@ const deleteTask = async (req, res, next) => {
 
 /**
  * PATCH /api/v1/tasks/:id/complete
+ * ✉ Sends email: Follow-Up Completed (to managers) — only when marking as completed
  */
 const completeTask = async (req, res, next) => {
   try {
@@ -240,6 +289,9 @@ const completeTask = async (req, res, next) => {
 
     const existing = await pool.query("SELECT * FROM tasks WHERE id = $1", [id]);
     if (existing.rows.length === 0) return next(new AppError("Task not found", 404));
+
+    // No email if task already in this completion state
+    const alreadySame = existing.rows[0].is_completed === is_completed;
 
     const completedAt = is_completed ? new Date() : null;
     const result = await pool.query(
@@ -254,6 +306,35 @@ const completeTask = async (req, res, next) => {
         id: task.id, is_completed: true, completed_at: task.completed_at,
       });
     }
+
+    // ── ✉ Email only when completing (not un-completing), only if state changed ─
+    if (is_completed && !alreadySame) {
+      setImmediate(async () => {
+        try {
+          const leadRow = await pool.query(
+            `SELECT l.*, p.name AS project_name FROM leads l
+             LEFT JOIN projects p ON p.id = l.project_id
+             WHERE l.id = $1`,
+            [task.lead_id]
+          );
+          const completedByRow = await pool.query(
+            "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1",
+            [req.user.id]
+          );
+          const managerEmails = await getManagerEmails();
+
+          await emailService.notifyFollowUpCompleted({
+            task:           { ...task },
+            lead:           leadRow.rows[0] || { name: "Unknown", phone: "" },
+            completedBy:    completedByRow.rows[0]?.name || "System",
+            managerEmails,
+          });
+        } catch (emailErr) {
+          console.error("[Email] completeTask notification failed:", emailErr.message);
+        }
+      });
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     return sendSuccess(
       res,
@@ -287,4 +368,7 @@ const getTasksByLead = async (req, res, next) => {
   }
 };
 
-module.exports = { getAllTasks, createTask, getTodayTasks, getTaskById, updateTask, deleteTask, completeTask, getTasksByLead };
+module.exports = {
+  getAllTasks, createTask, getTodayTasks, getTaskById,
+  updateTask, deleteTask, completeTask, getTasksByLead,
+};
