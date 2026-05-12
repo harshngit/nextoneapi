@@ -92,9 +92,9 @@ const getUserLeads = async (req, res, next) => {
     const total = parseInt(countResult.rows[0].count);
 
     const dataResult = await pool.query(
-      `SELECT l.id, l.name, l.phone, l.email, l.status, l.source,
-              l.budget, l.location_preference, l.notes,
-              l.is_converted, l.converted_at, l.created_at, l.updated_at,
+      `SELECT l.id, l.name, l.phone, l.alternate_phone_number, l.email,
+              l.status, l.source, l.budget, l.location_preference,
+              l.created_at, l.updated_at,
               p.name AS project_name
        FROM leads l
        LEFT JOIN projects p ON p.id = l.project_id
