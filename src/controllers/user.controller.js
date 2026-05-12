@@ -378,4 +378,71 @@ const getUserPerformance = async (req, res, next) => {
   }
 };
 
-module.exports = { getAllUsers, createUser, getUserById, updateUser, deleteUser, updateRole, getTeam, getUserPerformance };
+/**
+ * PATCH /api/v1/users/:id/assign-manager
+ * Assign or reassign a sales_executive or external_caller to a sales_manager.
+ * Allowed by: super_admin, admin, sales_manager
+ * A sales_manager can only assign users who are currently unassigned or
+ * already on their own team — they cannot poach from another manager.
+ */
+const assignManager = async (req, res, next) => {
+  try {
+    const { id } = req.params;                              // user being assigned
+    const { manager_id } = req.body;
+    const { role: callerRole, id: callerId } = req.user;
+
+    if (!manager_id) return next(new AppError("manager_id is required", 400));
+
+    // Fetch the target user
+    const targetResult = await pool.query(
+      "SELECT id, role, manager_id, first_name, last_name FROM users WHERE id = $1 AND is_active = true",
+      [id]
+    );
+    if (targetResult.rows.length === 0) return next(new AppError("User not found", 404));
+
+    const target = targetResult.rows[0];
+
+    // Only sales_executive and external_caller can be assigned to a manager
+    if (!["sales_executive", "external_caller"].includes(target.role)) {
+      return next(new AppError("Only sales_executive or external_caller can be assigned to a manager", 400));
+    }
+
+    // Verify the target manager exists and has the correct role
+    const managerResult = await pool.query(
+      "SELECT id, role, first_name, last_name FROM users WHERE id = $1 AND is_active = true",
+      [manager_id]
+    );
+    if (managerResult.rows.length === 0) return next(new AppError("Manager not found", 404));
+    if (managerResult.rows[0].role !== "sales_manager") {
+      return next(new AppError("The provided manager_id does not belong to a sales_manager", 400));
+    }
+
+    // sales_manager can only assign users currently unassigned or already on their team
+    if (callerRole === "sales_manager") {
+      if (manager_id !== callerId) {
+        return next(new AppError("You can only assign users to yourself as manager", 403));
+      }
+      if (target.manager_id && target.manager_id !== callerId) {
+        return next(new AppError("This user is already assigned to another manager", 403));
+      }
+    }
+
+    await pool.query(
+      "UPDATE users SET manager_id = $1, updated_at = NOW() WHERE id = $2",
+      [manager_id, id]
+    );
+
+    const mgr = managerResult.rows[0];
+    return sendSuccess(res, "User assigned to manager successfully", {
+      user_id:      id,
+      user_name:    `${target.first_name} ${target.last_name}`,
+      role:         target.role,
+      manager_id,
+      manager_name: `${mgr.first_name} ${mgr.last_name}`,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { getAllUsers, createUser, getUserById, updateUser, deleteUser, updateRole, getTeam, getUserPerformance, assignManager };

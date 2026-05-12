@@ -391,4 +391,68 @@ router.get(
  */
 router.get("/:id/performance", authenticate, userController.getUserPerformance);
 
+/**
+ * @swagger
+ * /api/v1/users/{id}/assign-manager:
+ *   patch:
+ *     summary: Assign a sales_executive or external_caller to a sales_manager
+ *     description: >
+ *       Assigns or reassigns a sales_executive or external_caller to a given sales_manager.
+ *       Allowed roles: super_admin, admin, sales_manager.
+ *       A sales_manager can only assign users to themselves — they cannot assign
+ *       users to other managers or reassign users belonging to a different manager.
+ *       super_admin and admin can assign any eligible user to any active sales_manager.
+ *     tags: [Users & Team Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: UUID of the user (sales_executive or external_caller) to assign
+ *         example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [manager_id]
+ *             properties:
+ *               manager_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: UUID of the sales_manager to assign this user to
+ *                 example: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+ *     responses:
+ *       200:
+ *         description: User assigned to manager successfully
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "User assigned to manager successfully"
+ *               data:
+ *                 user_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+ *                 user_name: "Rahul Sharma"
+ *                 role: "sales_executive"
+ *                 manager_id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+ *                 manager_name: "Amit Joshi"
+ *       400:
+ *         description: Validation error (wrong role, manager not found, etc.)
+ *       403:
+ *         description: sales_manager trying to assign to another manager or poach from another team
+ *       404:
+ *         description: User or manager not found
+ */
+router.patch(
+  "/:id/assign-manager",
+  authenticate,
+  authorize("super_admin", "admin", "sales_manager"),
+  userController.assignManager
+);
+
 module.exports = router;

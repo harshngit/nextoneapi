@@ -34,6 +34,7 @@ app.use("/api/v1/attendance",    require("./routes/attendanceRoutes"));
 app.use("/api/v1/me",            require("./routes/myDataRoutes"));
 app.use("/api/v1/export",        require("./routes/exportRoutes"));
 app.use("/api/v1/convert",       require("./routes/conversionRoutes"));
+app.use("/api/v1/team-history",  require("./routes/teamHistoryRoutes"));
 
 // ─── 404 Not Found Handler ────────────────────────────────────
 app.all("*", (req, res, next) => {
