@@ -230,13 +230,6 @@ const getMyAttendance = async (req, res, next) => {
 }
 
 // ─── 5b. TEAM ATTENDANCE (sales_manager — their team only) ───────────────────
-/**
- * GET /api/v1/attendance/team
- * Returns paginated attendance records for all users under this sales_manager.
- * Also accessible by admin / super_admin (they can pass manager_id param to scope).
- *
- * Query params: from, to, page, per_page, manager_id (admin only override)
- */
 const getTeamAttendance = async (req, res, next) => {
   try {
     const { from, to, page = 1, per_page = 30, manager_id } = req.query
@@ -247,9 +240,8 @@ const getTeamAttendance = async (req, res, next) => {
     const end   = to   || now.toISOString().split('T')[0]
     const offset = (parseInt(page) - 1) * parseInt(per_page)
 
-    // Determine which manager's team to show
-    // sales_manager → always their own team (cannot override)
-    // admin/super_admin → use manager_id param if provided, else all users
+    // sales_manager → always their own team
+    // admin/super_admin → require manager_id param
     let managerId = null
     if (role === 'sales_manager') {
       managerId = callerId
@@ -257,101 +249,97 @@ const getTeamAttendance = async (req, res, next) => {
       managerId = manager_id
     }
 
-    if (!managerId) {
-      return next(new AppError('manager_id is required or you must be a sales_manager', 403))
-    }
+    if (!managerId) return next(new AppError('manager_id is required', 403))
 
-    // Fetch team member IDs under this manager
     const teamResult = await pool.query(
       `SELECT id, CONCAT(first_name,' ',last_name) AS full_name, role, email
-       FROM users
-       WHERE manager_id = $1 AND is_active = true
-       ORDER BY first_name ASC`,
+       FROM users WHERE manager_id = $1 AND is_active = true ORDER BY first_name ASC`,
       [managerId]
     )
 
     if (teamResult.rows.length === 0) {
       return sendSuccess(res, 'No team members found', {
-        period: { from: start, to: end },
-        manager_id: managerId,
-        team_size: 0,
-        data: [],
-        summary: { present: 0, absent: 0, late: 0, on_leave: 0, total_working_hours: 0 },
-        pagination: { total: 0, page: 1, per_page: parseInt(per_page), total_pages: 0 },
+        period: { from: start, to: end }, manager_id: managerId, team_size: 0,
+        data: [], summary: { present:0, absent:0, late:0, on_leave:0, total_working_hours:0 },
+        pagination: { total:0, page:1, per_page:parseInt(per_page), total_pages:0 },
       })
     }
 
     const teamIds = teamResult.rows.map(u => u.id)
 
-    // Count + fetch attendance records for the team
     const [cnt, data, sum] = await Promise.all([
-      pool.query(
-        `SELECT COUNT(*) FROM attendance a
-         WHERE a.user_id = ANY($1::uuid[]) AND a.date BETWEEN $2 AND $3`,
-        [teamIds, start, end]
-      ),
-      pool.query(
-        `SELECT a.*,
-                CONCAT(u.first_name,' ',u.last_name) AS full_name,
-                u.role, u.email, u.phone_number
-         FROM attendance a
-         JOIN users u ON u.id = a.user_id
+      pool.query(`SELECT COUNT(*) FROM attendance a WHERE a.user_id = ANY($1::uuid[]) AND a.date BETWEEN $2 AND $3`, [teamIds, start, end]),
+      pool.query(`SELECT a.*, CONCAT(u.first_name,' ',u.last_name) AS full_name, u.role, u.email, u.phone_number
+         FROM attendance a JOIN users u ON u.id = a.user_id
          WHERE a.user_id = ANY($1::uuid[]) AND a.date BETWEEN $2 AND $3
-         ORDER BY a.date DESC, u.first_name ASC
-         LIMIT $4 OFFSET $5`,
-        [teamIds, start, end, parseInt(per_page), offset]
-      ),
-      pool.query(
-        `SELECT
-           COUNT(*) FILTER (WHERE status IN ('present','late'))  AS present,
-           COUNT(*) FILTER (WHERE status = 'absent')             AS absent,
+         ORDER BY a.date DESC, u.first_name ASC LIMIT $4 OFFSET $5`,
+        [teamIds, start, end, parseInt(per_page), offset]),
+      pool.query(`SELECT
+           COUNT(*) FILTER (WHERE status IN ('present','late'))      AS present,
+           COUNT(*) FILTER (WHERE status = 'absent')                 AS absent,
            COUNT(*) FILTER (WHERE status IN ('on_leave','half_day')) AS on_leave,
-           COUNT(*) FILTER (WHERE status = 'late')               AS late,
-           COALESCE(SUM(working_hours), 0)                       AS total_working_hours
-         FROM attendance
-         WHERE user_id = ANY($1::uuid[]) AND date BETWEEN $2 AND $3`,
-        [teamIds, start, end]
-      ),
+           COUNT(*) FILTER (WHERE status = 'late')                   AS late,
+           COALESCE(SUM(working_hours), 0)                           AS total_working_hours
+         FROM attendance WHERE user_id = ANY($1::uuid[]) AND date BETWEEN $2 AND $3`,
+        [teamIds, start, end]),
     ])
 
     const s = sum.rows[0]
-
     return res.json({
       ...paginate(data.rows, parseInt(cnt.rows[0].count), parseInt(page), parseInt(per_page)),
-      summary: {
-        present:             parseInt(s.present),
-        absent:              parseInt(s.absent),
-        on_leave:            parseInt(s.on_leave),
-        late:                parseInt(s.late),
-        total_working_hours: parseFloat(s.total_working_hours),
-      },
-      period:      { from: start, to: end },
-      manager_id:  managerId,
-      team_size:   teamResult.rows.length,
-      team_members: teamResult.rows,
+      summary: { present:parseInt(s.present), absent:parseInt(s.absent), on_leave:parseInt(s.on_leave), late:parseInt(s.late), total_working_hours:parseFloat(s.total_working_hours) },
+      period: { from: start, to: end }, manager_id: managerId,
+      team_size: teamResult.rows.length, team_members: teamResult.rows,
     })
-  } catch (err) {
-    next(err)
-  }
+  } catch (err) { next(err) }
 }
 
 // ─── 6. BY DATE (all users for one day) ──────────────────────────────────────
 const getByDate = async (req, res, next) => {
   try {
-    const { date } = req.query
+    const { date, user_id } = req.query
+    const { role, id: callerId } = req.user
     if (!date) return next(new AppError('date query param required (YYYY-MM-DD)', 400))
+
+    // Build user scope filter
+    // sales_manager → only their team members
+    // sales_executive / external_caller → only themselves
+    // admin/super_admin → all users (or single user if user_id passed)
+    let scopeFilter     = ''
+    let scopeParams     = [date]
+    let noRecScopeWhere = 'u.is_active=true'
+    let noRecParams     = [date]
+    let idx             = 2
+
+    if (role === 'sales_manager') {
+      scopeFilter     = `AND u.manager_id=$${++idx}`
+      scopeParams     = [date, callerId]
+      noRecScopeWhere = `u.is_active=true AND u.manager_id=$2`
+      noRecParams     = [date, callerId]
+    } else if (['sales_executive', 'external_caller'].includes(role)) {
+      scopeFilter     = `AND a.user_id=$${++idx}`
+      scopeParams     = [date, callerId]
+      noRecScopeWhere = `u.is_active=true AND u.id=$2`
+      noRecParams     = [date, callerId]
+    } else if (user_id) {
+      // admin filtering to one user
+      scopeFilter     = `AND a.user_id=$${++idx}`
+      scopeParams     = [date, user_id]
+      noRecScopeWhere = `u.is_active=true AND u.id=$2`
+      noRecParams     = [date, user_id]
+    }
 
     const [recs, noRec] = await Promise.all([
       pool.query(
-        `SELECT a.*, CONCAT(u.first_name,' ',u.last_name) AS full_name, u.role, u.email, u.phone_number
+        `SELECT a.*, CONCAT(u.first_name,' ',u.last_name) AS full_name, u.role, u.email, u.phone_number, u.manager_id
          FROM attendance a JOIN users u ON u.id=a.user_id
-         WHERE a.date=$1 ORDER BY u.first_name ASC`, [date]
+         WHERE a.date=$1 ${scopeFilter} ORDER BY u.first_name ASC`, scopeParams
       ),
       pool.query(
-        `SELECT u.id, CONCAT(u.first_name,' ',u.last_name) AS full_name, u.role, u.email, u.phone_number
-         FROM users u WHERE u.is_active=true
+        `SELECT u.id, CONCAT(u.first_name,' ',u.last_name) AS full_name, u.role, u.email, u.phone_number, u.manager_id
+         FROM users u WHERE ${noRecScopeWhere}
            AND u.id NOT IN (SELECT user_id FROM attendance WHERE date=$1)
-         ORDER BY u.first_name ASC`, [date]
+         ORDER BY u.first_name ASC`, noRecParams
       ),
     ])
 
@@ -374,23 +362,56 @@ const getByDate = async (req, res, next) => {
 // ─── 7. BY MONTH (user × day grid) ───────────────────────────────────────────
 const getByMonth = async (req, res, next) => {
   try {
-    const { month=new Date().getMonth()+1, year=new Date().getFullYear(), user_id, page=1, per_page=50 } = req.query
+    const { month=new Date().getMonth()+1, year=new Date().getFullYear(), user_id, manager_id, page=1, per_page=50 } = req.query
+    const { role, id: callerId } = req.user
     const m      = parseInt(month)
     const y      = parseInt(year)
     const start  = `${y}-${String(m).padStart(2,'0')}-01`
     const end    = new Date(y,m,0).toISOString().split('T')[0]
     const offset = (parseInt(page)-1)*parseInt(per_page)
 
-    const uParams    = user_id ? [parseInt(per_page), offset, user_id] : [parseInt(per_page), offset]
-    const uFilter    = user_id ? 'AND id=$3' : ''
-    const cntParams  = user_id ? [user_id] : []
-    const cntFilter  = user_id ? 'AND id=$1' : ''
+    // ── Scope users to manager's team ──────────────────────────────────────
+    // sales_manager  → always scoped to their own team (manager_id = callerId)
+    // admin/super_admin → can pass manager_id param to scope, or user_id for one user
+    // All others → scoped to themselves only
+    let uFilter   = ''
+    let uParams   = [parseInt(per_page), offset]
+    let cntFilter = ''
+    let cntParams = []
+    let attFilter = ''
+    let attParams = [start, end]
+
+    if (role === 'sales_manager') {
+      // Always show only this manager's team members
+      uFilter   = 'AND manager_id=$3'
+      uParams   = [parseInt(per_page), offset, callerId]
+      cntFilter = 'AND manager_id=$1'
+      cntParams = [callerId]
+      attFilter = 'AND a.user_id IN (SELECT id FROM users WHERE manager_id=$3 AND is_active=true)'
+      attParams = [start, end, callerId]
+    } else if (user_id) {
+      // Single user filter (admin viewing one person's grid, or exec viewing own)
+      uFilter   = 'AND id=$3'
+      uParams   = [parseInt(per_page), offset, user_id]
+      cntFilter = 'AND id=$1'
+      cntParams = [user_id]
+      attFilter = 'AND a.user_id=$3'
+      attParams = [start, end, user_id]
+    } else if (manager_id) {
+      // Admin viewing a specific manager's team
+      uFilter   = 'AND manager_id=$3'
+      uParams   = [parseInt(per_page), offset, manager_id]
+      cntFilter = 'AND manager_id=$1'
+      cntParams = [manager_id]
+      attFilter = 'AND a.user_id IN (SELECT id FROM users WHERE manager_id=$3 AND is_active=true)'
+      attParams = [start, end, manager_id]
+    }
+    // else: admin/super_admin with no filter → all users (uFilter stays '')
 
     const [users, cnt, attRows] = await Promise.all([
       pool.query(`SELECT id,first_name,last_name,role,email FROM users WHERE is_active=true ${uFilter} ORDER BY first_name ASC LIMIT $1 OFFSET $2`, uParams),
       pool.query(`SELECT COUNT(*) FROM users WHERE is_active=true ${cntFilter}`, cntParams),
-      pool.query(`SELECT a.* FROM attendance a WHERE a.date BETWEEN $1 AND $2 ${user_id?'AND a.user_id=$3':''}`,
-        user_id ? [start,end,user_id] : [start,end]),
+      pool.query(`SELECT a.* FROM attendance a WHERE a.date BETWEEN $1 AND $2 ${attFilter}`, attParams),
     ])
 
     const lookup = {}
@@ -535,9 +556,15 @@ const getAll = async (req, res, next) => {
 const getSummary = async (req, res, next) => {
   try {
     const {from,to,user_id}=req.query
+    const { role, id: callerId } = req.user
     const now=new Date(), start=from||new Date(now.getFullYear(),now.getMonth(),1).toISOString().split('T')[0], end=to||now.toISOString().split('T')[0]
     const conds=['a.date BETWEEN $1 AND $2'], params=[start,end]; let idx=3
-    if (user_id){conds.push(`u.id=$${idx++}`);params.push(user_id)}
+    if (role === 'sales_manager') {
+      // Scope to this manager's team only
+      conds.push(`u.manager_id=$${idx++}`); params.push(callerId)
+    } else if (user_id) {
+      conds.push(`u.id=$${idx++}`); params.push(user_id)
+    }
     const r=await pool.query(
       `SELECT u.id,CONCAT(u.first_name,' ',u.last_name) AS full_name,u.role,u.email,
               COUNT(a.id) FILTER (WHERE a.status IN('present','late')) AS present,
