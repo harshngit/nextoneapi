@@ -7,6 +7,7 @@ const { pool }       = require("../config/db");
 const { sendSuccess, sendError, paginate } = require("../utils/response");
 const AppError       = require("../utils/AppError");
 const emailService   = require("../utils/emailService");
+const { createNotification, createBulkNotifications, notifyManagerOfLeadAssignment } = require("./notificationController");
 
 const VALID_STATUSES = ["scheduled", "done", "cancelled", "rescheduled", "no_show"];
 
@@ -82,11 +83,20 @@ const createSiteVisit = async (req, res, next) => {
     }
 
     const lead = await pool.query(
-      `SELECT l.*, CONCAT(u.first_name,' ',u.last_name) AS assigned_name, u.email AS assigned_email
+      `SELECT
+         l.id, l.name, l.phone, l.alternate_phone_number,
+         l.email            AS lead_email,
+         l.status, l.source, l.budget, l.location_preference,
+         l.project_id, l.assigned_to, l.is_archived,
+         l.created_at, l.updated_at,
+         CONCAT(u.first_name,' ',u.last_name) AS assigned_name,
+         u.email            AS assigned_email
        FROM leads l LEFT JOIN users u ON u.id = l.assigned_to
        WHERE l.id = $1 AND l.is_archived = false`,
       [lead_id]
     );
+    // Always expose client email under the standard 'email' key
+    if (lead.rows.length) lead.rows[0].email = lead.rows[0].lead_email;
     if (lead.rows.length === 0) return next(new AppError("Lead not found", 404));
 
     const project = await pool.query("SELECT id, name, address, city FROM projects WHERE id = $1", [project_id]);
@@ -134,6 +144,7 @@ const createSiteVisit = async (req, res, next) => {
           "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1", [req.user.id]
         );
 
+        // ✉ Email: internal + client confirmation
         await emailService.notifySiteVisitScheduled({
           lead:         { ...lead.rows[0] },
           project:      { ...project.rows[0] },
@@ -143,8 +154,22 @@ const createSiteVisit = async (req, res, next) => {
           assigneeEmail,
           adminEmails,
         });
+
+        // 🔔 In-app notification to assigned exec/caller
+        if (execId) {
+          await createNotification(execId, {
+            type:           "visit_scheduled",
+            title:          "Site Visit Scheduled",
+            message:        `Site visit for ${lead.rows[0]?.name} on ${result.rows[0].visit_date}`,
+            reference_id:   result.rows[0].id,
+            reference_type: "site_visit",
+            metadata:       { lead_name: lead.rows[0]?.name, visit_date: result.rows[0].visit_date },
+          });
+          // 🔔 Notify their sales_manager too
+          await notifyManagerOfLeadAssignment(execId, { ...lead.rows[0], id: lead_id });
+        }
       } catch (emailErr) {
-        console.error("[Email] createSiteVisit notification failed:", emailErr.message);
+        console.error("[Email/Notification] createSiteVisit failed:", emailErr.message);
       }
     });
     // ─────────────────────────────────────────────────────────────────────────

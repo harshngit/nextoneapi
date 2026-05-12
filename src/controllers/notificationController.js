@@ -47,6 +47,11 @@ const VALID_TYPES = [
   "task_created",
   "task_reminder",
   "task_completed",
+  "attendance_checkin",
+  "attendance_checkout",
+  "attendance_pending",
+  "attendance_manual",
+  "attendance_approved",
   "general",
 ];
 
@@ -86,6 +91,24 @@ const notifyAdmins = async (payload) => {
     `SELECT id FROM users WHERE role IN ('super_admin','admin','superadmin') AND is_active = true`
   );
   return createBulkNotifications(result.rows.map((r) => r.id), payload);
+};
+
+/**
+ * Helper — notify the sales_manager when a lead assigned to their team member
+ */
+const notifyManagerOfLeadAssignment = async (assignedToUserId, lead) => {
+  const mgrRow = await pool.query(
+    `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [assignedToUserId]
+  );
+  if (!mgrRow.rows.length) return;
+  return createNotification(mgrRow.rows[0].manager_id, {
+    type:           "lead_assigned",
+    title:          "Lead Assigned to Your Team",
+    message:        `Lead "${lead.name}" (${lead.phone}) has been assigned to your team member.`,
+    reference_id:   lead.id,
+    reference_type: "lead",
+    metadata:       { lead_id: lead.id, lead_name: lead.name, assigned_to: assignedToUserId },
+  });
 };
 
 /**
@@ -601,6 +624,7 @@ module.exports = {
 
   // Factory helpers (called from other controllers)
   createNotification,
+  notifyManagerOfLeadAssignment,
   createBulkNotifications,
   notifyAdmins,
 

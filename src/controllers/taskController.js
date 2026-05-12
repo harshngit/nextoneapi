@@ -10,6 +10,7 @@ const { sendSuccess, paginate } = require("../utils/response");
 const AppError       = require("../utils/AppError");
 const { emitToUser } = require("../config/socket");
 const emailService   = require("../utils/emailService");
+const { createNotification, createBulkNotifications } = require("./notificationController");
 
 const VALID_PRIORITIES = ["low", "medium", "high"];
 
@@ -103,18 +104,30 @@ const createTask = async (req, res, next) => {
 
     const task = result.rows[0];
 
-    // WebSocket: notify assigned user
-    emitToUser(execId, "task:created", {
-      id: task.id, title: task.title, lead_id: task.lead_id,
-      due_date: task.due_date, priority: task.priority,
-    });
-    emitToUser(execId, "notification:new", {
-      type: "task_created",
-      title: "New Task Assigned",
-      message: `Task: ${task.title} — due ${new Date(task.due_date).toLocaleDateString()}`,
-      reference_id: task.id,
+    // ── In-app notification: persist + WebSocket to assignee ────────────────
+    await createNotification(execId, {
+      type:           "follow_up_created",
+      title:          "New Follow-Up Task Assigned",
+      message:        `Task: ${task.title} — due ${new Date(task.due_date).toLocaleDateString()}`,
+      reference_id:   task.id,
       reference_type: "task",
+      metadata:       { lead_name: lead.rows[0]?.name, priority: task.priority },
     });
+
+    // Also notify the sales_manager of the assignee (if different from assigner)
+    const managerRow = await pool.query(
+      `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [execId]
+    );
+    if (managerRow.rows.length && managerRow.rows[0].manager_id !== req.user.id) {
+      await createNotification(managerRow.rows[0].manager_id, {
+        type:           "follow_up_created",
+        title:          "Follow-Up Task Created",
+        message:        `${lead.rows[0]?.name || "A lead"}: "${task.title}" assigned to your team`,
+        reference_id:   task.id,
+        reference_type: "task",
+        metadata:       { lead_name: lead.rows[0]?.name, priority: task.priority },
+      });
+    }
 
     // ── ✉ Email after successful DB insert ───────────────────────────────────
     setImmediate(async () => {
