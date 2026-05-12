@@ -241,6 +241,58 @@ router.get('/me', authenticate, ctrl.getMyAttendance)
 
 /**
  * @swagger
+ * /api/v1/attendance/team:
+ *   get:
+ *     summary: Get attendance records for the sales_manager's team
+ *     description: >
+ *       Returns paginated attendance records for all users whose manager_id
+ *       matches the calling sales_manager's ID.
+ *       admin / super_admin can pass manager_id query param to scope to a specific manager's team.
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - { in: query, name: from,       schema: { type: string, format: date }, example: "2026-05-01" }
+ *       - { in: query, name: to,         schema: { type: string, format: date }, example: "2026-05-31" }
+ *       - { in: query, name: page,       schema: { type: integer, default: 1 } }
+ *       - { in: query, name: per_page,   schema: { type: integer, default: 30 } }
+ *       - { in: query, name: manager_id, schema: { type: string, format: uuid }, description: "admin only — scope to a specific manager's team" }
+ *     responses:
+ *       200:
+ *         description: Team attendance records
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 - id: "uuid"
+ *                   full_name: "Rahul Sharma"
+ *                   role: "sales_executive"
+ *                   status: "present"
+ *                   check_in_time: "2026-05-12T09:00:00.000Z"
+ *               summary:
+ *                 present: 18
+ *                 absent: 2
+ *                 late: 3
+ *                 on_leave: 1
+ *               team_size: 4
+ *               pagination:
+ *                 total: 60
+ *                 page: 1
+ *                 per_page: 30
+ *                 total_pages: 2
+ *       403:
+ *         description: Not a sales_manager or missing manager_id
+ */
+router.get(
+  '/team',
+  authenticate,
+  authorize(...MANAGER),
+  ctrl.getTeamAttendance
+)
+
+/**
+ * @swagger
  * /api/v1/attendance/calendar:
  *   get:
  *     summary: Monthly calendar for a single user (day-by-day)

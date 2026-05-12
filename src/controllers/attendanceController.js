@@ -4,7 +4,6 @@ const ExcelJS  = require('exceljs')
 const { pool } = require('../config/db')
 const { sendSuccess, sendError, paginate } = require('../utils/response')
 const AppError = require('../utils/AppError')
-const { createNotification, notifyAdmins } = require('./notificationController')
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -128,47 +127,6 @@ const checkIn = async (req, res, next) => {
       record = r.rows[0]
     }
 
-    // ── Notifications after successful check-in ─────────────────────────────
-    setImmediate(async () => {
-      try {
-        const fullName = `${req.user.first_name || ''} ${req.user.last_name || ''}`.trim();
-        const timeStr  = new Date(checkInTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
-
-        // 1. Confirm to the user themselves
-        await createNotification(userId, {
-          type: 'attendance_checkin', title: '✅ Checked In Successfully',
-          message: `You checked in at ${timeStr}. Status: ${status}. Have a productive day!`,
-          reference_id: record.id, reference_type: 'attendance',
-          metadata: { date: today, status, time: timeStr },
-        });
-
-        // 2. Notify their sales_manager
-        const mgrRow = await pool.query(
-          `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [userId]
-        );
-        if (mgrRow.rows.length) {
-          await createNotification(mgrRow.rows[0].manager_id, {
-            type: 'attendance_checkin', title: `${fullName} Checked In`,
-            message: `${fullName} checked in at ${timeStr} (${status})`,
-            reference_id: record.id, reference_type: 'attendance',
-            metadata: { user_id: userId, date: today, status, time: timeStr },
-          });
-        }
-
-        // 3. Notify admins if late/half_day — needs approval
-        if (['late', 'half_day'].includes(status)) {
-          await notifyAdmins({
-            type: 'attendance_pending', title: `⚠️ Attendance Review: ${fullName}`,
-            message: `${fullName} checked in at ${timeStr} — status: ${status}. Review required.`,
-            reference_id: record.id, reference_type: 'attendance',
-            metadata: { user_id: userId, date: today, status, time: timeStr },
-          });
-        }
-      } catch (notifErr) {
-        console.error('[Notification] checkIn failed:', notifErr.message);
-      }
-    });
-
     return sendSuccess(res, 'Checked in successfully', { attendance: record, user: userMeta }, 201)
   } catch (err) { next(err) }
 }
@@ -204,37 +162,6 @@ const checkOut = async (req, res, next) => {
        WHERE user_id=$10 AND date=$11 RETURNING *`,
       [checkOutTime, workingHours, photo, latitude||null, longitude||null, address||null, ip, device||null, notes||null, userId, today]
     )
-
-    // ── Notifications after successful check-out ─────────────────────────────
-    setImmediate(async () => {
-      try {
-        const fullName = `${req.user.first_name || ''} ${req.user.last_name || ''}`.trim();
-        const timeStr  = new Date(checkOutTime).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
-
-        // 1. Confirm to the user themselves
-        await createNotification(userId, {
-          type: 'attendance_checkout', title: '🏁 Checked Out Successfully',
-          message: `You checked out at ${timeStr}. Working hours today: ${workingHours || 'N/A'}. Great work!`,
-          reference_id: r.rows[0].id, reference_type: 'attendance',
-          metadata: { date: today, time: timeStr, working_hours: workingHours },
-        });
-
-        // 2. Notify their sales_manager
-        const mgrRow = await pool.query(
-          `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [userId]
-        );
-        if (mgrRow.rows.length) {
-          await createNotification(mgrRow.rows[0].manager_id, {
-            type: 'attendance_checkout', title: `${fullName} Checked Out`,
-            message: `${fullName} checked out at ${timeStr}. Hours worked: ${workingHours || 'N/A'}`,
-            reference_id: r.rows[0].id, reference_type: 'attendance',
-            metadata: { user_id: userId, date: today, time: timeStr, working_hours: workingHours },
-          });
-        }
-      } catch (notifErr) {
-        console.error('[Notification] checkOut failed:', notifErr.message);
-      }
-    });
 
     return sendSuccess(res, 'Checked out successfully', {
       attendance: r.rows[0], user: userMeta, working_hours: workingHours,
@@ -300,6 +227,112 @@ const getMyAttendance = async (req, res, next) => {
       period: { from:start, to:end },
     })
   } catch (err) { next(err) }
+}
+
+// ─── 5b. TEAM ATTENDANCE (sales_manager — their team only) ───────────────────
+/**
+ * GET /api/v1/attendance/team
+ * Returns paginated attendance records for all users under this sales_manager.
+ * Also accessible by admin / super_admin (they can pass manager_id param to scope).
+ *
+ * Query params: from, to, page, per_page, manager_id (admin only override)
+ */
+const getTeamAttendance = async (req, res, next) => {
+  try {
+    const { from, to, page = 1, per_page = 30, manager_id } = req.query
+    const { role, id: callerId } = req.user
+
+    const now   = new Date()
+    const start = from || new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]
+    const end   = to   || now.toISOString().split('T')[0]
+    const offset = (parseInt(page) - 1) * parseInt(per_page)
+
+    // Determine which manager's team to show
+    // sales_manager → always their own team (cannot override)
+    // admin/super_admin → use manager_id param if provided, else all users
+    let managerId = null
+    if (role === 'sales_manager') {
+      managerId = callerId
+    } else if (['admin', 'super_admin'].includes(role) && manager_id) {
+      managerId = manager_id
+    }
+
+    if (!managerId) {
+      return next(new AppError('manager_id is required or you must be a sales_manager', 403))
+    }
+
+    // Fetch team member IDs under this manager
+    const teamResult = await pool.query(
+      `SELECT id, CONCAT(first_name,' ',last_name) AS full_name, role, email
+       FROM users
+       WHERE manager_id = $1 AND is_active = true
+       ORDER BY first_name ASC`,
+      [managerId]
+    )
+
+    if (teamResult.rows.length === 0) {
+      return sendSuccess(res, 'No team members found', {
+        period: { from: start, to: end },
+        manager_id: managerId,
+        team_size: 0,
+        data: [],
+        summary: { present: 0, absent: 0, late: 0, on_leave: 0, total_working_hours: 0 },
+        pagination: { total: 0, page: 1, per_page: parseInt(per_page), total_pages: 0 },
+      })
+    }
+
+    const teamIds = teamResult.rows.map(u => u.id)
+
+    // Count + fetch attendance records for the team
+    const [cnt, data, sum] = await Promise.all([
+      pool.query(
+        `SELECT COUNT(*) FROM attendance a
+         WHERE a.user_id = ANY($1::uuid[]) AND a.date BETWEEN $2 AND $3`,
+        [teamIds, start, end]
+      ),
+      pool.query(
+        `SELECT a.*,
+                CONCAT(u.first_name,' ',u.last_name) AS full_name,
+                u.role, u.email, u.phone_number
+         FROM attendance a
+         JOIN users u ON u.id = a.user_id
+         WHERE a.user_id = ANY($1::uuid[]) AND a.date BETWEEN $2 AND $3
+         ORDER BY a.date DESC, u.first_name ASC
+         LIMIT $4 OFFSET $5`,
+        [teamIds, start, end, parseInt(per_page), offset]
+      ),
+      pool.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE status IN ('present','late'))  AS present,
+           COUNT(*) FILTER (WHERE status = 'absent')             AS absent,
+           COUNT(*) FILTER (WHERE status IN ('on_leave','half_day')) AS on_leave,
+           COUNT(*) FILTER (WHERE status = 'late')               AS late,
+           COALESCE(SUM(working_hours), 0)                       AS total_working_hours
+         FROM attendance
+         WHERE user_id = ANY($1::uuid[]) AND date BETWEEN $2 AND $3`,
+        [teamIds, start, end]
+      ),
+    ])
+
+    const s = sum.rows[0]
+
+    return res.json({
+      ...paginate(data.rows, parseInt(cnt.rows[0].count), parseInt(page), parseInt(per_page)),
+      summary: {
+        present:             parseInt(s.present),
+        absent:              parseInt(s.absent),
+        on_leave:            parseInt(s.on_leave),
+        late:                parseInt(s.late),
+        total_working_hours: parseFloat(s.total_working_hours),
+      },
+      period:      { from: start, to: end },
+      manager_id:  managerId,
+      team_size:   teamResult.rows.length,
+      team_members: teamResult.rows,
+    })
+  } catch (err) {
+    next(err)
+  }
 }
 
 // ─── 6. BY DATE (all users for one day) ──────────────────────────────────────
@@ -562,29 +595,6 @@ const manualEntry = async (req, res, next) => {
     if (!userMeta) return next(new AppError('User not found',404))
     const wh=calcWorkingHours(check_in_time,check_out_time)
     const r=await pool.query(`INSERT INTO attendance (user_id,date,status,check_in_time,check_out_time,working_hours,reason,is_manual_entry,manual_by) VALUES ($1,$2,$3,$4,$5,$6,$7,true,$8) ON CONFLICT (user_id,date) DO UPDATE SET status=EXCLUDED.status,check_in_time=EXCLUDED.check_in_time,check_out_time=EXCLUDED.check_out_time,working_hours=EXCLUDED.working_hours,reason=EXCLUDED.reason,is_manual_entry=true,manual_by=EXCLUDED.manual_by,updated_at=NOW() RETURNING *`,[user_id,date,status,check_in_time||null,check_out_time||null,wh,reason||null,req.user.id])
-    // ── Notify the user their attendance was logged ─────────────────────────
-    setImmediate(async () => {
-      try {
-        // Notify the user whose attendance was entered
-        await createNotification(user_id, {
-          type: 'attendance_manual', title: '📋 Attendance Logged',
-          message: `Your attendance for ${date} has been recorded as "${status}" by admin.`,
-          reference_id: r.rows[0].id, reference_type: 'attendance',
-          metadata: { date, status, logged_by: req.user.id },
-        });
-
-        // Notify all admins/super_admins that a new manual entry needs review
-        await notifyAdmins({
-          type: 'attendance_pending', title: `📋 Manual Attendance Entry: ${userMeta?.full_name || 'User'}`,
-          message: `Manual attendance for ${userMeta?.full_name || 'a user'} on ${date} — status: ${status}. Please review.`,
-          reference_id: r.rows[0].id, reference_type: 'attendance',
-          metadata: { user_id, date, status },
-        });
-      } catch (notifErr) {
-        console.error('[Notification] manualEntry failed:', notifErr.message);
-      }
-    });
-
     return sendSuccess(res,'Manual entry saved',{attendance:r.rows[0],user:userMeta},201)
   } catch (err) { next(err) }
 }
@@ -858,20 +868,6 @@ const approveStatus = async (req, res, next) => {
 
     const approvedBy = await getUserMeta(req.user.id)
 
-    // ── Notify the employee their attendance was approved/changed ───────────
-    setImmediate(async () => {
-      try {
-        await createNotification(rec.user_id, {
-          type: 'attendance_approved', title: '✅ Attendance Updated by Admin',
-          message: `Your attendance for ${result.rows[0].date} has been updated: "${oldStatus}" → "${status}"${reason ? ` (${reason})` : ''}.`,
-          reference_id: result.rows[0].id, reference_type: 'attendance',
-          metadata: { date: result.rows[0].date, old_status: oldStatus, new_status: status, approved_by: approvedBy?.full_name },
-        });
-      } catch (notifErr) {
-        console.error('[Notification] approveStatus failed:', notifErr.message);
-      }
-    });
-
     return sendSuccess(res, `Status updated to "${status}" successfully`, {
       attendance: result.rows[0],
       employee: {
@@ -944,4 +940,5 @@ module.exports = {
   markLeave, manualEntry, updateAttendance, deleteAttendance,
   exportExcel, markAbsentEOD,
   approveStatus, getPendingApprovals,
+  getTeamAttendance,
 }
