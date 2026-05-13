@@ -11,7 +11,6 @@ const { pool } = require('../config/db');
 const { sendSuccess } = require('../utils/response');
 const AppError = require('../utils/AppError');
 const fs = require('fs');
-const path = require('path');
 const archiver = require('archiver');
 
 /**
@@ -258,7 +257,8 @@ const downloadAllProjectDocuments = async (req, res, next) => {
     }
 
     // Create ZIP archive
-    const archive = archiver('zip', { zlib: { level: 9 } });
+    const archiverLib = require('archiver');
+    const archive = archiverLib('zip', { zlib: { level: 9 } });
 
     // Set response headers
     const zipFileName = document_type

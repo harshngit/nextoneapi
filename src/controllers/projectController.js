@@ -29,17 +29,38 @@ const getAllProjects = async (req, res, next) => {
     const total = parseInt(countResult.rows[0].count);
 
     const dataResult = await pool.query(
-      `SELECT p.id, p.name, p.developer, p.city, p.locality, p.status,
-              p.configurations, p.price_range, p.total_units, p.possession_date,
-              p.rera_number, p.created_at,
-              (SELECT COUNT(*) FROM leads WHERE project_id = p.id AND is_archived = false) AS total_leads
+      `SELECT p.*,
+              (SELECT COUNT(*) FROM leads WHERE project_id = p.id AND is_archived = false) AS total_leads,
+              (SELECT json_agg(d.*) FROM (
+                 SELECT id, document_type, file_name, file_size, mime_type, uploaded_at 
+                 FROM project_documents 
+                 WHERE project_id = p.id
+              ) d) AS documents
        FROM projects p ${where}
        ORDER BY p.created_at DESC
        LIMIT $${idx++} OFFSET $${idx++}`,
       [...params, parseInt(per_page), offset]
     );
 
-    return res.json(paginate(dataResult.rows, total, parseInt(page), parseInt(per_page)));
+    const rows = dataResult.rows.map(row => {
+      if (row.documents) {
+        row.unit_plans = row.documents.filter(d => d.document_type === 'unit_plan').map(d => ({
+          ...d,
+          url: `/api/v1/projects/${row.id}/documents/${d.id}/download`
+        }));
+        row.creatives = row.documents.filter(d => d.document_type === 'creative').map(d => ({
+          ...d,
+          url: `/api/v1/projects/${row.id}/documents/${d.id}/download`
+        }));
+        delete row.documents;
+      } else {
+        row.unit_plans = [];
+        row.creatives = [];
+      }
+      return row;
+    });
+
+    return res.json(paginate(rows, total, parseInt(page), parseInt(per_page)));
   } catch (err) {
     next(err);
   }
@@ -136,12 +157,34 @@ const getProjectById = async (req, res, next) => {
     const { id } = req.params;
     const result = await pool.query(
       `SELECT p.*,
-              (SELECT COUNT(*) FROM leads WHERE project_id = p.id AND is_archived = false) AS total_leads
+              (SELECT COUNT(*) FROM leads WHERE project_id = p.id AND is_archived = false) AS total_leads,
+              (SELECT json_agg(d.*) FROM (
+                 SELECT id, document_type, file_name, file_size, mime_type, uploaded_at 
+                 FROM project_documents 
+                 WHERE project_id = p.id
+              ) d) AS documents
        FROM projects p WHERE p.id = $1`,
       [id]
     );
     if (result.rows.length === 0) return next(new AppError("Project not found", 404));
-    return sendSuccess(res, "Project fetched successfully", result.rows[0]);
+    
+    const project = result.rows[0];
+    if (project.documents) {
+      project.unit_plans = project.documents.filter(d => d.document_type === 'unit_plan').map(d => ({
+        ...d,
+        url: `/api/v1/projects/${project.id}/documents/${d.id}/download`
+      }));
+      project.creatives = project.documents.filter(d => d.document_type === 'creative').map(d => ({
+        ...d,
+        url: `/api/v1/projects/${project.id}/documents/${d.id}/download`
+      }));
+      delete project.documents;
+    } else {
+      project.unit_plans = [];
+      project.creatives = [];
+    }
+
+    return sendSuccess(res, "Project fetched successfully", project);
   } catch (err) {
     next(err);
   }
