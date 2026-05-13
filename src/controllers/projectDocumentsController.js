@@ -10,8 +10,10 @@
 const { pool } = require('../config/db');
 const { sendSuccess } = require('../utils/response');
 const AppError = require('../utils/AppError');
-const fs = require('fs');
 const archiver = require('archiver');
+const { promisify } = require('util');
+const fs = require('fs');
+const path = require('path');
 
 /**
  * POST /api/v1/projects/:id/documents
@@ -257,8 +259,24 @@ const downloadAllProjectDocuments = async (req, res, next) => {
     }
 
     // Create ZIP archive
-    const archiverLib = require('archiver');
-    const archive = archiverLib('zip', { zlib: { level: 9 } });
+    // Robustly handle different archiver export patterns (CJS/ESM interop)
+    let archiverFunc;
+    if (typeof archiver === 'function') {
+      archiverFunc = archiver;
+    } else if (archiver && typeof archiver.default === 'function') {
+      archiverFunc = archiver.default;
+    } else if (typeof require('archiver') === 'function') {
+      archiverFunc = require('archiver');
+    } else {
+      const archObj = require('archiver');
+      archiverFunc = archObj.default || archObj;
+    }
+
+    if (typeof archiverFunc !== 'function') {
+      return next(new AppError(`Archiver initialization failed: archiver is not a function (type: ${typeof archiverFunc})`, 500));
+    }
+
+    const archive = archiverFunc('zip', { zlib: { level: 9 } });
 
     // Set response headers
     const zipFileName = document_type
