@@ -345,10 +345,18 @@ const bulkReassignLeads = async (req, res, next) => {
 const getReassignmentHistory = async (req, res, next) => {
   try {
     const { id: leadId } = req.params;
+    const { page = 1, per_page = 20 } = req.query;
+    const { role, id: callerId } = req.user;
+    const offset = (parseInt(page) - 1) * parseInt(per_page);
 
-    // Check if lead exists
+    // Check lead exists and get basic info
     const leadCheck = await pool.query(
-      'SELECT id, name FROM leads WHERE id = $1',
+      `SELECT l.id, l.name, l.phone,
+              CONCAT(u.first_name,' ',u.last_name) AS current_assignee_name,
+              u.role AS current_assignee_role
+       FROM leads l
+       LEFT JOIN users u ON u.id = l.assigned_to
+       WHERE l.id = $1`,
       [leadId]
     );
 
@@ -356,8 +364,26 @@ const getReassignmentHistory = async (req, res, next) => {
       return next(new AppError('Lead not found', 404));
     }
 
+    // Permission: sales_exec / external_caller can only see history for leads assigned to them
+    if (['sales_executive', 'external_caller'].includes(role)) {
+      const ownership = await pool.query(
+        'SELECT id FROM leads WHERE id = $1 AND assigned_to = $2',
+        [leadId, callerId]
+      );
+      if (ownership.rows.length === 0) {
+        return next(new AppError('Access denied — this lead is not assigned to you', 403));
+      }
+    }
+
+    // Total count for pagination
+    const countResult = await pool.query(
+      'SELECT COUNT(*) FROM lead_reassignment_history WHERE lead_id = $1',
+      [leadId]
+    );
+    const total = parseInt(countResult.rows[0].count);
+
     const history = await pool.query(
-      `SELECT 
+      `SELECT
          rh.id,
          rh.lead_id,
          rh.from_user_id,
@@ -365,38 +391,58 @@ const getReassignmentHistory = async (req, res, next) => {
          rh.reason,
          rh.performed_by,
          rh.created_at,
-         CONCAT(from_user.first_name, ' ', from_user.last_name) AS from_user_name,
-         CONCAT(to_user.first_name, ' ', to_user.last_name) AS to_user_name,
-         CONCAT(performer.first_name, ' ', performer.last_name) AS performed_by_name
+         CONCAT(fu.first_name,' ',fu.last_name)  AS from_user_name,
+         fu.role                                  AS from_user_role,
+         CONCAT(tu.first_name,' ',tu.last_name)  AS to_user_name,
+         tu.role                                  AS to_user_role,
+         CONCAT(pb.first_name,' ',pb.last_name)  AS performed_by_name,
+         pb.role                                  AS performed_by_role
        FROM lead_reassignment_history rh
-       LEFT JOIN users from_user ON from_user.id = rh.from_user_id
-       LEFT JOIN users to_user ON to_user.id = rh.to_user_id
-       LEFT JOIN users performer ON performer.id = rh.performed_by
+       LEFT JOIN users fu ON fu.id = rh.from_user_id
+       LEFT JOIN users tu ON tu.id = rh.to_user_id
+       LEFT JOIN users pb ON pb.id = rh.performed_by
        WHERE rh.lead_id = $1
-       ORDER BY rh.created_at DESC`,
-      [leadId]
+       ORDER BY rh.created_at DESC
+       LIMIT $2 OFFSET $3`,
+      [leadId, parseInt(per_page), offset]
     );
 
+    const lead = leadCheck.rows[0];
+
     return sendSuccess(res, 'Reassignment history fetched successfully', {
-      leadId,
-      leadName: leadCheck.rows[0].name,
-      totalReassignments: history.rows.length,
+      lead: {
+        id:                    leadId,
+        name:                  lead.name,
+        phone:                 lead.phone,
+        current_assignee_name: lead.current_assignee_name || 'Unassigned',
+        current_assignee_role: lead.current_assignee_role || null,
+      },
+      total_reassignments: total,
+      pagination: {
+        total,
+        page:        parseInt(page),
+        per_page:    parseInt(per_page),
+        total_pages: Math.ceil(total / parseInt(per_page)),
+      },
       history: history.rows.map(h => ({
-        id: h.id,
+        id:   h.id,
         from: h.from_user_id ? {
-          id: h.from_user_id,
+          id:   h.from_user_id,
           name: h.from_user_name,
+          role: h.from_user_role,
         } : null,
         to: {
-          id: h.to_user_id,
+          id:   h.to_user_id,
           name: h.to_user_name,
+          role: h.to_user_role,
         },
-        reason: h.reason,
-        performedBy: {
-          id: h.performed_by,
+        reason:      h.reason || null,
+        performed_by: {
+          id:   h.performed_by,
           name: h.performed_by_name,
+          role: h.performed_by_role,
         },
-        reassignedAt: h.created_at,
+        reassigned_at: h.created_at,
       })),
     });
   } catch (err) {

@@ -213,7 +213,13 @@ router.post('/bulk-reassign', authenticate, bulkReassignLeads);
  * /api/v1/leads/{id}/reassignment-history:
  *   get:
  *     summary: Get reassignment history for a lead
- *     description: Retrieve the complete reassignment history of a specific lead, showing all previous assignments and who performed them.
+ *     description: >
+ *       Returns paginated reassignment history for a specific lead —
+ *       every time the lead changed hands, who did it, when, and why.
+ *
+ *       Access rules:
+ *         - super_admin / admin / sales_manager → can view history for any lead.
+ *         - sales_executive / external_caller   → can only view history for leads currently assigned to them.
  *     tags: [Lead Reassignment]
  *     security:
  *       - BearerAuth: []
@@ -224,71 +230,65 @@ router.post('/bulk-reassign', authenticate, bulkReassignLeads);
  *         schema:
  *           type: string
  *           format: uuid
- *         description: Lead ID
+ *         description: Lead UUID
+ *         example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: per_page
+ *         schema: { type: integer, default: 20 }
  *     responses:
  *       200:
  *         description: Reassignment history fetched successfully
  *         content:
  *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: true
- *                 message:
- *                   type: string
- *                   example: "Reassignment history fetched successfully"
- *                 data:
- *                   type: object
- *                   properties:
- *                     leadId:
- *                       type: string
- *                       format: uuid
- *                     leadName:
- *                       type: string
- *                     totalReassignments:
- *                       type: integer
- *                       example: 3
- *                     history:
- *                       type: array
- *                       items:
- *                         type: object
- *                         properties:
- *                           id:
- *                             type: string
- *                             format: uuid
- *                           from:
- *                             type: object
- *                             nullable: true
- *                             properties:
- *                               id:
- *                                 type: string
- *                                 format: uuid
- *                               name:
- *                                 type: string
- *                           to:
- *                             type: object
- *                             properties:
- *                               id:
- *                                 type: string
- *                                 format: uuid
- *                               name:
- *                                 type: string
- *                           reason:
- *                             type: string
- *                             nullable: true
- *                           performedBy:
- *                             type: object
- *                             properties:
- *                               id:
- *                                 type: string
- *                                 format: uuid
- *                               name:
- *                                 type: string
- *                           reassignedAt:
- *                             type: string
- *                             format: date-time
+ *             example:
+ *               success: true
+ *               message: "Reassignment history fetched successfully"
+ *               data:
+ *                 lead:
+ *                   id: "lead-uuid"
+ *                   name: "Suresh Patel"
+ *                   phone: "+919876543210"
+ *                   current_assignee_name: "Rahul Sharma"
+ *                   current_assignee_role: "sales_executive"
+ *                 total_reassignments: 3
+ *                 pagination:
+ *                   total: 3
+ *                   page: 1
+ *                   per_page: 20
+ *                   total_pages: 1
+ *                 history:
+ *                   - id: "history-uuid-1"
+ *                     from:
+ *                       id: "user-uuid-1"
+ *                       name: "Amit Joshi"
+ *                       role: "sales_executive"
+ *                     to:
+ *                       id: "user-uuid-2"
+ *                       name: "Rahul Sharma"
+ *                       role: "sales_executive"
+ *                     reason: "Better territorial alignment"
+ *                     performed_by:
+ *                       id: "admin-uuid"
+ *                       name: "Admin User"
+ *                       role: "admin"
+ *                     reassigned_at: "2026-05-10T14:30:00.000Z"
+ *                   - id: "history-uuid-2"
+ *                     from: null
+ *                     to:
+ *                       id: "user-uuid-1"
+ *                       name: "Amit Joshi"
+ *                       role: "sales_executive"
+ *                     reason: null
+ *                     performed_by:
+ *                       id: "admin-uuid"
+ *                       name: "Admin User"
+ *                       role: "admin"
+ *                     reassigned_at: "2026-05-01T10:00:00.000Z"
+ *       403:
+ *         description: Access denied — lead not assigned to you
  *       404:
  *         description: Lead not found
  */
