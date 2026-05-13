@@ -7,6 +7,9 @@ const swaggerSpec = require("./config/swagger");
 const { initSocket } = require("./config/socket");
 const { sendError }  = require("./utils/response");
 const AppError       = require("./utils/AppError");
+const bulkLeadsRoutes = require('./routes/bulkLeadsRoutes');
+const projectDocumentsRoutes = require('./routes/projectDocumentsRoutes');
+const leadReassignRoutes = require('./routes/leadReassignRoutes');
 
 const app    = express();
 const server = http.createServer(app);
@@ -22,9 +25,15 @@ app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // ─── Routes ───────────────────────────────────────────────────
+// IMPORTANT: More specific routes MUST come BEFORE general routes!
+
+// Lead-specific routes (most specific first)
+app.use('/api/v1/leads/bulk', bulkLeadsRoutes);  // Must be BEFORE /api/v1/leads
+
 app.use("/api/v1/auth",          require("./routes/auth.routes"));
 app.use("/api/v1/users",         require("./routes/user.routes"));
-app.use("/api/v1/leads",         require("./routes/leadRoutes"));
+app.use("/api/v1/leads",         leadReassignRoutes);  // Reassignment routes (includes /:id/reassign, /bulk-reassign, /:id/reassignment-history)
+app.use("/api/v1/leads",         require("./routes/leadRoutes"));  // General lead routes
 app.use("/api/v1/projects",      require("./routes/projectRoutes"));
 app.use("/api/v1/site-visits",   require("./routes/siteVisitRoutes"));
 app.use("/api/v1/tasks",         require("./routes/taskRoutes"));
@@ -35,6 +44,10 @@ app.use("/api/v1/me",            require("./routes/myDataRoutes"));
 app.use("/api/v1/export",        require("./routes/exportRoutes"));
 app.use("/api/v1/convert",       require("./routes/conversionRoutes"));
 app.use("/api/v1/team-history",  require("./routes/teamHistoryRoutes"));
+
+// Project documents routes
+app.use('/api/v1/projects', projectDocumentsRoutes);
+
 
 // ─── 404 Not Found Handler ────────────────────────────────────
 app.all("*", (req, res, next) => {
