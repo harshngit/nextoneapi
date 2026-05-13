@@ -1,406 +1,177 @@
 /**
- * leadController.js — Nextone Reality
- * Fixes:
- *  1. fetchLeadWithProject — explicit column aliases so lead.email
- *     (client email) never gets overwritten by u.email (assignee email)
- *  2. Null guard on lead.name before .split() in email dispatch
- *  3. Added convertLead — manual convert lead to booking (PATCH /:id/convert)
- *
- * Email notifications fire ONLY after confirmed DB writes (setImmediate).
+ * leadReassignController.js — Nextone Reality
+ * Lead reassignment operations:
+ *  1. Reassign single lead to a new user
+ *  2. Bulk reassign multiple leads to a new user
+ *  3. Get reassignment history for a lead
  */
 
-const { pool }        = require("../config/db");
-const { sendSuccess, paginate } = require("../utils/response");
-const AppError        = require("../utils/AppError");
-const emailService    = require("../utils/emailService");
-
-const VALID_STATUSES = [
-  "new", "contacted", "interested", "follow_up",
-  "site_visit_scheduled", "site_visit_done",
-  "negotiation", "booked", "lost",
-];
-
-// ─── Helper — activity log ────────────────────────────────────────────────────
-const logActivity = async (client, leadId, type, note, performedBy) => {
-  await client.query(
-    `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, $2, $3, $4)`,
-    [leadId, type, note, performedBy]
-  );
-};
-
-// ─── Helper — fetch assignee + admin emails ───────────────────────────────────
-const getEmailContext = async (assignedToId) => {
-  const emailData = { assigneeEmail: null, adminEmails: [] };
-  if (assignedToId) {
-    const assignee = await pool.query(
-      "SELECT email FROM users WHERE id = $1 AND is_active = true", [assignedToId]
-    );
-    if (assignee.rows.length) emailData.assigneeEmail = assignee.rows[0].email;
-  }
-  const admins = await pool.query(
-    "SELECT email FROM users WHERE role IN ('admin','super_admin') AND is_active = true"
-  );
-  emailData.adminEmails = admins.rows.map(r => r.email);
-  return emailData;
-};
-
-// ─── Helper — fetch full lead (explicit aliases, NO column collision) ─────────
-//
-// ROOT BUG FIX: Using `l.*` with `u.email AS assigned_email` caused the pg
-// driver to overwrite l.email (client email) with u.email (staff email)
-// because both resolve to the key "email" in the result object.
-//
-// Fix: list every lead column explicitly, aliasing the client email as
-// `lead_email`, then re-expose it as `email` in the returned JS object.
-//
-const fetchLeadWithProject = async (leadId) => {
-  const result = await pool.query(
-    `SELECT
-       l.id,
-       l.name,
-       l.phone,
-       l.alternate_phone_number,
-       l.email            AS lead_email,
-       l.status,
-       l.source,
-       l.budget,
-       l.location_preference,
-       l.project_id,
-       l.assigned_to,
-       l.created_by,
-       l.is_archived,
-       l.is_converted,
-       l.converted_at,
-       l.created_at,
-       l.updated_at,
-       p.name             AS project_name,
-       CONCAT(u.first_name,' ',u.last_name) AS assigned_name,
-       u.email            AS assigned_email
-     FROM leads l
-     LEFT JOIN projects p ON p.id = l.project_id
-     LEFT JOIN users u    ON u.id = l.assigned_to
-     WHERE l.id = $1`,
-    [leadId]
-  );
-  if (!result.rows[0]) return null;
-  const row = result.rows[0];
-  // Always expose the CLIENT's email under the standard `email` key
-  return { ...row, email: row.lead_email };
-};
+const { pool } = require('../config/db');
+const { sendSuccess } = require('../utils/response');
+const AppError = require('../utils/AppError');
+const emailService = require('../utils/emailService');
 
 /**
- * GET /api/v1/leads
+ * PATCH /api/v1/leads/:id/reassign
+ * Reassign a single lead to a new user
  */
-const getAllLeads = async (req, res, next) => {
-  try {
-    const { status, source, assigned_to, project_id, from, to, search, page = 1, per_page = 20 } = req.query;
-    const { role, id: callerId } = req.user;
-    const offset = (parseInt(page) - 1) * parseInt(per_page);
-
-    let conditions = ["l.is_archived = false"];
-    let params = [];
-    let idx = 1;
-
-    if (role === "sales_executive") {
-      conditions.push(`l.assigned_to = $${idx++}`);
-      params.push(callerId);
-    } else if (role === "sales_manager") {
-      conditions.push(`u.manager_id = $${idx++}`);
-      params.push(callerId);
-    }
-
-    if (status)      { conditions.push(`l.status = $${idx++}`);             params.push(status); }
-    if (source)      { conditions.push(`l.source ILIKE $${idx++}`);         params.push(source); }
-    if (assigned_to) { conditions.push(`l.assigned_to = $${idx++}`);        params.push(assigned_to); }
-    if (project_id)  { conditions.push(`l.project_id = $${idx++}`);         params.push(project_id); }
-    if (from)        { conditions.push(`l.created_at::date >= $${idx++}`);  params.push(from); }
-    if (to)          { conditions.push(`l.created_at::date <= $${idx++}`);  params.push(to); }
-    if (search) {
-      conditions.push(`(l.name ILIKE $${idx} OR l.phone ILIKE $${idx} OR l.email ILIKE $${idx})`);
-      params.push(`%${search}%`); idx++;
-    }
-
-    const where = `WHERE ${conditions.join(" AND ")}`;
-
-    const countResult = await pool.query(
-      `SELECT COUNT(*) FROM leads l LEFT JOIN users u ON u.id = l.assigned_to ${where}`, params
-    );
-    const total = parseInt(countResult.rows[0].count);
-
-    const dataResult = await pool.query(
-      `SELECT l.id, l.name, l.phone, l.alternate_phone_number, l.email, l.status,
-              l.source, l.budget, l.location_preference, l.project_id, l.assigned_to,
-              l.is_converted, l.created_at,
-              p.name AS project_name,
-              CONCAT(u.first_name, ' ', u.last_name) AS assigned_name
-       FROM leads l
-       LEFT JOIN projects p ON p.id = l.project_id
-       LEFT JOIN users u ON u.id = l.assigned_to
-       ${where}
-       ORDER BY l.created_at DESC
-       LIMIT $${idx++} OFFSET $${idx++}`,
-      [...params, parseInt(per_page), offset]
-    );
-
-    return res.json(paginate(dataResult.rows, total, parseInt(page), parseInt(per_page)));
-  } catch (err) {
-    next(err);
-  }
-};
-
-/**
- * POST /api/v1/leads
- * Email → Internal: New Lead detail  |  Client: Welcome email
- */
-const createLead = async (req, res, next) => {
+const reassignLead = async (req, res, next) => {
   const client = await pool.connect();
   try {
-    const { name, phone, alternate_phone_number, email, source, project_id,
-            assigned_to, budget, location_preference, notes } = req.body;
-    if (!name || !phone) return next(new AppError("name and phone are required", 400));
+    const { id: leadId } = req.params;
+    const { assigned_to, reason } = req.body;
+    const { id: performedBy, role } = req.user;
 
-    await client.query("BEGIN");
-
-    const result = await client.query(
-      `INSERT INTO leads (name, phone, alternate_phone_number, email, source,
-                          project_id, assigned_to, budget, location_preference,
-                          status, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'new',$10)
-       RETURNING *`,
-      [name.trim(), phone, alternate_phone_number || null, email || null, source || null,
-       project_id || null, assigned_to || null, budget || null, location_preference || null,
-       req.user.id]
-    );
-
-    const lead = result.rows[0];
-    await logActivity(client, lead.id, "note", notes || "Lead created", req.user.id);
-    if (assigned_to) {
-      await logActivity(client, lead.id, "assignment", "Lead assigned to user", req.user.id);
+    // Validation
+    if (!assigned_to) {
+      return next(new AppError('assigned_to (new user ID) is required', 400));
     }
 
-    await client.query("COMMIT");
+    await client.query('BEGIN');
 
-    // ── ✉ Fire-and-forget emails (never blocks the API response) ─────────────
-    setImmediate(async () => {
-      try {
-        const fullLead = await fetchLeadWithProject(lead.id);
-        if (!fullLead) return;  // null guard
-
-        const { adminEmails } = await getEmailContext(null);
-        const creatorRow = await pool.query(
-          "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1",
-          [req.user.id]
-        );
-
-        // → Internal staff + → Client welcome email
-        await emailService.notifyLeadCreated({
-          lead:          fullLead,           // fullLead.email = client email ✅
-          assignedTo:    fullLead.assigned_name  || null,
-          createdBy:     creatorRow.rows[0]?.name || "System",
-          assigneeEmail: fullLead.assigned_email || null,
-          adminEmails,
-        });
-
-        // Dedicated assignment email to the exec (separate from the welcome email)
-        if (assigned_to && fullLead.assigned_email) {
-          const assignerRow = await pool.query(
-            "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1",
-            [req.user.id]
-          );
-          await emailService.notifyLeadAssigned({
-            lead:          fullLead,
-            assigneeName:  fullLead.assigned_name,
-            assignerName:  assignerRow.rows[0]?.name || "System",
-            assigneeEmail: fullLead.assigned_email,
-            note:          notes || null,
-          });
-        }
-      } catch (emailErr) {
-        console.error("[Email] createLead notification failed:", emailErr.message);
-      }
-    });
-    // ─────────────────────────────────────────────────────────────────────────
-
-    return sendSuccess(res, "Lead created", lead, 201);
-  } catch (err) {
-    await client.query("ROLLBACK");
-    next(err);
-  } finally {
-    client.release();
-  }
-};
-
-/**
- * GET /api/v1/leads/:id
- */
-const getLeadById = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const { role, id: callerId } = req.user;
-
-    const result = await pool.query(
-      `SELECT
-         l.id, l.name, l.phone, l.alternate_phone_number, l.email,
-         l.status, l.source, l.budget, l.location_preference,
-         l.project_id, l.assigned_to, l.is_converted, l.converted_at, l.created_at,
-         p.name AS project_name, p.city AS project_city, p.locality AS project_locality,
-         CONCAT(u.first_name, ' ', u.last_name) AS assigned_name,
-         u.phone_number AS assigned_phone
+    // Check if lead exists and get current assignment
+    const leadCheck = await client.query(
+      `SELECT l.id, l.name, l.phone, l.email, l.assigned_to, l.project_id,
+              p.name AS project_name,
+              CONCAT(u.first_name, ' ', u.last_name) AS current_assignee_name,
+              u.email AS current_assignee_email
        FROM leads l
        LEFT JOIN projects p ON p.id = l.project_id
        LEFT JOIN users u ON u.id = l.assigned_to
        WHERE l.id = $1 AND l.is_archived = false`,
-      [id]
+      [leadId]
     );
 
-    if (result.rows.length === 0) return next(new AppError("Lead not found", 404));
-    const lead = result.rows[0];
-
-    if (role === "sales_executive" && lead.assigned_to !== callerId) {
-      return next(new AppError("Access denied", 403));
+    if (leadCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return next(new AppError('Lead not found', 404));
     }
 
-    return sendSuccess(res, "Lead fetched successfully", {
-      ...lead,
-      assigned_to: lead.assigned_to
-        ? { id: lead.assigned_to, full_name: lead.assigned_name, phone: lead.assigned_phone }
-        : null,
-      project: lead.project_id
-        ? { id: lead.project_id, name: lead.project_name, city: lead.project_city, locality: lead.project_locality }
-        : null,
-    });
-  } catch (err) {
-    next(err);
-  }
-};
+    const lead = leadCheck.rows[0];
+    const oldAssignedTo = lead.assigned_to;
 
-/**
- * PUT /api/v1/leads/:id
- */
-const updateLead = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const { name, phone, alternate_phone_number, email, source, project_id, budget, location_preference } = req.body;
-
-    const existing = await pool.query(
-      "SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [id]
-    );
-    if (existing.rows.length === 0) return next(new AppError("Lead not found", 404));
-
-    const { role, id: callerId } = req.user;
-    if (role === "sales_executive" && existing.rows[0].assigned_to !== callerId) {
-      return next(new AppError("Access denied", 403));
+    // Check if trying to reassign to the same person
+    if (oldAssignedTo === assigned_to) {
+      await client.query('ROLLBACK');
+      return next(new AppError('Lead is already assigned to this user', 400));
     }
 
-    const updates = []; const params = []; let idx = 1;
-    if (name)                         { updates.push(`name = $${idx++}`);                params.push(name.trim()); }
-    if (phone)                        { updates.push(`phone = $${idx++}`);               params.push(phone); }
-    if (alternate_phone_number !== undefined) { updates.push(`alternate_phone_number = $${idx++}`); params.push(alternate_phone_number); }
-    if (email !== undefined)          { updates.push(`email = $${idx++}`);               params.push(email); }
-    if (source)                       { updates.push(`source = $${idx++}`);              params.push(source); }
-    if (project_id !== undefined)     { updates.push(`project_id = $${idx++}`);          params.push(project_id); }
-    if (budget)                       { updates.push(`budget = $${idx++}`);              params.push(budget); }
-    if (location_preference)          { updates.push(`location_preference = $${idx++}`); params.push(location_preference); }
-
-    if (updates.length === 0) return next(new AppError("No fields to update", 400));
-    updates.push(`updated_at = NOW()`);
-    params.push(id);
-
-    const result = await pool.query(
-      `UPDATE leads SET ${updates.join(", ")} WHERE id = $${idx} RETURNING *`, params
+    // Verify new assignee exists and is active
+    const newAssigneeCheck = await client.query(
+      `SELECT id, first_name, last_name, email, role 
+       FROM users 
+       WHERE id = $1 AND is_active = true`,
+      [assigned_to]
     );
-    return sendSuccess(res, "Lead updated successfully", result.rows[0]);
-  } catch (err) {
-    next(err);
-  }
-};
 
-/**
- * DELETE /api/v1/leads/:id
- */
-const deleteLead = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const existing = await pool.query("SELECT id FROM leads WHERE id = $1", [id]);
-    if (existing.rows.length === 0) return next(new AppError("Lead not found", 404));
-    await pool.query("UPDATE leads SET is_archived = true, updated_at = NOW() WHERE id = $1", [id]);
-    return sendSuccess(res, "Lead archived successfully");
-  } catch (err) {
-    next(err);
-  }
-};
-
-/**
- * PATCH /api/v1/leads/:id/status
- * Email → Internal: Status change detail  |  Client: Friendly update
- */
-const updateLeadStatus = async (req, res, next) => {
-  const client = await pool.connect();
-  try {
-    const { id } = req.params;
-    const { status, note } = req.body;
-
-    if (!status || !VALID_STATUSES.includes(status)) {
-      return next(new AppError(`Invalid status. Must be one of: ${VALID_STATUSES.join(", ")}`, 400));
+    if (newAssigneeCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return next(new AppError('New assignee not found or inactive', 404));
     }
 
-    const existing = await pool.query(
-      "SELECT id, status, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [id]
-    );
-    if (existing.rows.length === 0) return next(new AppError("Lead not found", 404));
+    const newAssignee = newAssigneeCheck.rows[0];
 
-    const oldStatus = existing.rows[0].status;
-    if (oldStatus === status) {
-      return sendSuccess(res, "Status is already set to this value", { id, status });
+    // Permission check - only admins, super_admins, and sales_managers can reassign
+    if (!['admin', 'super_admin', 'sales_manager'].includes(role)) {
+      await client.query('ROLLBACK');
+      return next(new AppError('Access denied. Only admins and managers can reassign leads', 403));
     }
 
-    const { role, id: callerId } = req.user;
-    if (role === "sales_executive" && existing.rows[0].assigned_to !== callerId) {
-      return next(new AppError("Access denied", 403));
-    }
-
-    await client.query("BEGIN");
-    const result = await client.query(
-      "UPDATE leads SET status = $1, updated_at = NOW() WHERE id = $2 RETURNING id, status, updated_at",
-      [status, id]
+    // Update lead assignment
+    await client.query(
+      `UPDATE leads 
+       SET assigned_to = $1, updated_at = NOW() 
+       WHERE id = $2`,
+      [assigned_to, leadId]
     );
-    await logActivity(
-      client, id, "status_change",
-      note || `Status changed from ${oldStatus} to ${status}`,
-      callerId
-    );
-    await client.query("COMMIT");
 
-    // ── ✉ Email ───────────────────────────────────────────────────────────────
+    // Log activity - create reassignment record
+    const activityNote = reason 
+      ? `Lead reassigned from ${lead.current_assignee_name || 'Unassigned'} to ${newAssignee.first_name} ${newAssignee.last_name}. Reason: ${reason}`
+      : `Lead reassigned from ${lead.current_assignee_name || 'Unassigned'} to ${newAssignee.first_name} ${newAssignee.last_name}`;
+
+    await client.query(
+      `INSERT INTO lead_activities (lead_id, type, note, performed_by)
+       VALUES ($1, $2, $3, $4)`,
+      [leadId, 'assignment', activityNote, performedBy]
+    );
+
+    // Create reassignment history record (if you want a dedicated table for this)
+    await client.query(
+      `INSERT INTO lead_reassignment_history 
+        (lead_id, from_user_id, to_user_id, reason, performed_by)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [leadId, oldAssignedTo, assigned_to, reason || null, performedBy]
+    );
+
+    await client.query('COMMIT');
+
+    // Get performer details for email
+    const performerDetails = await pool.query(
+      'SELECT first_name, last_name FROM users WHERE id = $1',
+      [performedBy]
+    );
+    const performerName = performerDetails.rows[0]
+      ? `${performerDetails.rows[0].first_name} ${performerDetails.rows[0].last_name}`
+      : 'System';
+
+    // Send email notifications asynchronously
     setImmediate(async () => {
       try {
-        const fullLead = await fetchLeadWithProject(id);
-        if (!fullLead) return;
+        // Notify new assignee
+        if (newAssignee.email) {
+          await emailService.notifyLeadAssigned({
+            lead: {
+              id: lead.id,
+              name: lead.name,
+              phone: lead.phone,
+              email: lead.email,
+              project_name: lead.project_name,
+            },
+            assigneeName: `${newAssignee.first_name} ${newAssignee.last_name}`,
+            assignerName: performerName,
+            assigneeEmail: newAssignee.email,
+            note: reason || 'This lead has been reassigned to you.',
+          });
+        }
 
-        const { adminEmails } = await getEmailContext(null);
-        const changedByRow = await pool.query(
-          "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1", [callerId]
-        );
-
-        await emailService.notifyLeadStatusChanged({
-          lead:          fullLead,           // fullLead.email = client email ✅
-          oldStatus,
-          newStatus:     status,
-          changedBy:     changedByRow.rows[0]?.name || "System",
-          note:          note || null,
-          assignedTo:    fullLead.assigned_name  || null,
-          assigneeEmail: fullLead.assigned_email || null,
-          adminEmails,
-        });
+        // Optionally notify old assignee about reassignment
+        if (oldAssignedTo && lead.current_assignee_email) {
+          await emailService.notifyLeadReassigned({
+            lead: {
+              id: lead.id,
+              name: lead.name,
+              phone: lead.phone,
+            },
+            oldAssigneeName: lead.current_assignee_name,
+            oldAssigneeEmail: lead.current_assignee_email,
+            newAssigneeName: `${newAssignee.first_name} ${newAssignee.last_name}`,
+            performedBy: performerName,
+            reason: reason || null,
+          });
+        }
       } catch (emailErr) {
-        console.error("[Email] updateLeadStatus notification failed:", emailErr.message);
+        console.error('[Email] Reassignment notification failed:', emailErr.message);
       }
     });
-    // ─────────────────────────────────────────────────────────────────────────
 
-    return sendSuccess(res, `Lead status updated to ${status}`, result.rows[0]);
+    return sendSuccess(res, 'Lead reassigned successfully', {
+      leadId,
+      leadName: lead.name,
+      oldAssignee: oldAssignedTo ? {
+        id: oldAssignedTo,
+        name: lead.current_assignee_name,
+      } : null,
+      newAssignee: {
+        id: newAssignee.id,
+        name: `${newAssignee.first_name} ${newAssignee.last_name}`,
+        email: newAssignee.email,
+      },
+      reason: reason || null,
+      performedBy: performerName,
+    });
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query('ROLLBACK');
     next(err);
   } finally {
     client.release();
@@ -408,197 +179,159 @@ const updateLeadStatus = async (req, res, next) => {
 };
 
 /**
- * PATCH /api/v1/leads/:id/assign
- * Email → Internal only: Lead assigned to executive
+ * POST /api/v1/leads/bulk-reassign
+ * Bulk reassign multiple leads to a new user
  */
-const assignLead = async (req, res, next) => {
+const bulkReassignLeads = async (req, res, next) => {
   const client = await pool.connect();
   try {
-    const { id } = req.params;
-    const { assigned_to, note } = req.body;
-    if (!assigned_to) return next(new AppError("assigned_to is required", 400));
+    const { lead_ids, assigned_to, reason } = req.body;
+    const { id: performedBy, role } = req.user;
 
-    const leadResult = await pool.query(
-      "SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [id]
-    );
-    if (leadResult.rows.length === 0) return next(new AppError("Lead not found", 404));
-
-    const prevAssignee = leadResult.rows[0].assigned_to;
-    const sameAssignee = prevAssignee === assigned_to;
-
-    const userResult = await pool.query(
-      "SELECT id, first_name, last_name, email, manager_id FROM users WHERE id = $1 AND is_active = true",
-      [assigned_to]
-    );
-    if (userResult.rows.length === 0) return next(new AppError("User not found", 404));
-
-    const { role, id: callerId } = req.user;
-    if (role === "sales_manager" && userResult.rows[0].manager_id !== callerId) {
-      return next(new AppError("Cannot assign to a user outside your team", 403));
+    // Validation
+    if (!lead_ids || !Array.isArray(lead_ids) || lead_ids.length === 0) {
+      return next(new AppError('lead_ids array is required and must not be empty', 400));
     }
 
-    await client.query("BEGIN");
-    await client.query("UPDATE leads SET assigned_to = $1, updated_at = NOW() WHERE id = $2", [assigned_to, id]);
-    const assignee = userResult.rows[0];
-    await logActivity(
-      client, id, "assignment",
-      note || `Lead assigned to ${assignee.first_name} ${assignee.last_name}`,
-      callerId
-    );
-    await client.query("COMMIT");
+    if (!assigned_to) {
+      return next(new AppError('assigned_to (new user ID) is required', 400));
+    }
 
-    if (!sameAssignee) {
-      setImmediate(async () => {
-        try {
-          const fullLead    = await fetchLeadWithProject(id);
-          if (!fullLead) return;
-          const assignerRow = await pool.query(
-            "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1", [callerId]
-          );
-          await emailService.notifyLeadAssigned({
-            lead:          fullLead,
-            assigneeName:  `${assignee.first_name} ${assignee.last_name}`,
-            assignerName:  assignerRow.rows[0]?.name || "System",
-            assigneeEmail: assignee.email,
-            note:          note || null,
-          });
-        } catch (emailErr) {
-          console.error("[Email] assignLead notification failed:", emailErr.message);
-        }
+    if (lead_ids.length > 100) {
+      return next(new AppError('Cannot reassign more than 100 leads at once', 400));
+    }
+
+    // Permission check
+    if (!['admin', 'super_admin', 'sales_manager'].includes(role)) {
+      return next(new AppError('Access denied. Only admins and managers can reassign leads', 403));
+    }
+
+    await client.query('BEGIN');
+
+    // Verify new assignee exists and is active
+    const newAssigneeCheck = await client.query(
+      `SELECT id, first_name, last_name, email, role 
+       FROM users 
+       WHERE id = $1 AND is_active = true`,
+      [assigned_to]
+    );
+
+    if (newAssigneeCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return next(new AppError('New assignee not found or inactive', 404));
+    }
+
+    const newAssignee = newAssigneeCheck.rows[0];
+
+    // Get all valid leads
+    const leadsCheck = await client.query(
+      `SELECT l.id, l.name, l.assigned_to,
+              CONCAT(u.first_name, ' ', u.last_name) AS current_assignee_name
+       FROM leads l
+       LEFT JOIN users u ON u.id = l.assigned_to
+       WHERE l.id = ANY($1::uuid[]) AND l.is_archived = false`,
+      [lead_ids]
+    );
+
+    if (leadsCheck.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return next(new AppError('No valid leads found', 404));
+    }
+
+    const validLeads = leadsCheck.rows;
+    const successfulReassignments = [];
+    const skipped = [];
+
+    // Get performer name
+    const performerDetails = await client.query(
+      'SELECT first_name, last_name FROM users WHERE id = $1',
+      [performedBy]
+    );
+    const performerName = performerDetails.rows[0]
+      ? `${performerDetails.rows[0].first_name} ${performerDetails.rows[0].last_name}`
+      : 'System';
+
+    // Process each lead
+    for (const lead of validLeads) {
+      // Skip if already assigned to the target user
+      if (lead.assigned_to === assigned_to) {
+        skipped.push({
+          leadId: lead.id,
+          leadName: lead.name,
+          reason: 'Already assigned to this user',
+        });
+        continue;
+      }
+
+      // Update assignment
+      await client.query(
+        `UPDATE leads 
+         SET assigned_to = $1, updated_at = NOW() 
+         WHERE id = $2`,
+        [assigned_to, lead.id]
+      );
+
+      // Log activity
+      const activityNote = reason
+        ? `Lead reassigned from ${lead.current_assignee_name || 'Unassigned'} to ${newAssignee.first_name} ${newAssignee.last_name}. Reason: ${reason}`
+        : `Lead reassigned from ${lead.current_assignee_name || 'Unassigned'} to ${newAssignee.first_name} ${newAssignee.last_name}`;
+
+      await client.query(
+        `INSERT INTO lead_activities (lead_id, type, note, performed_by)
+         VALUES ($1, $2, $3, $4)`,
+        [lead.id, 'assignment', activityNote, performedBy]
+      );
+
+      // Create reassignment history
+      await client.query(
+        `INSERT INTO lead_reassignment_history 
+          (lead_id, from_user_id, to_user_id, reason, performed_by)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [lead.id, lead.assigned_to, assigned_to, reason || null, performedBy]
+      );
+
+      successfulReassignments.push({
+        leadId: lead.id,
+        leadName: lead.name,
+        oldAssignee: lead.current_assignee_name || 'Unassigned',
       });
     }
 
-    return sendSuccess(res, `Lead assigned to ${assignee.first_name} ${assignee.last_name}`);
-  } catch (err) {
-    await client.query("ROLLBACK");
-    next(err);
-  } finally {
-    client.release();
-  }
-};
+    await client.query('COMMIT');
 
-/**
- * PATCH /api/v1/leads/:id/convert
- *
- * Manual lead-to-booking conversion.
- *
- * Automatic path: status set to "booked" via updateLeadStatus → booking email fires
- * Manual path:    this endpoint → sets status = booked, is_converted = true,
- *                 records booking_amount, optionally inserts into bookings table
- *
- * Body (all optional):
- *   { note, booking_amount, project_id }
- *
- * Email → Internal: Booking confirmed (CRM detail)
- *         Client:   Congratulations email
- */
-const convertLead = async (req, res, next) => {
-  const client = await pool.connect();
-  try {
-    const { id } = req.params;
-    const { note, booking_amount, project_id: overrideProjectId } = req.body;
-
-    const leadRow = await pool.query(
-      `SELECT
-         l.id, l.status, l.assigned_to, l.is_converted,
-         l.email AS lead_email,
-         l.name, l.phone, l.budget, l.location_preference, l.project_id,
-         p.name AS project_name,
-         CONCAT(u.first_name,' ',u.last_name) AS assigned_name,
-         u.email AS assigned_email
-       FROM leads l
-       LEFT JOIN projects p ON p.id = l.project_id
-       LEFT JOIN users u ON u.id = l.assigned_to
-       WHERE l.id = $1 AND l.is_archived = false`,
-      [id]
-    );
-    if (leadRow.rows.length === 0) return next(new AppError("Lead not found", 404));
-
-    const lead = { ...leadRow.rows[0], email: leadRow.rows[0].lead_email };
-
-    if (lead.is_converted) {
-      return next(new AppError("This lead has already been converted", 400));
-    }
-
-    const { role, id: callerId } = req.user;
-    if (role === "sales_executive" && lead.assigned_to !== callerId) {
-      return next(new AppError("Access denied", 403));
-    }
-
-    const finalProjectId = overrideProjectId || lead.project_id || null;
-    const oldStatus      = lead.status;
-
-    await client.query("BEGIN");
-
-    await client.query(
-      `UPDATE leads
-       SET status       = 'booked',
-           is_converted = true,
-           converted_at = NOW(),
-           project_id   = COALESCE($1, project_id),
-           updated_at   = NOW()
-       WHERE id = $2`,
-      [finalProjectId, id]
-    );
-
-    await logActivity(
-      client, id, "status_change",
-      note || `Lead manually converted to booking${booking_amount ? ` — Amount: ₹${booking_amount}` : ""}`,
-      callerId
-    );
-
-    // Insert into bookings table if it exists
-    const { rows: [{ exists: bookingsExists }] } = await client.query(
-      `SELECT EXISTS (
-         SELECT FROM information_schema.tables WHERE table_name = 'bookings'
-       ) AS exists`
-    );
-    if (bookingsExists) {
-      await client.query(
-        `INSERT INTO bookings (lead_id, project_id, booking_amount, created_by)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (lead_id) DO UPDATE SET booking_amount = EXCLUDED.booking_amount`,
-        [id, finalProjectId, booking_amount || null, callerId]
-      );
-    }
-
-    await client.query("COMMIT");
-
-    // ── ✉ Email ───────────────────────────────────────────────────────────────
+    // Send email notification to new assignee asynchronously
     setImmediate(async () => {
       try {
-        const fullLead = await fetchLeadWithProject(id);
-        if (!fullLead) return;
-
-        const { adminEmails } = await getEmailContext(null);
-        const convertedByRow  = await pool.query(
-          "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1", [callerId]
-        );
-
-        await emailService.notifyLeadStatusChanged({
-          lead:          fullLead,
-          oldStatus,
-          newStatus:     "booked",
-          changedBy:     convertedByRow.rows[0]?.name || "System",
-          note:          note || "Lead converted to booking",
-          assignedTo:    fullLead.assigned_name  || null,
-          assigneeEmail: fullLead.assigned_email || null,
-          adminEmails,
-        });
+        if (newAssignee.email && successfulReassignments.length > 0) {
+          await emailService.notifyBulkLeadsAssigned({
+            assigneeName: `${newAssignee.first_name} ${newAssignee.last_name}`,
+            assigneeEmail: newAssignee.email,
+            leadsCount: successfulReassignments.length,
+            performedBy: performerName,
+            reason: reason || null,
+          });
+        }
       } catch (emailErr) {
-        console.error("[Email] convertLead notification failed:", emailErr.message);
+        console.error('[Email] Bulk reassignment notification failed:', emailErr.message);
       }
     });
-    // ─────────────────────────────────────────────────────────────────────────
 
-    return sendSuccess(res, "Lead successfully converted to booking", {
-      id,
-      status:       "booked",
-      is_converted: true,
-      converted_at: new Date().toISOString(),
+    return sendSuccess(res, 'Bulk reassignment completed', {
+      totalRequested: lead_ids.length,
+      successful: successfulReassignments.length,
+      skipped: skipped.length,
+      newAssignee: {
+        id: newAssignee.id,
+        name: `${newAssignee.first_name} ${newAssignee.last_name}`,
+        email: newAssignee.email,
+      },
+      successfulReassignments,
+      skippedLeads: skipped,
+      reason: reason || null,
+      performedBy: performerName,
     });
   } catch (err) {
-    await client.query("ROLLBACK");
+    await client.query('ROLLBACK');
     next(err);
   } finally {
     client.release();
@@ -606,92 +339,119 @@ const convertLead = async (req, res, next) => {
 };
 
 /**
- * GET /api/v1/leads/:id/activity
+ * GET /api/v1/leads/:id/reassignment-history
+ * Get reassignment history for a specific lead
  */
-const getLeadActivity = async (req, res, next) => {
+const getReassignmentHistory = async (req, res, next) => {
   try {
-    const { id } = req.params;
-    const lead = await pool.query("SELECT id, assigned_to FROM leads WHERE id = $1", [id]);
-    if (lead.rows.length === 0) return next(new AppError("Lead not found", 404));
-
+    const { id: leadId } = req.params;
+    const { page = 1, per_page = 20 } = req.query;
     const { role, id: callerId } = req.user;
-    if (role === "sales_executive" && lead.rows[0].assigned_to !== callerId) {
-      return next(new AppError("Access denied", 403));
+    const offset = (parseInt(page) - 1) * parseInt(per_page);
+
+    // Check lead exists and get basic info
+    const leadCheck = await pool.query(
+      `SELECT l.id, l.name, l.phone,
+              CONCAT(u.first_name,' ',u.last_name) AS current_assignee_name,
+              u.role AS current_assignee_role
+       FROM leads l
+       LEFT JOIN users u ON u.id = l.assigned_to
+       WHERE l.id = $1`,
+      [leadId]
+    );
+
+    if (leadCheck.rows.length === 0) {
+      return next(new AppError('Lead not found', 404));
     }
 
-    const result = await pool.query(
-      `SELECT la.id, la.type, la.note, la.created_at,
-              CONCAT(u.first_name, ' ', u.last_name) AS performed_by
-       FROM lead_activities la
-       LEFT JOIN users u ON u.id = la.performed_by
-       WHERE la.lead_id = $1
-       ORDER BY la.created_at DESC`,
-      [id]
-    );
-    return sendSuccess(res, "Activity log fetched", result.rows);
-  } catch (err) {
-    next(err);
-  }
-};
-
-/**
- * POST /api/v1/leads/:id/activity
- */
-const addLeadActivity = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const { type, note } = req.body;
-
-    const VALID_TYPES = ["note", "call", "email", "whatsapp", "meeting"];
-    if (!type || !VALID_TYPES.includes(type)) {
-      return next(new AppError(`Invalid type. Must be one of: ${VALID_TYPES.join(", ")}`, 400));
-    }
-    if (!note) return next(new AppError("note is required", 400));
-
-    const lead = await pool.query(
-      "SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [id]
-    );
-    if (lead.rows.length === 0) return next(new AppError("Lead not found", 404));
-
-    const { role, id: callerId } = req.user;
-    if (role === "sales_executive" && lead.rows[0].assigned_to !== callerId) {
-      return next(new AppError("Access denied", 403));
+    // Permission: sales_exec / external_caller can only see history for leads assigned to them
+    if (['sales_executive', 'external_caller'].includes(role)) {
+      const ownership = await pool.query(
+        'SELECT id FROM leads WHERE id = $1 AND assigned_to = $2',
+        [leadId, callerId]
+      );
+      if (ownership.rows.length === 0) {
+        return next(new AppError('Access denied — this lead is not assigned to you', 403));
+      }
     }
 
-    const result = await pool.query(
-      `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1,$2,$3,$4) RETURNING *`,
-      [id, type, note, callerId]
+    // Total count for pagination
+    const countResult = await pool.query(
+      'SELECT COUNT(*) FROM lead_reassignment_history WHERE lead_id = $1',
+      [leadId]
     );
-    return sendSuccess(res, "Activity logged successfully", result.rows[0], 201);
-  } catch (err) {
-    next(err);
-  }
-};
+    const total = parseInt(countResult.rows[0].count);
 
-/**
- * GET /api/v1/leads/sources
- */
-const getLeadSources = async (req, res, next) => {
-  try {
-    const result = await pool.query(
-      "SELECT DISTINCT source FROM leads WHERE source IS NOT NULL ORDER BY source"
+    const history = await pool.query(
+      `SELECT
+         rh.id,
+         rh.lead_id,
+         rh.from_user_id,
+         rh.to_user_id,
+         rh.reason,
+         rh.performed_by,
+         rh.created_at,
+         CONCAT(fu.first_name,' ',fu.last_name)  AS from_user_name,
+         fu.role                                  AS from_user_role,
+         CONCAT(tu.first_name,' ',tu.last_name)  AS to_user_name,
+         tu.role                                  AS to_user_role,
+         CONCAT(pb.first_name,' ',pb.last_name)  AS performed_by_name,
+         pb.role                                  AS performed_by_role
+       FROM lead_reassignment_history rh
+       LEFT JOIN users fu ON fu.id = rh.from_user_id
+       LEFT JOIN users tu ON tu.id = rh.to_user_id
+       LEFT JOIN users pb ON pb.id = rh.performed_by
+       WHERE rh.lead_id = $1
+       ORDER BY rh.created_at DESC
+       LIMIT $2 OFFSET $3`,
+      [leadId, parseInt(per_page), offset]
     );
-    return sendSuccess(res, "Lead sources fetched", result.rows.map(r => r.source));
+
+    const lead = leadCheck.rows[0];
+
+    return sendSuccess(res, 'Reassignment history fetched successfully', {
+      lead: {
+        id:                    leadId,
+        name:                  lead.name,
+        phone:                 lead.phone,
+        current_assignee_name: lead.current_assignee_name || 'Unassigned',
+        current_assignee_role: lead.current_assignee_role || null,
+      },
+      total_reassignments: total,
+      pagination: {
+        total,
+        page:        parseInt(page),
+        per_page:    parseInt(per_page),
+        total_pages: Math.ceil(total / parseInt(per_page)),
+      },
+      history: history.rows.map(h => ({
+        id:   h.id,
+        from: h.from_user_id ? {
+          id:   h.from_user_id,
+          name: h.from_user_name,
+          role: h.from_user_role,
+        } : null,
+        to: {
+          id:   h.to_user_id,
+          name: h.to_user_name,
+          role: h.to_user_role,
+        },
+        reason:      h.reason || null,
+        performed_by: {
+          id:   h.performed_by,
+          name: h.performed_by_name,
+          role: h.performed_by_role,
+        },
+        reassigned_at: h.created_at,
+      })),
+    });
   } catch (err) {
     next(err);
   }
 };
 
 module.exports = {
-  getAllLeads,
-  createLead,
-  getLeadById,
-  updateLead,
-  deleteLead,
-  updateLeadStatus,
-  assignLead,
-  convertLead,
-  getLeadActivity,
-  addLeadActivity,
-  getLeadSources,
+  reassignLead,
+  bulkReassignLeads,
+  getReassignmentHistory,
 };
