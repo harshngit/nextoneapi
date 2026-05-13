@@ -1,6 +1,8 @@
 const { pool } = require("../config/db");
 const { sendSuccess, paginate } = require("../utils/response");
 const AppError = require("../utils/AppError");
+const fs       = require("fs");
+const path     = require("path");
 
 const VALID_STATUSES = ["active", "inactive", "upcoming", "completed"];
 
@@ -47,6 +49,7 @@ const getAllProjects = async (req, res, next) => {
  * POST /api/v1/projects
  */
 const createProject = async (req, res, next) => {
+  const client = await pool.connect();
   try {
     const {
       name, developer, city, locality, address, configurations,
@@ -56,7 +59,10 @@ const createProject = async (req, res, next) => {
 
     if (!name || !city) return next(new AppError("name and city are required", 400));
 
-    const result = await pool.query(
+    await client.query("BEGIN");
+
+    // ── 1. Insert project ─────────────────────────────────────────────────────
+    const result = await client.query(
       `INSERT INTO projects
         (name, developer, city, locality, address, configurations, price_range,
          total_units, possession_date, rera_number, amenities, status, brochure_url, description, created_by)
@@ -69,9 +75,56 @@ const createProject = async (req, res, next) => {
         status, brochure_url || null, description || null, req.user.id,
       ]
     );
-    return sendSuccess(res, "Project created successfully", result.rows[0], 201);
+
+    const project = result.rows[0];
+
+    // ── 2. Insert documents if uploaded alongside creation ────────────────────
+    const uploadedDocs = [];
+
+    if (req.files) {
+      const processFiles = async (files, docType) => {
+        for (const file of (files || [])) {
+          const docResult = await client.query(
+            `INSERT INTO project_documents
+               (project_id, document_type, file_name, file_path, file_size, mime_type, uploaded_by)
+             VALUES ($1,$2,$3,$4,$5,$6,$7)
+             RETURNING *`,
+            [project.id, docType, file.originalname, file.path, file.size, file.mimetype, req.user.id]
+          );
+          uploadedDocs.push({
+            ...docResult.rows[0],
+            url: `/api/v1/projects/${project.id}/documents/${docResult.rows[0].id}/download`,
+          });
+        }
+      };
+
+      await processFiles(req.files.unit_plans, "unit_plan");
+      await processFiles(req.files.creatives,  "creative");
+    }
+
+    await client.query("COMMIT");
+
+    return sendSuccess(res, "Project created successfully", {
+      ...project,
+      documents: uploadedDocs.length > 0 ? {
+        count:     uploadedDocs.length,
+        unit_plans: uploadedDocs.filter(d => d.document_type === "unit_plan"),
+        creatives:  uploadedDocs.filter(d => d.document_type === "creative"),
+      } : null,
+    }, 201);
   } catch (err) {
+    await client.query("ROLLBACK");
+    // Clean up any uploaded files on error
+    if (req.files) {
+      const allFiles = [
+        ...(req.files.unit_plans || []),
+        ...(req.files.creatives  || []),
+      ];
+      allFiles.forEach(f => { if (fs.existsSync(f.path)) fs.unlinkSync(f.path); });
+    }
     next(err);
+  } finally {
+    client.release();
   }
 };
 

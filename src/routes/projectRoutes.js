@@ -1,7 +1,8 @@
 const express = require("express");
 const router = express.Router();
 const projectController = require("../controllers/projectController");
-const { authenticate, authorize } = require("../middleware/auth");
+const { authenticate, authorize }  = require("../middleware/auth");
+const { uploadProjectDocuments }   = require("../middleware/uploadMiddleware");
 
 /**
  * @swagger
@@ -175,7 +176,82 @@ router.get("/", authenticate, projectController.getAllProjects);
  *       403:
  *         description: Insufficient permissions
  */
-router.post("/", authenticate, authorize("super_admin", "admin"), projectController.createProject);
+/**
+ * @swagger
+ * /api/v1/projects:
+ *   post:
+ *     summary: Create a new project (with optional document upload)
+ *     description: >
+ *       Creates a project. You can optionally upload unit plans and creative
+ *       documents in the SAME request using multipart/form-data.
+ *       All data is processed in a single transaction — if document upload fails
+ *       the project is also rolled back.
+ *
+ *       Content-Type must be multipart/form-data even if no files are attached.
+ *       Use form fields for all text data.
+ *     tags: [Projects]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [name, city]
+ *             properties:
+ *               name:            { type: string, example: "Skyline Heights" }
+ *               developer:       { type: string, example: "Lodha Group" }
+ *               city:            { type: string, example: "Mumbai" }
+ *               locality:        { type: string }
+ *               price_range:     { type: string, example: "80L - 1.5Cr" }
+ *               total_units:     { type: integer }
+ *               rera_number:     { type: string }
+ *               status:          { type: string, enum: [active, upcoming, completed, inactive] }
+ *               description:     { type: string }
+ *               unit_plans:
+ *                 type: array
+ *                 items: { type: string, format: binary }
+ *                 description: Unit plan files (PDF, JPEG, PNG, WEBP, Word — max 20MB each, up to 10)
+ *               creatives:
+ *                 type: array
+ *                 items: { type: string, format: binary }
+ *                 description: Creative files (PDF, JPEG, PNG, WEBP, Word — max 20MB each, up to 10)
+ *     responses:
+ *       201:
+ *         description: Project created with any uploaded documents
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Project created successfully"
+ *               data:
+ *                 id: "proj-uuid"
+ *                 name: "Skyline Heights"
+ *                 city: "Mumbai"
+ *                 status: "active"
+ *                 documents:
+ *                   count: 2
+ *                   unit_plans:
+ *                     - id: "doc-uuid-1"
+ *                       document_type: "unit_plan"
+ *                       file_name: "floor_plan.pdf"
+ *                       url: "/api/v1/projects/proj-uuid/documents/doc-uuid-1/download"
+ *                   creatives:
+ *                     - id: "doc-uuid-2"
+ *                       document_type: "creative"
+ *                       file_name: "banner.jpg"
+ *                       url: "/api/v1/projects/proj-uuid/documents/doc-uuid-2/download"
+ *       400:
+ *         description: name and city are required
+ */
+router.post(
+  "/",
+  authenticate,
+  authorize("super_admin", "admin"),
+  uploadProjectDocuments,          // multer — optional files, fields: unit_plans[], creatives[]
+  projectController.createProject
+);
 
 /**
  * @swagger
