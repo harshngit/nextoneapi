@@ -10,7 +10,8 @@
 const { pool } = require('../config/db');
 const { sendSuccess } = require('../utils/response');
 const AppError = require('../utils/AppError');
-const archiver = require('archiver');
+// archiver v8 — use ZipArchive directly (the old archiver('zip') API is gone in v8)
+const { ZipArchive } = require('archiver');
 const { promisify } = require('util');
 const fs = require('fs');
 const path = require('path');
@@ -258,25 +259,8 @@ const downloadAllProjectDocuments = async (req, res, next) => {
       return next(new AppError('No documents found for this project', 404));
     }
 
-    // Create ZIP archive
-    // Robustly handle different archiver export patterns (CJS/ESM interop)
-    let archiverFunc;
-    if (typeof archiver === 'function') {
-      archiverFunc = archiver;
-    } else if (archiver && typeof archiver.default === 'function') {
-      archiverFunc = archiver.default;
-    } else if (typeof require('archiver') === 'function') {
-      archiverFunc = require('archiver');
-    } else {
-      const archObj = require('archiver');
-      archiverFunc = archObj.default || archObj;
-    }
-
-    if (typeof archiverFunc !== 'function') {
-      return next(new AppError(`Archiver initialization failed: archiver is not a function (type: ${typeof archiverFunc})`, 500));
-    }
-
-    const archive = archiverFunc('zip', { zlib: { level: 9 } });
+    // Create ZIP archive — archiver v8 exports ZipArchive directly, not a factory function
+    const archive = new ZipArchive({ zlib: { level: 9 } });
 
     // Set response headers
     const zipFileName = document_type
