@@ -1,6 +1,80 @@
 const { pool } = require("../config/db");
 const { sendSuccess, paginate } = require("../utils/response");
-const AppError = require("../utils/AppError");
+const AppError  = require("../utils/AppError");
+const { emitToUser } = require("../config/socket");
+
+// ════════════════════════════════════════════════════════════════════════════
+// INTERNAL HELPERS — imported by other controllers
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Insert one notification row and push it to the user via WebSocket.
+ * Safe to call without await — errors are caught and logged.
+ */
+const createNotification = async (userId, {
+  type            = 'general',
+  title,
+  message,
+  reference_id    = null,
+  reference_type  = null,
+  metadata        = null,
+}) => {
+  try {
+    const result = await pool.query(
+      `INSERT INTO notifications
+         (user_id, type, title, message, reference_id, reference_type, metadata)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       RETURNING *`,
+      [
+        userId, type, title, message,
+        reference_id, reference_type,
+        metadata ? JSON.stringify(metadata) : null,
+      ]
+    );
+    const notif = result.rows[0];
+    emitToUser(String(userId), 'notification:new', notif);
+    return notif;
+  } catch (err) {
+    console.error('[createNotification] error:', err.message);
+    return null;
+  }
+};
+
+/** Notify multiple users with the same payload. */
+const createBulkNotifications = (userIds, payload) =>
+  Promise.all(userIds.map(uid => createNotification(uid, payload)));
+
+/** Notify every active admin and super_admin. */
+const notifyAdmins = async (payload) => {
+  const result = await pool.query(
+    `SELECT id FROM users WHERE role IN ('super_admin','admin') AND is_active = true`
+  );
+  return createBulkNotifications(result.rows.map(r => r.id), payload);
+};
+
+/**
+ * Notify the sales_manager of a lead when a site-visit / follow-up is created.
+ * lead must have: id, name, assigned_to (exec id)
+ */
+const notifyManagerOfLeadAssignment = async (execId, lead) => {
+  try {
+    const mgr = await pool.query(
+      `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`,
+      [execId]
+    );
+    if (!mgr.rows.length) return;
+    return createNotification(mgr.rows[0].manager_id, {
+      type:           'lead_assigned',
+      title:          'Lead Activity on Your Team',
+      message:        `A site visit or follow-up was created for lead "${lead.name}"`,
+      reference_id:   lead.id,
+      reference_type: 'lead',
+      metadata:       { lead_id: lead.id, exec_id: execId },
+    });
+  } catch (err) {
+    console.error('[notifyManagerOfLeadAssignment] error:', err.message);
+  }
+};
 
 // ─── 1. GET ALL NOTIFICATIONS ───────────────────────────────────────────────
 const getNotifications = async (req, res, next) => {
@@ -155,11 +229,17 @@ const deleteAllNotifications = async (req, res, next) => {
 };
 
 module.exports = {
+  // ── Route handlers ──────────────────────────────────────────────────────
   getNotifications,
   getUnreadCount,
   getNotificationTypes,
   markAllRead,
   markOneRead,
   deleteNotification,
-  deleteAllNotifications
+  deleteAllNotifications,
+  // ── Internal helpers (used by other controllers) ─────────────────────────
+  createNotification,
+  createBulkNotifications,
+  notifyAdmins,
+  notifyManagerOfLeadAssignment,
 };
