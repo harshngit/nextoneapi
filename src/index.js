@@ -10,6 +10,7 @@ const AppError       = require("./utils/AppError");
 const bulkLeadsRoutes = require('./routes/bulkLeadsRoutes');
 const projectDocumentsRoutes = require('./routes/projectDocumentsRoutes');
 const leadReassignRoutes = require('./routes/leadReassignRoutes');
+const phoneRevealRoutes  = require('./routes/phoneRevealRoutes');
 
 const app    = express();
 const server = http.createServer(app);
@@ -46,7 +47,8 @@ app.use("/api/v1/convert",       require("./routes/conversionRoutes"));
 app.use("/api/v1/team-history",  require("./routes/teamHistoryRoutes"));
 
 // Project documents routes
-app.use('/api/v1/projects', projectDocumentsRoutes);
+app.use('/api/v1/projects',     projectDocumentsRoutes);
+app.use('/api/v1/phone-reveal',  phoneRevealRoutes);
 
 
 // ─── 404 Not Found Handler ────────────────────────────────────
