@@ -29,15 +29,21 @@ const EMAIL_HOST = cleanEnv(process.env.EMAIL_HOST) || 'smtp.gmail.com';
 const EMAIL_PORT = parseInt(cleanEnv(process.env.EMAIL_PORT) || '587');
 const EMAIL_SEC  = cleanEnv(process.env.EMAIL_SECURE) === 'true';
 
+// Render blocks port 587 on most plans — use port 465 (SSL) as primary,
+// with port 587 (STARTTLS) as fallback based on EMAIL_PORT env var.
+// On Render set: EMAIL_PORT=465  EMAIL_SECURE=true
+const USE_PORT   = EMAIL_PORT || 465;
+const USE_SECURE = USE_PORT === 465 ? true : EMAIL_SEC;
+
 const transporter = nodemailer.createTransport({
   host:   EMAIL_HOST,
-  port:   EMAIL_PORT,
-  secure: EMAIL_SEC,
+  port:   USE_PORT,
+  secure: USE_SECURE,
   auth:   { user: EMAIL_USER, pass: EMAIL_PASS },
   tls:    { rejectUnauthorized: false },
-  connectionTimeout: 10000,
-  greetingTimeout:   10000,
-  socketTimeout:     15000,
+  connectionTimeout: 30000,
+  greetingTimeout:   15000,
+  socketTimeout:     30000,
 });
 
 // Verify SMTP connection on startup and log the result clearly
