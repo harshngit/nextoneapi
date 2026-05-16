@@ -19,19 +19,42 @@
 const nodemailer = require('nodemailer');
 
 // ── Transporter ──────────────────────────────────────────────────────────────
+// Strip inline comments and whitespace from env values
+// (e.g. EMAIL_PASS=abc123  # comment  →  abc123)
+const cleanEnv = (val) => (val || '').split('#')[0].trim();
+
+const EMAIL_USER = cleanEnv(process.env.EMAIL_USER);
+const EMAIL_PASS = cleanEnv(process.env.EMAIL_PASS);
+const EMAIL_HOST = cleanEnv(process.env.EMAIL_HOST) || 'smtp.gmail.com';
+const EMAIL_PORT = parseInt(cleanEnv(process.env.EMAIL_PORT) || '587');
+const EMAIL_SEC  = cleanEnv(process.env.EMAIL_SECURE) === 'true';
+
 const transporter = nodemailer.createTransport({
-  host:   process.env.EMAIL_HOST   || 'smtp.gmail.com',
-  port:   parseInt(process.env.EMAIL_PORT || '587'),
-  secure: process.env.EMAIL_SECURE === 'true',   // false for port 587 STARTTLS
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-  tls: { rejectUnauthorized: false },
+  host:   EMAIL_HOST,
+  port:   EMAIL_PORT,
+  secure: EMAIL_SEC,
+  auth:   { user: EMAIL_USER, pass: EMAIL_PASS },
+  tls:    { rejectUnauthorized: false },
+  connectionTimeout: 10000,
+  greetingTimeout:   10000,
+  socketTimeout:     15000,
 });
 
-const FROM    = process.env.EMAIL_FROM    || `"Next One Realty" <${process.env.EMAIL_USER}>`;
-const CRM_URL = process.env.FRONTEND_URL  || 'https://nextonecrm.asynk.in';
+// Verify SMTP connection on startup and log the result clearly
+transporter.verify((err) => {
+  if (err) {
+    console.error('[Email] ❌ SMTP connection FAILED:', err.message);
+    console.error('[Email] Host:', EMAIL_HOST, '| Port:', EMAIL_PORT, '| User:', EMAIL_USER);
+    console.error('[Email] Check EMAIL_PASS in your Render env vars (no trailing spaces/comments)');
+  } else {
+    console.log('[Email] ✅ SMTP connected — ready to send from', EMAIL_USER);
+  }
+});
+
+const FROM    = process.env.EMAIL_FROM
+  ? cleanEnv(process.env.EMAIL_FROM)
+  : `"Next One Realty" <${EMAIL_USER}>`;
+const CRM_URL = cleanEnv(process.env.FRONTEND_URL) || 'https://nextonecrm.asynk.in';
 const BRAND   = '#0066CC';
 
 // ── Shared HTML helpers ──────────────────────────────────────────────────────
@@ -58,10 +81,34 @@ const badge  = (text, color = BRAND) => `<span style="background:${color};color:
 
 // ── send helper ───────────────────────────────────────────────────────────────
 const send = async ({ to, subject, html, text }) => {
-  if (!to) return;                               // skip if no recipient
+  if (!to) { console.warn('[Email] skipped — no recipient for:', subject); return; }
   const recipients = Array.isArray(to) ? to.filter(Boolean).join(',') : to;
-  if (!recipients) return;
-  await transporter.sendMail({ from: FROM, to: recipients, subject, html, text: text || '' });
+  if (!recipients) { console.warn('[Email] skipped — empty recipient list for:', subject); return; }
+  try {
+    const info = await transporter.sendMail({ from: FROM, to: recipients, subject, html, text: text || '' });
+    console.log('[Email] ✉ Sent:', subject, '→', recipients, '| MsgId:', info.messageId);
+  } catch (err) {
+    console.error('[Email] ✗ Failed to send:', subject, '→', recipients);
+    console.error('[Email] Error:', err.message);
+    throw err; // re-throw so caller can catch
+  }
+};
+
+// ── Email test helper (called from test route) ────────────────────────────────
+const sendTestEmail = async (to) => {
+  await send({
+    to,
+    subject: 'Next One Realty — Email Test ✅',
+    html: wrap(`
+      <h3 style="color:${BRAND};margin-top:0;">Email is working! ✅</h3>
+      <p style="color:#333;font-size:14px;">This is a test email from the Next One Realty CRM email service.</p>
+      <p style="color:#555;font-size:13px;">
+        SMTP: <strong>${EMAIL_HOST}:${EMAIL_PORT}</strong><br/>
+        Sender: <strong>${EMAIL_USER}</strong><br/>
+        Time: <strong>${new Date().toLocaleString('en-IN')}</strong>
+      </p>
+    `),
+  });
 };
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -382,6 +429,7 @@ const notifySiteVisitFeedback = async ({ lead, project, visit, feedback, submitt
 // EXPORTS
 // ════════════════════════════════════════════════════════════════════════════
 module.exports = {
+  sendTestEmail,
   notifyLeadCreated,
   notifyLeadAssigned,
   notifyLeadStatusChanged,

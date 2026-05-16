@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const notificationController = require("../controllers/notificationController");
-const { authenticate } = require("../middleware/auth");
+const { authenticate, authorize } = require("../middleware/auth");
 
 /**
  * @swagger
@@ -276,5 +276,35 @@ router.delete("/:id", authenticate, notificationController.deleteNotification);
  *               message: "24 notifications deleted"
  */
 router.delete("/", authenticate, notificationController.deleteAllNotifications);
+
+/**
+ * @swagger
+ * /api/v1/notifications/test-email:
+ *   post:
+ *     summary: Send a test email (admin only — use to verify SMTP is working)
+ *     tags: [Notifications]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             properties:
+ *               email: { type: string, example: "admin@example.com" }
+ *     responses:
+ *       200:
+ *         description: Test email sent successfully
+ */
+router.post('/test-email', authenticate, authorize('super_admin', 'admin'), async (req, res, next) => {
+  try {
+    const emailService = require('../utils/emailService');
+    const to = req.body.email || req.user.email;
+    if (!to) return next(new AppError('Provide email in body or ensure your account has an email', 400));
+    await emailService.sendTestEmail(to);
+    return res.json({ success: true, message: `Test email sent to ${to}` });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: 'Test email FAILED', error: err.message });
+  }
+});
 
 module.exports = router;
