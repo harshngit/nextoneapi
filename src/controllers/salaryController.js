@@ -14,6 +14,11 @@
  *   per_day       = monthly_salary / working_days
  *   earned        = per_day × present_days
  *   final         = earned - deductions
+ *
+ * Attendance → salary mapping (set by attendance rules):
+ *   present / late  = 1 full day  (check-in 10:30–14:00 AND checkout ≥ 19:30)
+ *   half_day        = 0.5 day     (check-in after 14:00 OR checkout before 19:30)
+ *   absent / leave  = 0
  */
 
 const { pool }      = require('../config/db')
@@ -53,15 +58,25 @@ const getActiveSalary = async (userId) => {
  * Admin sends the salary amount from the frontend.
  * Creates a new salary record (history preserved).
  */
+/**
+ * POST /api/v1/salary/set
+ * Body: { user_id, monthly_salary?, per_day_salary?, working_days_in_month?, effective_from?, notes? }
+ *
+ * Admin can provide EITHER monthly_salary OR per_day_salary — the other is auto-calculated.
+ * If both are provided, monthly_salary takes priority and per_day is derived from it.
+ *
+ * working_days_in_month (optional, default 26): used only when deriving per_day from monthly.
+ * History is always preserved — every call creates a new record.
+ */
 const setEmployeeSalary = async (req, res, next) => {
   try {
-    const { user_id, monthly_salary, effective_from, notes } = req.body
+    const { user_id, monthly_salary, per_day_salary, working_days_in_month, effective_from, notes } = req.body
 
-    if (!user_id)        return next(new AppError('user_id is required', 400))
-    if (monthly_salary === undefined || monthly_salary === null)
-                         return next(new AppError('monthly_salary is required', 400))
-    if (isNaN(parseFloat(monthly_salary)) || parseFloat(monthly_salary) < 0)
-                         return next(new AppError('monthly_salary must be a non-negative number', 400))
+    if (!user_id) return next(new AppError('user_id is required', 400))
+
+    if (monthly_salary == null && per_day_salary == null) {
+      return next(new AppError('Provide at least one of: monthly_salary or per_day_salary', 400))
+    }
 
     // Verify user exists
     const userChk = await pool.query(
@@ -71,17 +86,43 @@ const setEmployeeSalary = async (req, res, next) => {
     )
     if (!userChk.rows.length) return next(new AppError('Employee not found', 404))
 
+    // Working days used for per_day ↔ monthly conversion (default 26 — standard Indian payroll)
+    const wdMonth = parseInt(working_days_in_month) || 26
+
+    let finalMonthly, finalPerDay
+
+    if (monthly_salary != null) {
+      // Monthly provided → derive per_day
+      finalMonthly = parseFloat(monthly_salary)
+      if (isNaN(finalMonthly) || finalMonthly < 0) {
+        return next(new AppError('monthly_salary must be a non-negative number', 400))
+      }
+      finalPerDay = parseFloat((finalMonthly / wdMonth).toFixed(2))
+    } else {
+      // Only per_day provided → derive monthly
+      finalPerDay = parseFloat(per_day_salary)
+      if (isNaN(finalPerDay) || finalPerDay < 0) {
+        return next(new AppError('per_day_salary must be a non-negative number', 400))
+      }
+      finalMonthly = parseFloat((finalPerDay * wdMonth).toFixed(2))
+    }
+
     const fromDate = effective_from || new Date().toISOString().split('T')[0]
 
     const result = await pool.query(
-      `INSERT INTO employee_salaries (user_id, monthly_salary, effective_from, set_by, notes)
-       VALUES ($1, $2, $3, $4, $5)
+      `INSERT INTO employee_salaries (user_id, monthly_salary, per_day_salary, effective_from, set_by, notes)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
-      [user_id, parseFloat(monthly_salary), fromDate, req.user.id, notes || null]
+      [user_id, finalMonthly, finalPerDay, fromDate, req.user.id, notes || null]
     )
 
-    return sendSuccess(res, 'Employee salary set successfully', {
-      salary:   result.rows[0],
+    return sendSuccess(res, 'Employee salary saved successfully', {
+      salary: {
+        ...result.rows[0],
+        monthly_salary: finalMonthly,
+        per_day_salary:  finalPerDay,
+        working_days_used_for_calculation: wdMonth,
+      },
       employee: userChk.rows[0],
     }, 201)
   } catch (err) { next(err) }
@@ -98,7 +139,8 @@ const getAllEmployeeSalaries = async (req, res, next) => {
       `SELECT
          u.id, CONCAT(u.first_name,' ',u.last_name) AS full_name,
          u.role, u.email, u.phone_number,
-         es.monthly_salary, es.effective_from, es.notes AS salary_notes,
+         es.monthly_salary, es.per_day_salary, es.effective_from,
+         es.notes AS salary_notes,
          es.created_at AS salary_set_at,
          CONCAT(su.first_name,' ',su.last_name) AS set_by_name
        FROM users u
@@ -118,6 +160,7 @@ const getAllEmployeeSalaries = async (req, res, next) => {
       data:  result.rows.map(r => ({
         ...r,
         monthly_salary: r.monthly_salary ? parseFloat(r.monthly_salary) : null,
+        per_day_salary:  r.per_day_salary  ? parseFloat(r.per_day_salary)  : null,
         salary_set: !!r.monthly_salary,
       })),
     })
@@ -188,10 +231,13 @@ const generateSalarySlip = async (req, res, next) => {
     const leaveCount    = parseFloat(att.leave_count)    || 0
     const absentCount   = parseFloat(att.absent_count)   || 0
 
-    // present_days: full days + half days counted as 0.5
+    // Salary rule:
+    //   present / late  → 1.0 × per_day  (full salary)
+    //   half_day        → 0.5 × per_day  (50% deduction — checked in after 2PM or left before 7:30PM)
+    //   on_leave/absent → 0
     const presentDays = presentCount + (halfDayCount * 0.5)
     const absentDays  = absentCount
-    const leaveDays   = leaveCount + (halfDayCount * 0.5)
+    const leaveDays   = leaveCount
 
     // Working days: Mon–Fri count for the month (or admin override)
     const workingDays = working_days_override
@@ -361,6 +407,7 @@ const getMySalary = async (req, res, next) => {
       current_monthly_salary: currentSalary
         ? {
             amount:         parseFloat(currentSalary.monthly_salary),
+            per_day_salary:  currentSalary.per_day_salary ? parseFloat(currentSalary.per_day_salary) : null,
             effective_from: currentSalary.effective_from,
           }
         : null,
@@ -461,6 +508,7 @@ const getSalaryHistory = async (req, res, next) => {
       history:  history.rows.map(r => ({
         ...r,
         monthly_salary: parseFloat(r.monthly_salary),
+        per_day_salary:  r.per_day_salary ? parseFloat(r.per_day_salary) : null,
       })),
     })
   } catch (err) { next(err) }
@@ -538,9 +586,10 @@ const generateAllSalarySlips = async (req, res, next) => {
         const halfDayCount = parseFloat(att.half_day_count) || 0
         const leaveCount   = parseFloat(att.leave_count)    || 0
         const absentCount  = parseFloat(att.absent_count)   || 0
+        // present/late = full day, half_day = 0.5 day
         const presentDays  = presentCount + (halfDayCount * 0.5)
         const absentDays   = absentCount
-        const leaveDays    = leaveCount + (halfDayCount * 0.5)
+        const leaveDays    = leaveCount
 
         const monthlySalary = parseFloat(emp.monthly_salary)
         const perDaySalary  = parseFloat((monthlySalary / workingDays).toFixed(2))

@@ -25,11 +25,13 @@ const MANAGER = ['super_admin', 'admin', 'sales_manager']
  * @swagger
  * /api/v1/salary/set:
  *   post:
- *     summary: Set monthly salary for an employee (Admin)
+ *     summary: Set salary for an employee (Admin)
  *     description: >
- *       Admin sets the monthly gross salary for an employee.
- *       The amount comes from the frontend form.
- *       Each update creates a new record — history is preserved.
+ *       Admin sets the salary for an employee from the frontend form.
+ *       You can provide EITHER monthly_salary OR per_day_salary — the other
+ *       is auto-calculated using working_days_in_month (default 26).
+ *       If both are provided, monthly_salary takes priority.
+ *       Every call creates a new record — full history is preserved.
  *     tags: [Salary]
  *     security:
  *       - BearerAuth: []
@@ -39,7 +41,7 @@ const MANAGER = ['super_admin', 'admin', 'sales_manager']
  *         application/json:
  *           schema:
  *             type: object
- *             required: [user_id, monthly_salary]
+ *             required: [user_id]
  *             properties:
  *               user_id:
  *                 type: string
@@ -47,8 +49,16 @@ const MANAGER = ['super_admin', 'admin', 'sales_manager']
  *                 example: "user-uuid-001"
  *               monthly_salary:
  *                 type: number
- *                 description: Gross monthly salary in INR
+ *                 description: Gross monthly salary in INR. Per-day is auto-calculated.
  *                 example: 35000
+ *               per_day_salary:
+ *                 type: number
+ *                 description: Per-day salary in INR. Monthly is auto-calculated.
+ *                 example: 1346.15
+ *               working_days_in_month:
+ *                 type: integer
+ *                 description: Working days used for monthly/per-day conversion (default 26)
+ *                 example: 26
  *               effective_from:
  *                 type: string
  *                 format: date
@@ -59,21 +69,25 @@ const MANAGER = ['super_admin', 'admin', 'sales_manager']
  *                 example: "Revised after appraisal"
  *     responses:
  *       201:
- *         description: Salary set successfully
+ *         description: Salary saved successfully with both monthly and per-day values
  *         content:
  *           application/json:
  *             example:
  *               success: true
- *               message: "Employee salary set successfully"
+ *               message: "Employee salary saved successfully"
  *               data:
  *                 salary:
  *                   id: "uuid"
  *                   user_id: "user-uuid-001"
  *                   monthly_salary: 35000
+ *                   per_day_salary: 1346.15
  *                   effective_from: "2026-06-01"
+ *                   working_days_used_for_calculation: 26
  *                 employee:
  *                   full_name: "Rahul Sharma"
  *                   role: "sales_executive"
+ *       400:
+ *         description: Neither monthly_salary nor per_day_salary provided
  *       404:
  *         description: Employee not found
  */
@@ -256,7 +270,7 @@ router.post('/generate', authenticate, authorize(...ADMIN), ctrl.generateSalaryS
  *                 description: Apply same override to all employees
  *               deductions_map:
  *                 type: object
- *                 description: Per-user deduction amounts — { "user_uuid": amount }
+ *                 description: Per-user deduction amounts keyed by user UUID. Example format - user_uuid mapped to deduction amount.
  *                 example: { "user-uuid-001": 500, "user-uuid-002": 0 }
  *               notes:
  *                 type: string

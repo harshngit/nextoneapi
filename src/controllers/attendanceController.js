@@ -7,17 +7,80 @@ const AppError = require('../utils/AppError')
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+/**
+ * ─── Attendance Rules ────────────────────────────────────────────────────────
+ *
+ * CHECK-IN window determines status:
+ *   Before 10:30          → present  (on time)
+ *   10:30 – 14:00         → present  (allowed window, still counts as full day)
+ *   After  14:00          → half_day (too late for full day)
+ *
+ * CHECK-OUT rule (applied at checkout):
+ *   Checked out BEFORE 19:30  → downgrades to half_day (left too early)
+ *   Checked out AT/AFTER 19:30 → keeps existing check-in status
+ *
+ * SALARY impact:
+ *   present / late  → 100% of per-day salary
+ *   half_day        → 50%  of per-day salary
+ *   absent          → 0%
+ */
+
+const CHECKIN_WINDOW_START = '10:30'  // earliest allowed check-in for full day
+const CHECKIN_HALF_DAY_CUTOFF = '14:00' // after this → half day
+const CHECKOUT_FULL_DAY_TIME  = '19:30' // must check out at/after this for full day
+
 const resolveStatus = async (checkInTime) => {
   try {
-    const cfg = await pool.query(`SELECT office_checkin_late FROM system_settings LIMIT 1`)
-    const lateStr   = cfg.rows[0]?.office_checkin_late || '09:30'
-    const [lh, lm]  = lateStr.split(':').map(Number)
-    const checkIn   = new Date(checkInTime)
-    const lateLimit = new Date(checkIn)
-    lateLimit.setHours(lh, lm, 0, 0)
-    return checkIn > lateLimit ? 'late' : 'present'
-  } catch { return 'present' }
+    const checkIn = new Date(checkInTime)
+    const h = checkIn.getHours()
+    const m = checkIn.getMinutes()
+    const totalMinutes = h * 60 + m
+
+    // Parse cutoffs
+    const [hdH, hdM] = CHECKIN_HALF_DAY_CUTOFF.split(':').map(Number)
+    const halfDayCutoffMins = hdH * 60 + hdM  // 14:00 = 840
+
+    // After 14:00 → half_day immediately at check-in
+    if (totalMinutes > halfDayCutoffMins) {
+      return 'half_day'
+    }
+
+    // 10:30 to 14:00 → present (full day, on time or slightly late but acceptable)
+    // Before 10:30 → also present
+    return 'present'
+  } catch {
+    return 'present'
+  }
 }
+
+/**
+ * Re-evaluates attendance status at checkout time.
+ * If employee checks out before 19:30, downgrades to half_day.
+ * Returns the final status to save.
+ */
+const resolveStatusAtCheckout = (checkInStatus, checkOutTime) => {
+  try {
+    const checkOut = new Date(checkOutTime)
+    const h = checkOut.getHours()
+    const m = checkOut.getMinutes()
+    const totalMinutes = h * 60 + m
+
+    const [coH, coM] = CHECKOUT_FULL_DAY_TIME.split(':').map(Number)
+    const fullDayMins = coH * 60 + coM  // 19:30 = 1170
+
+    // If checked out before 19:30 → half day regardless of check-in status
+    if (totalMinutes < fullDayMins) {
+      return 'half_day'
+    }
+
+    // Checked out on time — keep whatever status was set at check-in
+    return checkInStatus
+  } catch {
+    return checkInStatus
+  }
+}
+
+
 
 const calcWorkingHours = (checkIn, checkOut) => {
   if (!checkIn || !checkOut) return null
@@ -154,17 +217,34 @@ const checkOut = async (req, res, next) => {
     const ip           = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || null
     const userMeta     = await getUserMeta(userId)
 
+    // Re-evaluate final status based on checkout time
+    // If checked out before 19:30 → half_day (left early)
+    const currentStatus = existing.rows[0].status
+    const finalStatus   = resolveStatusAtCheckout(currentStatus, checkOutTime)
+
     const r = await pool.query(
-      `UPDATE attendance SET check_out_time=$1, working_hours=$2,
-         checkout_photo=COALESCE($3,checkout_photo),
-         checkout_latitude=$4, checkout_longitude=$5, checkout_address=$6,
-         checkout_ip=$7, checkout_device=$8, notes=COALESCE($9,notes), updated_at=NOW()
-       WHERE user_id=$10 AND date=$11 RETURNING *`,
-      [checkOutTime, workingHours, photo, latitude||null, longitude||null, address||null, ip, device||null, notes||null, userId, today]
+      `UPDATE attendance SET check_out_time=$1, working_hours=$2, status=$3,
+         checkout_photo=COALESCE($4,checkout_photo),
+         checkout_latitude=$5, checkout_longitude=$6, checkout_address=$7,
+         checkout_ip=$8, checkout_device=$9, notes=COALESCE($10,notes), updated_at=NOW()
+       WHERE user_id=$11 AND date=$12 RETURNING *`,
+      [checkOutTime, workingHours, finalStatus, photo, latitude||null, longitude||null, address||null, ip, device||null, notes||null, userId, today]
     )
 
-    return sendSuccess(res, 'Checked out successfully', {
-      attendance: r.rows[0], user: userMeta, working_hours: workingHours,
+    const statusMessage = finalStatus === 'half_day' && currentStatus !== 'half_day'
+      ? 'Checked out — marked as half day (checkout before 7:30 PM)'
+      : 'Checked out successfully'
+
+    return sendSuccess(res, statusMessage, {
+      attendance:    r.rows[0],
+      user:          userMeta,
+      working_hours: workingHours,
+      status:        finalStatus,
+      checkout_rule: {
+        checked_out_at: checkOutTime.toTimeString().slice(0, 5),
+        full_day_requires: CHECKOUT_FULL_DAY_TIME,
+        is_full_day: finalStatus !== 'half_day',
+      },
     })
   } catch (err) { next(err) }
 }
@@ -242,6 +322,7 @@ const getMyAttendance = async (req, res, next) => {
     const s = sum.rows[0]
     const presentCount = parseInt(s.present)
     const halfDayCount = parseInt(s.half_day)
+    // Salary rule: present/late = full, half_day = 0.5, absent/leave = 0
     const presentDays  = presentCount + (halfDayCount * 0.5)
 
     // Calculate earned salary on the fly from attendance
