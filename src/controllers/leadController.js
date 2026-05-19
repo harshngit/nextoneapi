@@ -154,6 +154,28 @@ const getAllLeads = async (req, res, next) => {
 };
 
 /**
+ * POST /api/v1/leads/upload-recording
+ * Standalone file upload — returns { url, filename, size }
+ * Call this FIRST, get the URL, then pass it in create/update lead body.
+ * Field name: voice_recording
+ */
+const uploadRecordingFile = async (req, res, next) => {
+  try {
+    if (!req.file) return next(new AppError('No file uploaded. Use field name: voice_recording', 400));
+
+    const fileUrl  = `/uploads/leads/voice/${req.file.filename}`;
+    const fileName = req.file.originalname;
+    const fileSize = req.file.size || null;
+
+    return sendSuccess(res, 'File uploaded successfully', {
+      url:      fileUrl,
+      filename: fileName,
+      size:     fileSize,
+    }, 201);
+  } catch (err) { next(err); }
+};
+
+/**
  * POST /api/v1/leads
  * Email → Internal: New Lead detail  |  Client: Welcome email
  */
@@ -162,8 +184,19 @@ const createLead = async (req, res, next) => {
   try {
     const { name, phone, alternate_phone_number, email, source, project_id,
             assigned_to, budget, location_preference, notes,
-            callback_time, next_followup_time } = req.body;
+            callback_time, next_followup_time,
+            call_recordings } = req.body;
+
     if (!name || !phone) return next(new AppError("name and phone are required", 400));
+
+    // Validate call_recordings if provided
+    let recordings = [];
+    if (call_recordings) {
+      recordings = Array.isArray(call_recordings) ? call_recordings : [call_recordings];
+      for (const rec of recordings) {
+        if (!rec.url) return next(new AppError('Each call_recording must have a url', 400));
+      }
+    }
 
     await client.query("BEGIN");
 
@@ -184,6 +217,21 @@ const createLead = async (req, res, next) => {
     await logActivity(client, lead.id, "note", notes || "Lead created", req.user.id);
     if (assigned_to) {
       await logActivity(client, lead.id, "assignment", "Lead assigned to user", req.user.id);
+    }
+
+    // ── Save call recordings ─────────────────────────────────────────────────
+    const savedRecordings = [];
+    if (recordings.length > 0) {
+      for (const rec of recordings) {
+        const recResult = await client.query(
+          `INSERT INTO call_recordings (lead_id, url, phone_number, name, uploaded_by)
+           VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+          [lead.id, rec.url, rec.phone_number || null, rec.name || null, req.user.id]
+        );
+        savedRecordings.push(recResult.rows[0]);
+      }
+      await logActivity(client, lead.id, "call",
+        `${recordings.length} call recording(s) attached`, req.user.id);
     }
 
     await client.query("COMMIT");
@@ -229,7 +277,10 @@ const createLead = async (req, res, next) => {
     });
     // ─────────────────────────────────────────────────────────────────────────
 
-    return sendSuccess(res, "Lead created", lead, 201);
+    return sendSuccess(res, "Lead created", {
+      ...lead,
+      call_recordings: savedRecordings,
+    }, 201);
   } catch (err) {
     await client.query("ROLLBACK");
     next(err);
@@ -834,94 +885,198 @@ const sendLeadEmail = async (req, res, next) => {
   }
 };
 
-
 /**
- * POST /api/v1/leads/:id/voice-recording
- * Uploads a voice recording for a lead (multipart/form-data, field: voice_recording).
- * Also accepts callback_time and next_followup_time as body fields.
+ * ─── CALL RECORDINGS ──────────────────────────────────────────────────────────
+ *
+ * Each lead can have multiple call recordings.
+ * Every recording stores: file URL, phone_number, name (label), file size.
+ *
+ * Endpoints:
+ *   POST   /api/v1/leads/:id/call-recordings        → upload file OR pass URL array
+ *   GET    /api/v1/leads/:id/call-recordings        → list all recordings for a lead
+ *   PATCH  /api/v1/leads/:id/call-recordings/:rid   → update name / phone_number
+ *   DELETE /api/v1/leads/:id/call-recordings/:rid   → delete one recording
  */
-const uploadVoiceRecording = async (req, res, next) => {
+
+// ─── POST /api/v1/leads/:id/call-recordings ───────────────────────────────────
+// Mode 1 — File upload (multipart/form-data):
+//   field: voice_recording (required)
+//   body:  phone_number (optional), name (optional)
+//
+// Mode 2 — JSON body (recording URL already exists, e.g. from phone system):
+//   body: { call_recording: [{ url, phone_number, name }] }
+//   or    { call_recording: { url, phone_number, name } }  (single object also accepted)
+const addCallRecording = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { role, id: callerId } = req.user;
 
-    const existing = await pool.query(
-      'SELECT id, assigned_to, voice_recording_url FROM leads WHERE id = $1 AND is_archived = false',
-      [id]
+    const leadChk = await pool.query(
+      'SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false', [id]
     );
-    if (!existing.rows.length) return next(new AppError('Lead not found', 404));
-
-    const lead = existing.rows[0];
+    if (!leadChk.rows.length) return next(new AppError('Lead not found', 404));
+    const lead = leadChk.rows[0];
     if (role === 'sales_executive' && lead.assigned_to !== callerId) {
       return next(new AppError('Access denied', 403));
     }
 
-    if (!req.file) return next(new AppError('No voice recording file uploaded', 400));
+    const inserted = [];
 
-    // Delete old file from disk if one existed
-    if (lead.voice_recording_url) {
-      const oldPath = path.join(process.cwd(), lead.voice_recording_url);
-      if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+    // ── Mode 1: File upload ──────────────────────────────────────────────────
+    if (req.file) {
+      const { phone_number, name } = req.body;
+      const fileUrl  = `/uploads/leads/voice/${req.file.filename}`;
+      const fileName = name || req.file.originalname;
+      const fileSize = req.file.size || null;
+
+      const result = await pool.query(
+        `INSERT INTO call_recordings (lead_id, url, phone_number, name, file_size, uploaded_by)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [id, fileUrl, phone_number || null, fileName, fileSize, callerId]
+      );
+      inserted.push(result.rows[0]);
+
+      await pool.query(
+        `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, 'call', $2, $3)`,
+        [id, `Call recording uploaded: ${fileName}${phone_number ? ` (${phone_number})` : ''}`, callerId]
+      );
     }
 
-    const fileUrl  = `/uploads/leads/voice/${req.file.filename}`;
-    const fileName = req.file.originalname;
+    // ── Mode 2: JSON URL array ───────────────────────────────────────────────
+    else if (req.body.call_recording) {
+      let recordings = req.body.call_recording;
+      if (!Array.isArray(recordings)) recordings = [recordings];
+      if (!recordings.length) return next(new AppError('call_recording array cannot be empty', 400));
 
-    const result = await pool.query(
-      `UPDATE leads
-       SET voice_recording_url = $1, voice_recording_name = $2, updated_at = NOW()
-       WHERE id = $3 RETURNING id, voice_recording_url, voice_recording_name`,
-      [fileUrl, fileName, id]
-    );
+      for (const rec of recordings) {
+        if (!rec.url) return next(new AppError('Each recording must have a url', 400));
+        const result = await pool.query(
+          `INSERT INTO call_recordings (lead_id, url, phone_number, name, uploaded_by)
+           VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+          [id, rec.url, rec.phone_number || null, rec.name || null, callerId]
+        );
+        inserted.push(result.rows[0]);
+      }
 
-    // Log activity
-    await pool.query(
-      `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, 'note', $2, $3)`,
-      [id, `Voice recording uploaded: ${fileName}`, callerId]
-    );
+      await pool.query(
+        `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, 'call', $2, $3)`,
+        [id, `${inserted.length} call recording(s) added`, callerId]
+      );
+    } else {
+      return next(new AppError('Provide either a voice_recording file or call_recording JSON', 400));
+    }
 
-    return sendSuccess(res, 'Voice recording uploaded', result.rows[0], 201);
+    return sendSuccess(res, `${inserted.length} call recording(s) saved`, {
+      lead_id: id, recordings: inserted,
+    }, 201);
   } catch (err) { next(err); }
 };
 
-/**
- * DELETE /api/v1/leads/:id/voice-recording
- * Removes the voice recording from a lead.
- */
-const deleteVoiceRecording = async (req, res, next) => {
+// ─── GET /api/v1/leads/:id/call-recordings ────────────────────────────────────
+const getCallRecordings = async (req, res, next) => {
   try {
     const { id } = req.params;
     const { role, id: callerId } = req.user;
 
-    const existing = await pool.query(
-      'SELECT id, assigned_to, voice_recording_url FROM leads WHERE id = $1 AND is_archived = false',
-      [id]
+    const leadChk = await pool.query(
+      'SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false', [id]
     );
-    if (!existing.rows.length) return next(new AppError('Lead not found', 404));
-
-    const lead = existing.rows[0];
+    if (!leadChk.rows.length) return next(new AppError('Lead not found', 404));
+    const lead = leadChk.rows[0];
     if (role === 'sales_executive' && lead.assigned_to !== callerId) {
       return next(new AppError('Access denied', 403));
     }
-    if (!lead.voice_recording_url) {
-      return next(new AppError('No voice recording found for this lead', 404));
-    }
 
-    // Delete file from disk
-    const filePath = path.join(process.cwd(), lead.voice_recording_url);
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-
-    await pool.query(
-      `UPDATE leads SET voice_recording_url = NULL, voice_recording_name = NULL, updated_at = NOW() WHERE id = $1`,
+    const result = await pool.query(
+      `SELECT cr.*, CONCAT(u.first_name,' ',u.last_name) AS uploaded_by_name
+       FROM call_recordings cr
+       LEFT JOIN users u ON u.id = cr.uploaded_by
+       WHERE cr.lead_id = $1
+       ORDER BY cr.created_at DESC`,
       [id]
     );
 
-    await pool.query(
-      `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, 'note', $2, $3)`,
-      [id, 'Voice recording deleted', callerId]
+    return sendSuccess(res, 'Call recordings fetched', {
+      lead_id: id, total: result.rows.length, recordings: result.rows,
+    });
+  } catch (err) { next(err); }
+};
+
+// ─── PATCH /api/v1/leads/:id/call-recordings/:rid ────────────────────────────
+// Update name and/or phone_number of an existing recording
+const updateCallRecording = async (req, res, next) => {
+  try {
+    const { id, rid } = req.params;
+    const { role, id: callerId } = req.user;
+    const { name, phone_number } = req.body;
+
+    const leadChk = await pool.query(
+      'SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false', [id]
+    );
+    if (!leadChk.rows.length) return next(new AppError('Lead not found', 404));
+    const lead = leadChk.rows[0];
+    if (role === 'sales_executive' && lead.assigned_to !== callerId) {
+      return next(new AppError('Access denied', 403));
+    }
+
+    const recChk = await pool.query(
+      'SELECT * FROM call_recordings WHERE id = $1 AND lead_id = $2', [rid, id]
+    );
+    if (!recChk.rows.length) return next(new AppError('Recording not found', 404));
+
+    const updates = []; const params = []; let idx = 1;
+    if (name         !== undefined) { updates.push(`name = $${idx++}`);         params.push(name); }
+    if (phone_number !== undefined) { updates.push(`phone_number = $${idx++}`); params.push(phone_number); }
+    if (!updates.length) return next(new AppError('Provide name or phone_number to update', 400));
+
+    updates.push('updated_at = NOW()');
+    params.push(rid, id);
+
+    const result = await pool.query(
+      `UPDATE call_recordings SET ${updates.join(', ')}
+       WHERE id = $${idx++} AND lead_id = $${idx++} RETURNING *`,
+      params
     );
 
-    return sendSuccess(res, 'Voice recording deleted');
+    return sendSuccess(res, 'Recording updated', result.rows[0]);
+  } catch (err) { next(err); }
+};
+
+// ─── DELETE /api/v1/leads/:id/call-recordings/:rid ───────────────────────────
+const deleteCallRecording = async (req, res, next) => {
+  try {
+    const { id, rid } = req.params;
+    const { role, id: callerId } = req.user;
+
+    const leadChk = await pool.query(
+      'SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false', [id]
+    );
+    if (!leadChk.rows.length) return next(new AppError('Lead not found', 404));
+    const lead = leadChk.rows[0];
+    if (role === 'sales_executive' && lead.assigned_to !== callerId) {
+      return next(new AppError('Access denied', 403));
+    }
+
+    const recChk = await pool.query(
+      'SELECT * FROM call_recordings WHERE id = $1 AND lead_id = $2', [rid, id]
+    );
+    if (!recChk.rows.length) return next(new AppError('Recording not found', 404));
+    const rec = recChk.rows[0];
+
+    // Delete physical file only if it was uploaded locally
+    if (rec.url && rec.url.startsWith('/uploads/')) {
+      const filePath = path.join(process.cwd(), rec.url);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    }
+
+    await pool.query('DELETE FROM call_recordings WHERE id = $1', [rid]);
+
+    await pool.query(
+      `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, 'note', $2, $3)`,
+      [id, `Call recording deleted: ${rec.name || rec.url}`, callerId]
+    );
+
+    return sendSuccess(res, 'Recording deleted');
   } catch (err) { next(err); }
 };
 
@@ -940,6 +1095,9 @@ module.exports = {
   getLeadSources,
   sendLeadWhatsapp,
   sendLeadEmail,
-  uploadVoiceRecording,
-  deleteVoiceRecording,
+  uploadRecordingFile,
+  addCallRecording,
+  getCallRecordings,
+  updateCallRecording,
+  deleteCallRecording,
 };

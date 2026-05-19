@@ -111,13 +111,66 @@ router.get("/", authenticate, leadController.getAllLeads);
 
 /**
  * @swagger
+ * /api/v1/leads/upload-recording:
+ *   post:
+ *     summary: Upload a call recording file — returns url to use in lead body
+ *     description: >
+ *       Step 1 of the 2-step recording flow.
+ *       Upload an audio file here first — the API returns a url.
+ *       Then pass that url inside call_recordings array when creating or updating a lead.
+ *       Supported formats: mp3, wav, webm, ogg, aac, m4a. Max 25 MB.
+ *       Field name must be voice_recording.
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [voice_recording]
+ *             properties:
+ *               voice_recording:
+ *                 type: string
+ *                 format: binary
+ *                 description: Audio file max 25 MB
+ *     responses:
+ *       201:
+ *         description: File uploaded — use the returned url in call_recordings
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "File uploaded successfully"
+ *               data:
+ *                 url: "/uploads/leads/voice/voice_lead-uuid_1234567890.webm"
+ *                 filename: "call_suresh_june1.webm"
+ *                 size: 204800
+ *       400:
+ *         description: No file uploaded
+ */
+router.post(
+  "/upload-recording",
+  authenticate,
+  require("../middleware/uploadMiddleware").uploadLeadVoice,
+  leadController.uploadRecordingFile
+);
+
+/**
+ * @swagger
  * /api/v1/leads:
  *   post:
  *     summary: Create a new lead
  *     description: >
- *       Creates a new lead in the system. The lead can be assigned immediately
- *       to a sales executive or left unassigned for the manager to assign later.
- *       Status defaults to 'new' on creation.
+ *       Creates a new lead. All fields are JSON — no file upload here.
+ *
+ *       Call recordings flow (2 steps):
+ *       Step 1 - Upload file via POST /api/v1/leads/upload-recording to get a url.
+ *       Step 2 - Pass that url in the call_recordings array in this request body.
+ *       Multiple recordings can be attached at create time. Omit call_recordings if none.
+ *
+ *       Status defaults to new on creation.
  *     tags: [Lead Management]
  *     security:
  *       - BearerAuth: []
@@ -138,7 +191,6 @@ router.get("/", authenticate, leadController.getAllLeads);
  *               alternate_phone_number:
  *                 type: string
  *                 example: "+919876543211"
- *                 description: Optional alternate contact number (can be same as primary phone)
  *               email:
  *                 type: string
  *                 format: email
@@ -146,16 +198,12 @@ router.get("/", authenticate, leadController.getAllLeads);
  *               source:
  *                 type: string
  *                 example: "Facebook"
- *                 description: Where the lead came from
  *               project_id:
  *                 type: string
  *                 format: uuid
- *                 example: "proj-uuid-001"
  *               assigned_to:
  *                 type: string
  *                 format: uuid
- *                 example: "user-uuid-001"
- *                 description: Sales Executive to assign this lead to
  *               budget:
  *                 type: string
  *                 example: "80-100L"
@@ -164,17 +212,35 @@ router.get("/", authenticate, leadController.getAllLeads);
  *                 example: "Andheri West"
  *               notes:
  *                 type: string
- *                 example: "Interested in 2BHK, wants sea view"
  *               callback_time:
  *                 type: string
  *                 format: date-time
- *                 description: Scheduled callback time for this lead (ISO 8601). Optional.
  *                 example: "2026-06-01T10:30:00Z"
  *               next_followup_time:
  *                 type: string
  *                 format: date-time
- *                 description: Scheduled next follow-up time (ISO 8601). Optional.
  *                 example: "2026-06-03T11:00:00Z"
+ *               call_recordings:
+ *                 type: array
+ *                 description: >
+ *                   Optional. Get the url from POST /api/v1/leads/upload-recording first.
+ *                   Pass null or omit entirely if no recordings.
+ *                 items:
+ *                   type: object
+ *                   required: [url]
+ *                   properties:
+ *                     url:
+ *                       type: string
+ *                       description: File url returned from upload-recording endpoint
+ *                       example: "/uploads/leads/voice/voice_abc123.webm"
+ *                     phone_number:
+ *                       type: string
+ *                       description: Phone number of the person on the call
+ *                       example: "+919876543210"
+ *                     name:
+ *                       type: string
+ *                       description: Label for this recording
+ *                       example: "First call - Suresh"
  *           example:
  *             name: "Suresh Patel"
  *             phone: "+919876543210"
@@ -185,9 +251,13 @@ router.get("/", authenticate, leadController.getAllLeads);
  *             assigned_to: "user-uuid-001"
  *             budget: "80-100L"
  *             location_preference: "Andheri West"
- *             notes: "Interested in 2BHK, wants sea view"
+ *             notes: "Interested in 2BHK"
  *             callback_time: "2026-06-01T10:30:00Z"
  *             next_followup_time: "2026-06-03T11:00:00Z"
+ *             call_recordings:
+ *               - url: "/uploads/leads/voice/voice_abc123.webm"
+ *                 phone_number: "+919876543210"
+ *                 name: "First call - Suresh"
  *     responses:
  *       201:
  *         description: Lead created successfully
@@ -195,16 +265,22 @@ router.get("/", authenticate, leadController.getAllLeads);
  *           application/json:
  *             example:
  *               success: true
- *               message: "Lead created successfully"
+ *               message: "Lead created"
  *               data:
  *                 id: "lead-uuid-001"
  *                 name: "Suresh Patel"
  *                 status: "new"
  *                 callback_time: "2026-06-01T10:30:00Z"
  *                 next_followup_time: "2026-06-03T11:00:00Z"
- *                 created_at: "2025-04-20T10:00:00Z"
+ *                 call_recordings:
+ *                   - id: "rec-uuid-001"
+ *                     lead_id: "lead-uuid-001"
+ *                     url: "/uploads/leads/voice/voice_abc123.webm"
+ *                     phone_number: "+919876543210"
+ *                     name: "First call - Suresh"
+ *                     created_at: "2026-06-01T10:35:00Z"
  *       400:
- *         description: Validation error
+ *         description: name and phone are required
  */
 router.post("/", authenticate, leadController.createLead);
 
@@ -729,14 +805,22 @@ router.post("/:id/send-email", authenticate, leadController.sendLeadEmail);
 
 /**
  * @swagger
- * /api/v1/leads/{id}/voice-recording:
+ * /api/v1/leads/{id}/call-recordings:
  *   post:
- *     summary: Upload a voice recording for a lead (optional)
+ *     summary: Add a call recording to a lead
  *     description: >
- *       Uploads an audio file as a voice recording for the lead.
- *       Send as multipart/form-data with field name `voice_recording`.
- *       Supported formats: webm, ogg, mp3, mp4 audio, wav, aac. Max 25 MB.
- *       If a recording already exists it will be replaced.
+ *       Two modes supported:
+ *
+ *       **Mode 1 — File Upload** (multipart/form-data):
+ *       Upload an audio file directly. Field name must be `voice_recording`.
+ *       Optionally include `phone_number` and `name` as form fields.
+ *       Supported formats: webm, ogg, mp3, wav, aac, m4a. Max 25 MB.
+ *
+ *       **Mode 2 — JSON URL Array** (application/json):
+ *       Pass `call_recording` as an array (or single object) of recordings
+ *       that already exist at a URL (e.g. from a phone system or CRM).
+ *       Each item must have a `url`. `phone_number` and `name` are optional.
+ *       Multiple recordings can be added in one request.
  *     tags: [Lead Management]
  *     security:
  *       - BearerAuth: []
@@ -747,8 +831,8 @@ router.post("/:id/send-email", authenticate, leadController.sendLeadEmail);
  *         schema:
  *           type: string
  *           format: uuid
+ *         example: "lead-uuid-001"
  *     requestBody:
- *       required: true
  *       content:
  *         multipart/form-data:
  *           schema:
@@ -758,37 +842,89 @@ router.post("/:id/send-email", authenticate, leadController.sendLeadEmail);
  *               voice_recording:
  *                 type: string
  *                 format: binary
- *                 description: Audio file (webm, mp3, wav, ogg, aac — max 25 MB)
+ *                 description: Audio file — webm, mp3, wav, ogg, aac (max 25 MB)
+ *               phone_number:
+ *                 type: string
+ *                 example: "+919876543210"
+ *               name:
+ *                 type: string
+ *                 example: "Call with Suresh - 1 June"
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [call_recording]
+ *             properties:
+ *               call_recording:
+ *                 description: Single object or array of recordings
+ *                 oneOf:
+ *                   - type: array
+ *                     items:
+ *                       type: object
+ *                       required: [url]
+ *                       properties:
+ *                         url:
+ *                           type: string
+ *                           example: "https://calls.example.com/rec_abc123.mp3"
+ *                         phone_number:
+ *                           type: string
+ *                           example: "+919876543210"
+ *                         name:
+ *                           type: string
+ *                           example: "Call with Suresh - 1 June"
+ *                   - type: object
+ *                     required: [url]
+ *                     properties:
+ *                       url:
+ *                         type: string
+ *                       phone_number:
+ *                         type: string
+ *                       name:
+ *                         type: string
+ *           example:
+ *             call_recording:
+ *               - url: "https://calls.example.com/rec_abc123.mp3"
+ *                 phone_number: "+919876543210"
+ *                 name: "Call with Suresh - 1 June"
+ *               - url: "https://calls.example.com/rec_def456.mp3"
+ *                 phone_number: "+919876543211"
+ *                 name: "Follow-up call"
  *     responses:
  *       201:
- *         description: Voice recording uploaded
+ *         description: Recording(s) saved
  *         content:
  *           application/json:
  *             example:
  *               success: true
+ *               message: "2 call recording(s) saved"
  *               data:
- *                 id: "lead-uuid-001"
- *                 voice_recording_url: "/uploads/leads/voice/voice_lead-uuid_1234567890.webm"
- *                 voice_recording_name: "call_with_suresh.webm"
+ *                 lead_id: "lead-uuid-001"
+ *                 recordings:
+ *                   - id: "rec-uuid-001"
+ *                     lead_id: "lead-uuid-001"
+ *                     url: "https://calls.example.com/rec_abc123.mp3"
+ *                     phone_number: "+919876543210"
+ *                     name: "Call with Suresh - 1 June"
+ *                     uploaded_by_name: "Rahul Sharma"
+ *                     created_at: "2026-06-01T10:35:00Z"
  *       400:
- *         description: No file uploaded or invalid file type
+ *         description: No file or call_recording provided
  *       403:
  *         description: Access denied
  *       404:
  *         description: Lead not found
  */
 router.post(
-  "/:id/voice-recording",
+  "/:id/call-recordings",
   authenticate,
   require("../middleware/uploadMiddleware").uploadLeadVoice,
-  leadController.uploadVoiceRecording
+  leadController.addCallRecording
 );
 
 /**
  * @swagger
- * /api/v1/leads/{id}/voice-recording:
- *   delete:
- *     summary: Delete the voice recording from a lead
+ * /api/v1/leads/{id}/call-recordings:
+ *   get:
+ *     summary: Get all call recordings for a lead
  *     tags: [Lead Management]
  *     security:
  *       - BearerAuth: []
@@ -799,13 +935,102 @@ router.post(
  *         schema:
  *           type: string
  *           format: uuid
+ *         example: "lead-uuid-001"
  *     responses:
  *       200:
- *         description: Voice recording deleted
- *       404:
- *         description: Lead or recording not found
+ *         description: Recordings list
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 lead_id: "lead-uuid-001"
+ *                 total: 2
+ *                 recordings:
+ *                   - id: "rec-uuid-001"
+ *                     url: "https://calls.example.com/rec_abc123.mp3"
+ *                     phone_number: "+919876543210"
+ *                     name: "Call with Suresh - 1 June"
+ *                     file_size: 204800
+ *                     uploaded_by_name: "Rahul Sharma"
+ *                     created_at: "2026-06-01T10:35:00Z"
  */
-router.delete("/:id/voice-recording", authenticate, leadController.deleteVoiceRecording);
+router.get("/:id/call-recordings", authenticate, leadController.getCallRecordings);
+
+/**
+ * @swagger
+ * /api/v1/leads/{id}/call-recordings/{rid}:
+ *   patch:
+ *     summary: Update a recording's name or phone number
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *       - in: path
+ *         name: rid
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Recording ID
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 example: "Updated call label"
+ *               phone_number:
+ *                 type: string
+ *                 example: "+919876543210"
+ *     responses:
+ *       200:
+ *         description: Recording updated
+ *       404:
+ *         description: Recording not found
+ */
+router.patch("/:id/call-recordings/:rid", authenticate, leadController.updateCallRecording);
+
+/**
+ * @swagger
+ * /api/v1/leads/{id}/call-recordings/{rid}:
+ *   delete:
+ *     summary: Delete a call recording
+ *     description: Deletes the recording record and removes the file from disk if it was uploaded locally.
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *       - in: path
+ *         name: rid
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Recording ID
+ *     responses:
+ *       200:
+ *         description: Recording deleted
+ *       404:
+ *         description: Recording not found
+ */
+router.delete("/:id/call-recordings/:rid", authenticate, leadController.deleteCallRecording);
+
+
 
 
 
