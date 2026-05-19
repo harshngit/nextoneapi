@@ -1,0 +1,29 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Deploy to nextone-backend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key:      ${{ secrets.VPS_SSH_KEY }}
+          port:     ${{ secrets.VPS_PORT }}
+          script: |
+            cd /var/www/nextoneapi
+            git pull origin main
+            npm install --production
+            pm2 restart nextone-backend --update-env
+            pm2 status

@@ -93,6 +93,10 @@ const { authenticate, authorize } = require("../middleware/auth");
  *                   email: "suresh.patel@gmail.com"
  *                   status: "interested"
  *                   source: "Facebook"
+ *                   budget: "80-100L"
+ *                   location_preference: "Andheri West"
+ *                   callback_time: "2026-06-01T10:30:00Z"
+ *                   next_followup_time: "2026-06-03T11:00:00Z"
  *                   project_id: "proj-uuid-001"
  *                   assigned_to: "user-uuid-001"
  *                   assigned_name: "Rahul Sharma"
@@ -161,6 +165,16 @@ router.get("/", authenticate, leadController.getAllLeads);
  *               notes:
  *                 type: string
  *                 example: "Interested in 2BHK, wants sea view"
+ *               callback_time:
+ *                 type: string
+ *                 format: date-time
+ *                 description: Scheduled callback time for this lead (ISO 8601). Optional.
+ *                 example: "2026-06-01T10:30:00Z"
+ *               next_followup_time:
+ *                 type: string
+ *                 format: date-time
+ *                 description: Scheduled next follow-up time (ISO 8601). Optional.
+ *                 example: "2026-06-03T11:00:00Z"
  *           example:
  *             name: "Suresh Patel"
  *             phone: "+919876543210"
@@ -172,6 +186,8 @@ router.get("/", authenticate, leadController.getAllLeads);
  *             budget: "80-100L"
  *             location_preference: "Andheri West"
  *             notes: "Interested in 2BHK, wants sea view"
+ *             callback_time: "2026-06-01T10:30:00Z"
+ *             next_followup_time: "2026-06-03T11:00:00Z"
  *     responses:
  *       201:
  *         description: Lead created successfully
@@ -184,6 +200,8 @@ router.get("/", authenticate, leadController.getAllLeads);
  *                 id: "lead-uuid-001"
  *                 name: "Suresh Patel"
  *                 status: "new"
+ *                 callback_time: "2026-06-01T10:30:00Z"
+ *                 next_followup_time: "2026-06-03T11:00:00Z"
  *                 created_at: "2025-04-20T10:00:00Z"
  *       400:
  *         description: Validation error
@@ -225,6 +243,8 @@ router.post("/", authenticate, leadController.createLead);
  *                 source: "Facebook"
  *                 budget: "80-100L"
  *                 location_preference: "Andheri West"
+ *                 callback_time: "2026-06-01T10:30:00Z"
+ *                 next_followup_time: "2026-06-03T11:00:00Z"
  *                 assigned_to:
  *                   id: "user-uuid-001"
  *                   full_name: "Rahul Sharma"
@@ -282,14 +302,34 @@ router.get("/:id", authenticate, leadController.getLeadById);
  *                 type: string
  *               location_preference:
  *                 type: string
+ *               callback_time:
+ *                 type: string
+ *                 format: date-time
+ *                 description: Scheduled callback time (ISO 8601). Pass null to clear.
+ *                 example: "2026-06-01T10:30:00Z"
+ *               next_followup_time:
+ *                 type: string
+ *                 format: date-time
+ *                 description: Scheduled next follow-up time (ISO 8601). Pass null to clear.
+ *                 example: "2026-06-03T11:00:00Z"
  *           example:
  *             phone: "+919876543999"
- *             alternate_phone_number: "+919876543999"
  *             budget: "1Cr+"
  *             location_preference: "Bandra"
+ *             callback_time: "2026-06-01T10:30:00Z"
+ *             next_followup_time: "2026-06-03T11:00:00Z"
  *     responses:
  *       200:
  *         description: Lead updated successfully
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Lead updated"
+ *               data:
+ *                 id: "lead-uuid-001"
+ *                 callback_time: "2026-06-01T10:30:00Z"
+ *                 next_followup_time: "2026-06-03T11:00:00Z"
  *       404:
  *         description: Lead not found
  */
