@@ -102,7 +102,44 @@ const uploadProjectDocuments = uploadProjectDocs.fields([
   { name: 'creatives', maxCount: 10 },
 ]);
 
+
+// ── Storage engine for lead voice recordings ───────────────────────────────────
+const leadVoiceStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(process.cwd(), 'uploads', 'leads', 'voice');
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const leadId    = req.params.id || 'unknown';
+    const timestamp = Date.now();
+    const ext       = path.extname(file.originalname).toLowerCase() || '.webm';
+    cb(null, `voice_${leadId}_${timestamp}${ext}`);
+  },
+});
+
+const voiceFileFilter = (req, file, cb) => {
+  const allowed = [
+    'audio/webm', 'audio/ogg', 'audio/mpeg', 'audio/mp4',
+    'audio/wav', 'audio/x-wav', 'audio/wave',
+    'audio/mp3', 'audio/3gpp', 'audio/aac',
+    'application/octet-stream', // some browsers send this for blobs
+  ];
+  if (allowed.includes(file.mimetype) || file.mimetype.startsWith('audio/')) {
+    cb(null, true);
+  } else {
+    cb(new AppError('Only audio files are allowed for voice recordings', 400), false);
+  }
+};
+
+const uploadLeadVoice = multer({
+  storage:    leadVoiceStorage,
+  fileFilter: voiceFileFilter,
+  limits:     { fileSize: 25 * 1024 * 1024 }, // 25 MB max
+}).single('voice_recording');
+
 module.exports = {
   uploadLeadsBulkFile,
   uploadProjectDocuments,
+  uploadLeadVoice,
 };

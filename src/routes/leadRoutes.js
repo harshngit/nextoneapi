@@ -677,6 +677,126 @@ router.post("/:id/send-whatsapp", authenticate, leadController.sendLeadWhatsapp)
  *               project_id:
  *                 type: string
  *                 format: uuid
+ *               message:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Email sent and activity logged
+ *       400:
+ *         description: Lead has no email address on record
+ */
+router.post("/:id/send-email", authenticate, leadController.sendLeadEmail);
+
+/**
+ * @swagger
+ * /api/v1/leads/{id}/voice-recording:
+ *   post:
+ *     summary: Upload a voice recording for a lead (optional)
+ *     description: >
+ *       Uploads an audio file as a voice recording for the lead.
+ *       Send as multipart/form-data with field name `voice_recording`.
+ *       Supported formats: webm, ogg, mp3, mp4 audio, wav, aac. Max 25 MB.
+ *       If a recording already exists it will be replaced.
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [voice_recording]
+ *             properties:
+ *               voice_recording:
+ *                 type: string
+ *                 format: binary
+ *                 description: Audio file (webm, mp3, wav, ogg, aac — max 25 MB)
+ *     responses:
+ *       201:
+ *         description: Voice recording uploaded
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 id: "lead-uuid-001"
+ *                 voice_recording_url: "/uploads/leads/voice/voice_lead-uuid_1234567890.webm"
+ *                 voice_recording_name: "call_with_suresh.webm"
+ *       400:
+ *         description: No file uploaded or invalid file type
+ *       403:
+ *         description: Access denied
+ *       404:
+ *         description: Lead not found
+ */
+router.post(
+  "/:id/voice-recording",
+  authenticate,
+  require("../middleware/uploadMiddleware").uploadLeadVoice,
+  leadController.uploadVoiceRecording
+);
+
+/**
+ * @swagger
+ * /api/v1/leads/{id}/voice-recording:
+ *   delete:
+ *     summary: Delete the voice recording from a lead
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Voice recording deleted
+ *       404:
+ *         description: Lead or recording not found
+ */
+router.delete("/:id/voice-recording", authenticate, leadController.deleteVoiceRecording);
+
+
+
+/**
+ * @swagger
+ * /api/v1/leads/{id}/send-email:
+ *   post:
+ *     summary: Send project details to lead via email
+ *     description: >
+ *       Sends a formatted project details email to the lead's registered email address
+ *       and logs an email activity entry on the lead. The lead must have an email on record.
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         example: "lead-uuid-001"
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               project_id:
+ *                 type: string
+ *                 format: uuid
  *                 description: Override project to share details for (defaults to lead's assigned project)
  *               message:
  *                 type: string
