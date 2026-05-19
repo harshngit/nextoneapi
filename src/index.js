@@ -41,6 +41,7 @@ app.use("/api/v1/tasks",         require("./routes/taskRoutes"));
 app.use("/api/v1/notifications", require("./routes/notificationRoutes"));
 app.use("/api/v1/dashboard",     require("./routes/dashboardRoutes"));
 app.use("/api/v1/attendance",    require("./routes/attendanceRoutes"));
+app.use("/api/v1/salary",        require("./routes/salaryRoutes"));
 app.use("/api/v1/me",            require("./routes/myDataRoutes"));
 app.use("/api/v1/export",        require("./routes/exportRoutes"));
 app.use("/api/v1/convert",       require("./routes/conversionRoutes"));

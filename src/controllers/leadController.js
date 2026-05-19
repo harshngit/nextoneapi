@@ -65,6 +65,8 @@ const fetchLeadWithProject = async (leadId) => {
        l.source,
        l.budget,
        l.location_preference,
+       l.callback_time,
+       l.next_followup_time,
        l.project_id,
        l.assigned_to,
        l.created_by,
@@ -130,6 +132,7 @@ const getAllLeads = async (req, res, next) => {
     const dataResult = await pool.query(
       `SELECT l.id, l.name, l.phone, l.alternate_phone_number, l.email, l.status,
               l.source, l.budget, l.location_preference, l.project_id, l.assigned_to,
+              l.callback_time, l.next_followup_time,
               l.is_converted, l.created_at,
               p.name AS project_name,
               CONCAT(u.first_name, ' ', u.last_name) AS assigned_name
@@ -156,7 +159,8 @@ const createLead = async (req, res, next) => {
   const client = await pool.connect();
   try {
     const { name, phone, alternate_phone_number, email, source, project_id,
-            assigned_to, budget, location_preference, notes } = req.body;
+            assigned_to, budget, location_preference, notes,
+            callback_time, next_followup_time } = req.body;
     if (!name || !phone) return next(new AppError("name and phone are required", 400));
 
     await client.query("BEGIN");
@@ -164,11 +168,13 @@ const createLead = async (req, res, next) => {
     const result = await client.query(
       `INSERT INTO leads (name, phone, alternate_phone_number, email, source,
                           project_id, assigned_to, budget, location_preference,
+                          callback_time, next_followup_time,
                           status, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'new',$10)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'new',$12)
        RETURNING *`,
       [name.trim(), phone, alternate_phone_number || null, email || null, source || null,
        project_id || null, assigned_to || null, budget || null, location_preference || null,
+       callback_time || null, next_followup_time || null,
        req.user.id]
     );
 
@@ -242,6 +248,7 @@ const getLeadById = async (req, res, next) => {
       `SELECT
          l.id, l.name, l.phone, l.alternate_phone_number, l.email,
          l.status, l.source, l.budget, l.location_preference,
+         l.callback_time, l.next_followup_time,
          l.project_id, l.assigned_to, l.is_converted, l.converted_at, l.created_at,
          p.name AS project_name, p.city AS project_city, p.locality AS project_locality,
          CONCAT(u.first_name, ' ', u.last_name) AS assigned_name,
@@ -280,7 +287,8 @@ const getLeadById = async (req, res, next) => {
 const updateLead = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { name, phone, alternate_phone_number, email, source, project_id, budget, location_preference } = req.body;
+    const { name, phone, alternate_phone_number, email, source, project_id, budget, location_preference,
+            callback_time, next_followup_time } = req.body;
 
     const existing = await pool.query(
       "SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [id]
@@ -301,6 +309,8 @@ const updateLead = async (req, res, next) => {
     if (project_id !== undefined)     { updates.push(`project_id = $${idx++}`);          params.push(project_id); }
     if (budget)                       { updates.push(`budget = $${idx++}`);              params.push(budget); }
     if (location_preference)          { updates.push(`location_preference = $${idx++}`); params.push(location_preference); }
+    if (callback_time !== undefined)  { updates.push(`callback_time = $${idx++}`);       params.push(callback_time || null); }
+    if (next_followup_time !== undefined) { updates.push(`next_followup_time = $${idx++}`); params.push(next_followup_time || null); }
 
     if (updates.length === 0) return next(new AppError("No fields to update", 400));
     updates.push(`updated_at = NOW()`);
@@ -682,6 +692,147 @@ const getLeadSources = async (req, res, next) => {
   }
 };
 
+/**
+ * POST /api/v1/leads/:id/send-whatsapp
+ * Logs a WhatsApp activity on the lead.
+ * If WHATSAPP_API_URL is configured, triggers an actual message send.
+ */
+const sendLeadWhatsapp = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { project_id, message } = req.body;
+    const { role, id: callerId } = req.user;
+
+    const leadResult = await pool.query(
+      `SELECT l.id, l.name, l.phone, l.email, l.assigned_to,
+              p.name AS project_name, p.city AS project_city,
+              p.locality AS project_locality, p.price_range, p.configurations
+       FROM leads l
+       LEFT JOIN projects p ON p.id = COALESCE($2::uuid, l.project_id)
+       WHERE l.id = $1 AND l.is_archived = false`,
+      [id, project_id || null]
+    );
+
+    if (leadResult.rows.length === 0) return next(new AppError("Lead not found", 404));
+    const lead = leadResult.rows[0];
+
+    if (role === "sales_executive" && lead.assigned_to !== callerId) {
+      return next(new AppError("Access denied", 403));
+    }
+
+    // Build message text
+    const waMessage = message || [
+      `Hi ${lead.name},`,
+      `Thank you for your interest in Next One Realty.`,
+      lead.project_name ? `We'd love to share details about *${lead.project_name}*${lead.project_city ? ` in ${lead.project_city}` : ""}.` : "",
+      lead.price_range  ? `Price Range: ${lead.price_range}` : "",
+      `Our team will be in touch with you shortly. Feel free to reach out for any queries!`,
+      `— Next One Realty`,
+    ].filter(Boolean).join("\n");
+
+    // Log the activity first (always happens regardless of external API)
+    await pool.query(
+      `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, 'whatsapp', $2, $3)`,
+      [id, waMessage, callerId]
+    );
+
+    // ── Optional: fire actual WhatsApp send if env is configured ─────────────
+    // Currently logs the attempt; plug in WATI / Twilio / any provider here.
+    // Example env vars: WHATSAPP_API_URL, WHATSAPP_API_TOKEN
+    let whatsappSent = false;
+    if (process.env.WHATSAPP_API_URL && process.env.WHATSAPP_API_TOKEN) {
+      try {
+        const fetch = require("node-fetch");
+        const waRes = await fetch(process.env.WHATSAPP_API_URL, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${process.env.WHATSAPP_API_TOKEN}`,
+          },
+          body: JSON.stringify({ phone: lead.phone, message: waMessage }),
+        });
+        whatsappSent = waRes.ok;
+        if (!waRes.ok) console.warn("[WhatsApp] API responded with:", waRes.status);
+      } catch (waErr) {
+        console.error("[WhatsApp] Send failed (activity still logged):", waErr.message);
+      }
+    }
+
+    return sendSuccess(res, "WhatsApp details sent and activity logged", {
+      lead_id:       id,
+      phone:         lead.phone,
+      message:       waMessage,
+      whatsapp_sent: whatsappSent,
+      activity_logged: true,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * POST /api/v1/leads/:id/send-email
+ * Sends a project details email to the lead's email address
+ * and logs an email activity entry.
+ */
+const sendLeadEmail = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { project_id, message } = req.body;
+    const { role, id: callerId } = req.user;
+
+    const leadResult = await pool.query(
+      `SELECT l.id, l.name, l.phone, l.email, l.assigned_to, l.budget,
+              l.location_preference,
+              p.id   AS project_id,   p.name  AS project_name,
+              p.city AS project_city, p.locality AS project_locality,
+              p.price_range, p.configurations, p.rera_number,
+              p.possession_date, p.description
+       FROM leads l
+       LEFT JOIN projects p ON p.id = COALESCE($2::uuid, l.project_id)
+       WHERE l.id = $1 AND l.is_archived = false`,
+      [id, project_id || null]
+    );
+
+    if (leadResult.rows.length === 0) return next(new AppError("Lead not found", 404));
+    const lead = leadResult.rows[0];
+
+    if (role === "sales_executive" && lead.assigned_to !== callerId) {
+      return next(new AppError("Access denied", 403));
+    }
+
+    if (!lead.email) {
+      return next(new AppError("This lead does not have an email address on record", 400));
+    }
+
+    // Build and send the email via existing emailService infrastructure
+    await emailService.sendLeadProjectDetails({
+      lead,
+      customMessage: message || null,
+    });
+
+    // Log the activity
+    const activityNote = message
+      ? `Project details email sent with custom message: "${message}"`
+      : `Project details email sent${lead.project_name ? ` for ${lead.project_name}` : ""}`;
+
+    await pool.query(
+      `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, 'email', $2, $3)`,
+      [id, activityNote, callerId]
+    );
+
+    return sendSuccess(res, "Project details emailed to lead and activity logged", {
+      lead_id:        id,
+      email_sent_to:  lead.email,
+      project:        lead.project_name || null,
+      activity_logged: true,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+
 module.exports = {
   getAllLeads,
   createLead,
@@ -694,4 +845,6 @@ module.exports = {
   getLeadActivity,
   addLeadActivity,
   getLeadSources,
+  sendLeadWhatsapp,
+  sendLeadEmail,
 };

@@ -432,7 +432,49 @@ const notifySiteVisitFeedback = async ({ lead, project, visit, feedback, submitt
 };
 
 // ════════════════════════════════════════════════════════════════════════════
-// EXPORTS
+// 11. SEND PROJECT DETAILS TO LEAD
+//     → Triggered manually by sales exec via "Send Details via Email"
+// ════════════════════════════════════════════════════════════════════════════
+const sendLeadProjectDetails = async ({ lead, customMessage }) => {
+  if (!lead.email) return;
+
+  const possessionDate = lead.possession_date
+    ? new Date(lead.possession_date).toLocaleDateString("en-IN", { month: "long", year: "numeric" })
+    : null;
+
+  const html = wrap(`
+    <h3 style="color:${BRAND};margin-top:0;">Property Details — Next One Realty</h3>
+    <p style="color:#333;font-size:14px;">Dear <strong>${lead.name}</strong>,</p>
+    <p style="color:#555;font-size:14px;">
+      ${customMessage || "Thank you for your interest in Next One Realty. Please find the property details below."}
+    </p>
+    ${lead.project_name ? `
+    <div style="background:#f4f7fb;border-left:4px solid ${BRAND};border-radius:0 6px 6px 0;padding:16px 20px;margin:16px 0;">
+      <h4 style="color:${BRAND};margin:0 0 12px 0;font-size:16px;">${lead.project_name}</h4>
+      ${table(
+        field("Location",    [lead.project_locality, lead.project_city].filter(Boolean).join(", ") || "—") +
+        field("Price Range", lead.price_range || "—") +
+        field("Possession",  possessionDate || "—") +
+        (lead.rera_number ? field("RERA No.",  lead.rera_number) : "") +
+        (lead.description ? field("About",    lead.description) : "")
+      )}
+    </div>` : ""}
+    <p style="color:#555;font-size:14px;">Our team will get in touch with you shortly to discuss further details and schedule a site visit at your convenience.</p>
+    <p style="color:#555;font-size:14px;">Feel free to reach out to us anytime for more information.</p>
+    ${btn("Explore More Properties", CRM_URL)}
+    <p style="color:#888;font-size:12px;">If you did not request this information, please disregard this email.</p>
+  `);
+
+  await send({
+    to:      lead.email,
+    subject: lead.project_name
+      ? `Property Details: ${lead.project_name} — Next One Realty`
+      : `Property Details from Next One Realty`,
+    html,
+  });
+};
+
+
 // ════════════════════════════════════════════════════════════════════════════
 module.exports = {
   sendTestEmail,
@@ -446,4 +488,5 @@ module.exports = {
   notifySiteVisitScheduled,
   notifySiteVisitStatusChanged,
   notifySiteVisitFeedback,
+  sendLeadProjectDetails,
 };

@@ -592,6 +592,122 @@ router.post("/:id/activity", authenticate, leadController.addLeadActivity);
  */
 router.patch("/:id/convert", authenticate, authorize("super_admin", "admin", "sales_manager"), leadController.convertLead);
 
+/**
+ * @swagger
+ * /api/v1/leads/{id}/send-whatsapp:
+ *   post:
+ *     summary: Send project details to lead via WhatsApp
+ *     description: >
+ *       Logs a WhatsApp activity on the lead with the project details message.
+ *       If WHATSAPP_API_URL and WHATSAPP_API_TOKEN env vars are configured,
+ *       also triggers an actual WhatsApp send to the lead's phone number.
+ *       Activity is always logged regardless of external API availability.
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         example: "lead-uuid-001"
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               project_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: Override project to share details for (defaults to lead's assigned project)
+ *               message:
+ *                 type: string
+ *                 description: Custom message override (auto-generated if omitted)
+ *           example:
+ *             project_id: "proj-uuid-001"
+ *             message: "Hi! Here are the details for Skyline Heights you enquired about."
+ *     responses:
+ *       200:
+ *         description: WhatsApp activity logged (and message sent if API is configured)
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "WhatsApp details sent and activity logged"
+ *               data:
+ *                 lead_id: "lead-uuid-001"
+ *                 phone: "+919876543210"
+ *                 whatsapp_sent: false
+ *                 activity_logged: true
+ *       403:
+ *         description: Access denied
+ *       404:
+ *         description: Lead not found
+ */
+router.post("/:id/send-whatsapp", authenticate, leadController.sendLeadWhatsapp);
+
+/**
+ * @swagger
+ * /api/v1/leads/{id}/send-email:
+ *   post:
+ *     summary: Send project details to lead via email
+ *     description: >
+ *       Sends a formatted project details email to the lead's registered email address
+ *       and logs an email activity entry on the lead. The lead must have an email on record.
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         example: "lead-uuid-001"
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               project_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: Override project to share details for (defaults to lead's assigned project)
+ *               message:
+ *                 type: string
+ *                 description: Custom intro message in the email body
+ *           example:
+ *             project_id: "proj-uuid-001"
+ *             message: "As discussed, please find the project details below."
+ *     responses:
+ *       200:
+ *         description: Email sent and activity logged
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Project details emailed to lead and activity logged"
+ *               data:
+ *                 lead_id: "lead-uuid-001"
+ *                 email_sent_to: "suresh.patel@gmail.com"
+ *                 project: "Skyline Heights"
+ *                 activity_logged: true
+ *       400:
+ *         description: Lead has no email address on record
+ *       403:
+ *         description: Access denied
+ *       404:
+ *         description: Lead not found
+ */
+router.post("/:id/send-email", authenticate, leadController.sendLeadEmail);
+
+
+
 router.get("/sources", authenticate, leadController.getLeadSources);
 
 module.exports = router;
