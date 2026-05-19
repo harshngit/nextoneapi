@@ -6,7 +6,8 @@
 const { pool }       = require("../config/db");
 const { sendSuccess, sendError, paginate } = require("../utils/response");
 const AppError       = require("../utils/AppError");
-const emailService   = require("../utils/emailService");
+const emailService    = require("../utils/emailService");
+const whatsappService = require("../utils/whatsappService");
 const { createNotification, createBulkNotifications, notifyManagerOfLeadAssignment } = require("./notificationController");
 
 const VALID_STATUSES = ["scheduled", "done", "cancelled", "rescheduled", "no_show"];
@@ -154,6 +155,24 @@ const createSiteVisit = async (req, res, next) => {
           assigneeEmail,
           adminEmails,
         });
+
+        // 📱 WhatsApp confirmation to lead
+        try {
+          await whatsappService.sendSiteVisitConfirmation({
+            leadName:    lead.rows[0]?.name,
+            leadPhone:   lead.rows[0]?.phone,
+            projectName: project.rows[0]?.name,
+            visitDate:   result.rows[0].visit_date,
+            visitTime:   result.rows[0].visit_time,
+          });
+          // Mark confirmation sent
+          await pool.query(
+            'UPDATE site_visits SET whatsapp_confirmation_sent = true WHERE id = $1',
+            [result.rows[0].id]
+          );
+        } catch (waErr) {
+          console.error('[WhatsApp] Confirmation failed:', waErr.message);
+        }
 
         // 🔔 In-app notification to assigned exec/caller
         if (execId) {
