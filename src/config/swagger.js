@@ -10,7 +10,7 @@ const options = {
     },
     servers: [
       { url: "http://localhost:3000", description: "Local development server" },
-      { url: "http://nextoneapi.asynk.in", description: "Production server" }
+      { url: "https://nextoneapi.asynk.in", description: "Production server" }
     ],
     components: {
       securitySchemes: {
