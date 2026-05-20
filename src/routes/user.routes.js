@@ -72,6 +72,52 @@ router.get(
 
 /**
  * @swagger
+ * /api/v1/users/roles:
+ *   get:
+ *     summary: Get all valid roles with display labels
+ *     description: >
+ *       Returns every valid role value and its display label.
+ *       Use this to populate the Role dropdown in the Create/Edit User form.
+ *     tags: [Users & Team Management]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Roles list
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 - value: "admin"
+ *                   label: "Admin"
+ *                 - value: "sales_manager"
+ *                   label: "Sales Manager"
+ *                 - value: "sales_executive"
+ *                   label: "Sales Executive"
+ *                 - value: "external_caller"
+ *                   label: "External Caller"
+ *                 - value: "associate"
+ *                   label: "Associate"
+ *                 - value: "associate_partner"
+ *                   label: "Associate Partner"
+ *                 - value: "partner"
+ *                   label: "Partner"
+ *                 - value: "team_leader"
+ *                   label: "Team Leader"
+ *                 - value: "cluster"
+ *                   label: "Cluster"
+ *                 - value: "cluster_head"
+ *                   label: "Cluster Head"
+ *                 - value: "digital_marketing"
+ *                   label: "Digital Marketing"
+ *                 - value: "hr_admin"
+ *                   label: "HR Admin"
+ */
+router.get("/roles", authenticate, userController.getRoles);
+
+/**
+ * @swagger
  * /api/v1/users/{id}:
  *   get:
  *     summary: Get a user by ID
@@ -460,52 +506,6 @@ router.patch(
   authorize("super_admin", "admin", "sales_manager"),
   userController.assignManager
 );
-
-/**
- * @swagger
- * /api/v1/users/roles:
- *   get:
- *     summary: Get all valid roles with display labels
- *     description: >
- *       Returns every valid role value and its display label.
- *       Use this to populate the Role dropdown in the Create/Edit User form.
- *     tags: [Users & Team Management]
- *     security:
- *       - BearerAuth: []
- *     responses:
- *       200:
- *         description: Roles list
- *         content:
- *           application/json:
- *             example:
- *               success: true
- *               data:
- *                 - value: "admin"
- *                   label: "Admin"
- *                 - value: "sales_manager"
- *                   label: "Sales Manager"
- *                 - value: "sales_executive"
- *                   label: "Sales Executive"
- *                 - value: "external_caller"
- *                   label: "External Caller"
- *                 - value: "associate"
- *                   label: "Associate"
- *                 - value: "associate_partner"
- *                   label: "Associate Partner"
- *                 - value: "partner"
- *                   label: "Partner"
- *                 - value: "team_leader"
- *                   label: "Team Leader"
- *                 - value: "cluster"
- *                   label: "Cluster"
- *                 - value: "cluster_head"
- *                   label: "Cluster Head"
- *                 - value: "digital_marketing"
- *                   label: "Digital Marketing"
- *                 - value: "hr_admin"
- *                   label: "HR Admin"
- */
-router.get("/roles", authenticate, userController.getRoles);
 
 /**
  * @swagger
