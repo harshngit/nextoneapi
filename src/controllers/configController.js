@@ -598,3 +598,21 @@ const reorderLeadStatuses = async (req, res, next) => {
     next(err);
   } finally { client.release(); }
 };
+
+module.exports = {
+  getRoles,
+  updateRolePermissions,
+  getLeadSources,
+  createLeadSource,
+  updateLeadSource,
+  deleteLeadSource,
+  getModules,
+  getGeneralSettings,
+  updateGeneralSettings,
+  getAuditLog,
+  getLeadStatuses,
+  createLeadStatus,
+  updateLeadStatus,
+  deleteLeadStatus,
+  reorderLeadStatuses
+};

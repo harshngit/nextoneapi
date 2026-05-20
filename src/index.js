@@ -46,6 +46,7 @@ app.use("/api/v1/me",            require("./routes/myDataRoutes"));
 app.use("/api/v1/export",        require("./routes/exportRoutes"));
 app.use("/api/v1/convert",       require("./routes/conversionRoutes"));
 app.use("/api/v1/team-history",  require("./routes/teamHistoryRoutes"));
+app.use("/api/v1/config",        require("./routes/configRoutes"));
 app.use('/api/v1/projects',      projectDocumentsRoutes);
 app.use('/api/v1/phone-reveal',  phoneRevealRoutes);
 
