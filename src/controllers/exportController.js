@@ -650,6 +650,22 @@ const buildAttendanceSheets = async (wb, user, start, end) => {
     shadeRow(row, i)
   })
   ws3.autoFilter = { from:'A2', to:'K2' }
+
+  // ── Late Arrivals tab ─────────────────────────────────────────────────────
+  const ws4 = wb.addWorksheet('Late Arrivals', { views:[{state:'frozen',xSplit:0,ySplit:2}], properties:{tabColor:{argb:'FFF59E0B'}} })
+  addTitle(ws4, `Late Arrivals  |  ${fmtDate(start)} – ${fmtDate(end)}`, 7, 'FFB45309')
+  ws4.columns = [{key:'sno',width:5},{key:'name',width:24},{key:'date',width:14},{key:'in',width:12},{key:'loc',width:30},{key:'email',width:26}]
+  const h4 = ws4.getRow(2)
+  h4.values = ['#','Employee','Date','Check-In','Location','Email']
+  styleHeader(h4, 'FFB45309')
+  const lateRecs = allRecs.rows.filter(r => r.status === 'late')
+  lateRecs.forEach((r, i) => {
+    const row = ws4.addRow({ sno:i+1, name:r.full_name, date:fmtDate(toDateStr(r.date)), in:fmtTime(r.check_in_time), loc:r.checkin_address||'—', email:r.email })
+    row.height = 20
+    shadeRow(row, i)
+  })
+  ws4.autoFilter = { from:'A2', to:'F2' }
+
   return allRecs.rows.length
 }
 

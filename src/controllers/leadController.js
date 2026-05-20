@@ -403,8 +403,20 @@ const updateLeadStatus = async (req, res, next) => {
     const { id } = req.params;
     const { status, note } = req.body;
 
-    if (!status || !VALID_STATUSES.includes(status)) {
-      return next(new AppError(`Invalid status. Must be one of: ${VALID_STATUSES.join(", ")}`, 400));
+    if (!status) return next(new AppError('status is required', 400));
+
+    // Validate against system statuses OR custom statuses in DB
+    let isValid = VALID_STATUSES.includes(status);
+    if (!isValid) {
+      const custom = await pool.query(
+        'SELECT key FROM lead_statuses WHERE key = $1 AND is_active = true', [status]
+      );
+      isValid = custom.rows.length > 0;
+    }
+    if (!isValid) {
+      return next(new AppError(
+        `Invalid status '${status}'. Use GET /api/v1/config/lead-statuses for the full list.`, 400
+      ));
     }
 
     const existing = await pool.query(

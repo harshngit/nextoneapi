@@ -3,6 +3,39 @@ const { pool } = require("../config/db");
 const { sendSuccess, paginate } = require("../utils/response");
 const AppError = require("../utils/AppError");
 
+// ─── All valid roles ──────────────────────────────────────────────────────────
+const VALID_ROLES = [
+  "admin",
+  "sales_manager",
+  "sales_executive",
+  "external_caller",
+  "associate",
+  "associate_partner",
+  "partner",
+  "team_leader",
+  "cluster",
+  "cluster_head",
+  "digital_marketing",
+  "hr_admin",
+];
+
+// Display label for each role
+const ROLE_LABELS = {
+  super_admin:       "Super Admin",
+  admin:             "Admin",
+  sales_manager:     "Sales Manager",
+  sales_executive:   "Sales Executive",
+  external_caller:   "External Caller",
+  associate:         "Associate",
+  associate_partner: "Associate Partner",
+  partner:           "Partner",
+  team_leader:       "Team Leader",
+  cluster:           "Cluster",
+  cluster_head:      "Cluster Head",
+  digital_marketing: "Digital Marketing",
+  hr_admin:          "HR Admin",
+};
+
 /**
  * GET /api/users
  */
@@ -62,15 +95,15 @@ const createUser = async (req, res, next) => {
     const {
       first_name, last_name, email, password, phone_number,
       role, manager_id,
+      address, emergency_contact_number,
     } = req.body;
 
     if (!first_name || !last_name || !email || !password || !role) {
       return next(new AppError("first_name, last_name, email, password, and role are required", 400));
     }
 
-    const validRoles = ["admin", "sales_manager", "sales_executive", "external_caller"];
-    if (!validRoles.includes(role)) {
-      return next(new AppError(`Invalid role. Allowed: ${validRoles.join(", ")}`, 400));
+    if (!VALID_ROLES.includes(role)) {
+      return next(new AppError(`Invalid role. Allowed: ${VALID_ROLES.join(", ")}`, 400));
     }
 
     if (role === "sales_executive" && !manager_id) {
@@ -91,13 +124,16 @@ const createUser = async (req, res, next) => {
     const result = await pool.query(
       `INSERT INTO users
         (first_name, last_name, email, password_hash, phone_number, role,
-         manager_id, is_active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,true)
-       RETURNING id, email, role, first_name, last_name, created_at`,
+         manager_id, address, emergency_contact_number, is_active)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,true)
+       RETURNING id, email, role, first_name, last_name, phone_number,
+                 address, emergency_contact_number, created_at`,
       [
         first_name.trim(), last_name.trim(), email.toLowerCase(),
         passwordHash, phone_number || null, role,
         manager_id || null,
+        address || null,
+        emergency_contact_number || null,
       ]
     );
 
@@ -124,6 +160,7 @@ const getUserById = async (req, res, next) => {
       `SELECT u.id, u.first_name, u.last_name, u.email, u.phone_number, u.role,
               u.is_active, u.last_login,
               u.manager_id, u.created_at, u.updated_at,
+              u.address, u.emergency_contact_number,
               m.first_name AS manager_first_name, m.last_name AS manager_last_name
        FROM users u
        LEFT JOIN users m ON m.id = u.manager_id
@@ -167,17 +204,21 @@ const updateUser = async (req, res, next) => {
     const existing = await pool.query("SELECT id, manager_id FROM users WHERE id = $1", [id]);
     if (existing.rows.length === 0) return next(new AppError("User not found", 404));
 
-    const { first_name, last_name, phone_number, manager_id } = req.body;
+    const { first_name, last_name, phone_number, manager_id,
+            address, emergency_contact_number } = req.body;
 
     const updates = [];
     const params = [];
     let idx = 1;
 
-    if (first_name)           { updates.push(`first_name = $${idx++}`);           params.push(first_name.trim()); }
-    if (last_name)            { updates.push(`last_name = $${idx++}`);            params.push(last_name.trim()); }
-    if (phone_number)         { updates.push(`phone_number = $${idx++}`);         params.push(phone_number); }
+    if (first_name)           { updates.push(`first_name = $${idx++}`);                params.push(first_name.trim()); }
+    if (last_name)            { updates.push(`last_name = $${idx++}`);                 params.push(last_name.trim()); }
+    if (phone_number)         { updates.push(`phone_number = $${idx++}`);              params.push(phone_number); }
+    if (address !== undefined) { updates.push(`address = $${idx++}`);                  params.push(address || null); }
+    if (emergency_contact_number !== undefined) {
+                                updates.push(`emergency_contact_number = $${idx++}`);  params.push(emergency_contact_number || null); }
     if (manager_id !== undefined && ["super_admin", "admin"].includes(callerRole)) {
-                                updates.push(`manager_id = $${idx++}`);           params.push(manager_id || null); }
+                                updates.push(`manager_id = $${idx++}`);                params.push(manager_id || null); }
 
     if (updates.length === 0) return next(new AppError("No fields to update", 400));
 
@@ -186,7 +227,8 @@ const updateUser = async (req, res, next) => {
 
     const result = await pool.query(
       `UPDATE users SET ${updates.join(", ")} WHERE id = $${idx}
-       RETURNING id, first_name, last_name, email, phone_number, role, is_active, updated_at`,
+       RETURNING id, first_name, last_name, email, phone_number, role, is_active,
+                 address, emergency_contact_number, updated_at`,
       params
     );
 
@@ -229,7 +271,7 @@ const updateRole = async (req, res, next) => {
     const { id } = req.params;
     const { role } = req.body;
 
-    const validRoles = ["admin", "sales_manager", "sales_executive", "external_caller"];
+    const validRoles = VALID_ROLES;
     if (!role || !validRoles.includes(role)) {
       return next(new AppError(`Invalid role. Allowed: ${validRoles.join(", ")}`, 400));
     }
@@ -445,4 +487,19 @@ const assignManager = async (req, res, next) => {
   }
 };
 
-module.exports = { getAllUsers, createUser, getUserById, updateUser, deleteUser, updateRole, getTeam, getUserPerformance, assignManager };
+/**
+ * GET /api/users/roles
+ * Returns all valid roles with display labels.
+ * Accessible to admin — used to populate role dropdowns in user creation forms.
+ */
+const getRoles = async (req, res, next) => {
+  try {
+    const roles = VALID_ROLES.map(r => ({
+      value: r,
+      label: ROLE_LABELS[r] || r.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+    }));
+    return sendSuccess(res, "Roles fetched", roles);
+  } catch (err) { next(err); }
+};
+
+module.exports = { getAllUsers, createUser, getUserById, updateUser, deleteUser, updateRole, getTeam, getUserPerformance, assignManager, getRoles, VALID_ROLES };

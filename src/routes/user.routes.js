@@ -31,7 +31,9 @@ const { authenticate, authorize } = require("../middleware/auth");
  *         name: role
  *         schema:
  *           type: string
- *           enum: [super_admin, admin, sales_manager, sales_executive, external_caller]
+ *           enum: [super_admin, admin, sales_manager, sales_executive, external_caller,
+ *                  associate, associate_partner, partner, team_leader, cluster,
+ *                  cluster_head, digital_marketing, hr_admin]
  *         description: Filter by user role
  *         example: sales_executive
  *       - in: query
@@ -150,6 +152,8 @@ router.get("/:id", authenticate, userController.getUserById);
  *             last_name: "Sharma"
  *             phone_number: "+919876543999"
  *             manager_id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+ *             address: "102, Andheri West, Mumbai - 400053"
+ *             emergency_contact_number: "+919876543211"
  *     responses:
  *       200:
  *         description: User updated successfully
@@ -163,6 +167,8 @@ router.get("/:id", authenticate, userController.getUserById);
  *                 first_name: "Rahul"
  *                 last_name: "Sharma"
  *                 phone_number: "+919876543999"
+ *                 address: "102, Andheri West, Mumbai - 400053"
+ *                 emergency_contact_number: "+919876543211"
  *       400:
  *         description: Validation error
  *       403:
@@ -454,5 +460,149 @@ router.patch(
   authorize("super_admin", "admin", "sales_manager"),
   userController.assignManager
 );
+
+/**
+ * @swagger
+ * /api/v1/users/roles:
+ *   get:
+ *     summary: Get all valid roles with display labels
+ *     description: >
+ *       Returns every valid role value and its display label.
+ *       Use this to populate the Role dropdown in the Create/Edit User form.
+ *     tags: [Users & Team Management]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Roles list
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 - value: "admin"
+ *                   label: "Admin"
+ *                 - value: "sales_manager"
+ *                   label: "Sales Manager"
+ *                 - value: "sales_executive"
+ *                   label: "Sales Executive"
+ *                 - value: "external_caller"
+ *                   label: "External Caller"
+ *                 - value: "associate"
+ *                   label: "Associate"
+ *                 - value: "associate_partner"
+ *                   label: "Associate Partner"
+ *                 - value: "partner"
+ *                   label: "Partner"
+ *                 - value: "team_leader"
+ *                   label: "Team Leader"
+ *                 - value: "cluster"
+ *                   label: "Cluster"
+ *                 - value: "cluster_head"
+ *                   label: "Cluster Head"
+ *                 - value: "digital_marketing"
+ *                   label: "Digital Marketing"
+ *                 - value: "hr_admin"
+ *                   label: "HR Admin"
+ */
+router.get("/roles", authenticate, userController.getRoles);
+
+/**
+ * @swagger
+ * /api/v1/users:
+ *   post:
+ *     summary: Create a new user (Admin)
+ *     description: >
+ *       Creates a new user account in the system.
+ *       Only Super Admin and Admin can create users.
+ *       For the full list of valid roles call GET /api/v1/users/roles.
+ *     tags: [Users & Team Management]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [first_name, last_name, email, password, role]
+ *             properties:
+ *               first_name:
+ *                 type: string
+ *                 example: "Rahul"
+ *               last_name:
+ *                 type: string
+ *                 example: "Sharma"
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 example: "rahul.sharma@nextonerealty.com"
+ *               password:
+ *                 type: string
+ *                 minLength: 8
+ *                 example: "SecurePass@123"
+ *               phone_number:
+ *                 type: string
+ *                 example: "+919876543210"
+ *               role:
+ *                 type: string
+ *                 description: >
+ *                   One of: admin, sales_manager, sales_executive, external_caller,
+ *                   associate, associate_partner, partner, team_leader, cluster,
+ *                   cluster_head, digital_marketing, hr_admin
+ *                 example: "sales_executive"
+ *               manager_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: Required when role is sales_executive
+ *                 example: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+ *               address:
+ *                 type: string
+ *                 description: Employee residential address
+ *                 example: "102, Andheri West, Mumbai - 400053"
+ *               emergency_contact_number:
+ *                 type: string
+ *                 description: Emergency contact phone number
+ *                 example: "+919876543211"
+ *           example:
+ *             first_name: "Rahul"
+ *             last_name: "Sharma"
+ *             email: "rahul.sharma@nextonerealty.com"
+ *             password: "SecurePass@123"
+ *             phone_number: "+919876543210"
+ *             role: "associate"
+ *             address: "102, Andheri West, Mumbai - 400053"
+ *             emergency_contact_number: "+919876543211"
+ *     responses:
+ *       201:
+ *         description: User created successfully
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "User created successfully"
+ *               data:
+ *                 id: "uuid"
+ *                 email: "rahul.sharma@nextonerealty.com"
+ *                 role: "associate"
+ *                 first_name: "Rahul"
+ *                 last_name: "Sharma"
+ *                 phone_number: "+919876543210"
+ *                 address: "102, Andheri West, Mumbai - 400053"
+ *                 emergency_contact_number: "+919876543211"
+ *                 created_at: "2026-05-20T10:00:00Z"
+ *       400:
+ *         description: Validation error or duplicate email
+ *       403:
+ *         description: Insufficient permissions
+ */
+router.post(
+  "/",
+  authenticate,
+  authorize("super_admin", "admin"),
+  userController.createUser
+);
+
+
 
 module.exports = router;

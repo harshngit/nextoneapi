@@ -383,10 +383,218 @@ const getAuditLog = async (req, res) => {
   }
 };
 
-module.exports = {
-  getRoles, updateRolePermissions,
-  getLeadSources, createLeadSource, updateLeadSource, deleteLeadSource,
-  getModules,
-  getGeneralSettings, updateGeneralSettings,
-  getAuditLog,
+// ═════════════════════════════════════════════════════════════
+// LEAD STATUS MANAGEMENT
+// ═════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/v1/config/lead-statuses
+ * Returns all statuses ordered by sort_order.
+ * Accessible to all authenticated users (needed for dropdowns).
+ */
+const getLeadStatuses = async (req, res, next) => {
+  try {
+    const { include_inactive } = req.query;
+    const where = include_inactive === 'true' ? '' : 'WHERE is_active = true';
+    const result = await pool.query(
+      `SELECT id, key, label, color, sort_order, is_active, is_system, created_at
+       FROM lead_statuses ${where} ORDER BY sort_order ASC, label ASC`
+    );
+    return sendSuccess(res, 'Lead statuses fetched', result.rows);
+  } catch (err) { next(err); }
+};
+
+/**
+ * POST /api/v1/config/lead-statuses
+ * Create a new custom lead status.
+ * Body: { key, label, color?, sort_order? }
+ */
+const createLeadStatus = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const { key, label, color, sort_order } = req.body;
+    if (!key  || !key.trim())   return next(new AppError('key is required',   400));
+    if (!label || !label.trim()) return next(new AppError('label is required', 400));
+
+    // key must be slug-style
+    const cleanKey = key.trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+    if (!cleanKey) return next(new AppError('key must contain alphanumeric characters', 400));
+
+    const dupKey = await pool.query('SELECT id FROM lead_statuses WHERE key = $1', [cleanKey]);
+    if (dupKey.rows.length > 0) return next(new AppError(`Status key '${cleanKey}' already exists`, 400));
+
+    const dupLabel = await pool.query(
+      'SELECT id FROM lead_statuses WHERE LOWER(label) = LOWER($1)', [label.trim()]
+    );
+    if (dupLabel.rows.length > 0) return next(new AppError(`Status label '${label.trim()}' already exists`, 400));
+
+    // Default sort_order: after current last
+    let finalOrder = sort_order;
+    if (finalOrder === undefined || finalOrder === null) {
+      const maxRes = await pool.query('SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM lead_statuses');
+      finalOrder = maxRes.rows[0].next;
+    }
+
+    await client.query('BEGIN');
+    const result = await client.query(
+      `INSERT INTO lead_statuses (key, label, color, sort_order, is_system)
+       VALUES ($1, $2, $3, $4, false) RETURNING *`,
+      [cleanKey, label.trim(), color || '#6b7280', finalOrder]
+    );
+    await writeAudit(client, {
+      action:      'config_update',
+      description: `Lead status created: ${label.trim()} (${cleanKey})`,
+      performed_by: req.user.id,
+      metadata:    { action: 'create', key: cleanKey, label: label.trim() },
+    });
+    await client.query('COMMIT');
+
+    return sendSuccess(res, 'Lead status created successfully', result.rows[0], 201);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    next(err);
+  } finally { client.release(); }
+};
+
+/**
+ * PUT /api/v1/config/lead-statuses/:id
+ * Update label, color, sort_order, or is_active on any status.
+ * Key cannot be changed (leads.status references it directly).
+ * Body: { label?, color?, sort_order?, is_active? }
+ */
+const updateLeadStatus = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { label, color, sort_order, is_active } = req.body;
+
+    const existing = await pool.query('SELECT * FROM lead_statuses WHERE id = $1', [id]);
+    if (!existing.rows.length) return next(new AppError('Lead status not found', 404));
+
+    const status = existing.rows[0];
+
+    if (label) {
+      const dupe = await pool.query(
+        'SELECT id FROM lead_statuses WHERE LOWER(label) = LOWER($1) AND id != $2',
+        [label.trim(), id]
+      );
+      if (dupe.rows.length > 0) return next(new AppError(`Status label '${label}' already exists`, 400));
+    }
+
+    const updates = []; const params = []; let idx = 1;
+    if (label      !== undefined) { updates.push(`label = $${idx++}`);      params.push(label.trim()); }
+    if (color      !== undefined) { updates.push(`color = $${idx++}`);      params.push(color); }
+    if (sort_order !== undefined) { updates.push(`sort_order = $${idx++}`); params.push(sort_order); }
+    if (is_active  !== undefined) { updates.push(`is_active = $${idx++}`);  params.push(is_active); }
+    if (!updates.length) return next(new AppError('No fields to update', 400));
+    updates.push('updated_at = NOW()');
+    params.push(id);
+
+    await client.query('BEGIN');
+    const result = await client.query(
+      `UPDATE lead_statuses SET ${updates.join(', ')} WHERE id = $${idx} RETURNING *`,
+      params
+    );
+    await writeAudit(client, {
+      action:      'config_update',
+      description: `Lead status updated: ${status.label}`,
+      performed_by: req.user.id,
+      metadata:    { action: 'update', id, changes: req.body },
+    });
+    await client.query('COMMIT');
+
+    return sendSuccess(res, 'Lead status updated successfully', result.rows[0]);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    next(err);
+  } finally { client.release(); }
+};
+
+/**
+ * DELETE /api/v1/config/lead-statuses/:id
+ * Deletes a custom status. System statuses cannot be deleted.
+ * Statuses in use by active leads cannot be deleted — deactivate instead.
+ */
+const deleteLeadStatus = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+
+    const existing = await pool.query('SELECT * FROM lead_statuses WHERE id = $1', [id]);
+    if (!existing.rows.length) return next(new AppError('Lead status not found', 404));
+
+    const status = existing.rows[0];
+    if (status.is_system) {
+      return next(new AppError(
+        `'${status.label}' is a system status and cannot be deleted. You can deactivate it instead.`, 400
+      ));
+    }
+
+    // Check if any active leads use this status
+    const inUse = await pool.query(
+      'SELECT COUNT(*) FROM leads WHERE status = $1 AND is_archived = false',
+      [status.key]
+    );
+    const count = parseInt(inUse.rows[0].count);
+    if (count > 0) {
+      return next(new AppError(
+        `Cannot delete — ${count} active lead${count > 1 ? 's are' : ' is'} using this status. Deactivate it instead.`,
+        400
+      ));
+    }
+
+    await client.query('BEGIN');
+    await client.query('DELETE FROM lead_statuses WHERE id = $1', [id]);
+    await writeAudit(client, {
+      action:      'config_update',
+      description: `Lead status deleted: ${status.label} (${status.key})`,
+      performed_by: req.user.id,
+      metadata:    { action: 'delete', key: status.key, label: status.label },
+    });
+    await client.query('COMMIT');
+
+    return sendSuccess(res, 'Lead status removed successfully');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    next(err);
+  } finally { client.release(); }
+};
+
+/**
+ * PATCH /api/v1/config/lead-statuses/reorder
+ * Bulk-reorder statuses.
+ * Body: { order: [{ id, sort_order }] }
+ */
+const reorderLeadStatuses = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const { order } = req.body;
+    if (!Array.isArray(order) || !order.length) {
+      return next(new AppError('order array is required', 400));
+    }
+
+    await client.query('BEGIN');
+    for (const item of order) {
+      if (!item.id || item.sort_order === undefined) continue;
+      await client.query(
+        'UPDATE lead_statuses SET sort_order = $1, updated_at = NOW() WHERE id = $2',
+        [item.sort_order, item.id]
+      );
+    }
+    await writeAudit(client, {
+      action:      'config_update',
+      description: `Lead statuses reordered (${order.length} items)`,
+      performed_by: req.user.id,
+      metadata:    { action: 'reorder', count: order.length },
+    });
+    await client.query('COMMIT');
+
+    const updated = await pool.query(
+      'SELECT id, key, label, color, sort_order, is_active, is_system FROM lead_statuses ORDER BY sort_order ASC'
+    );
+    return sendSuccess(res, 'Lead statuses reordered', updated.rows);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    next(err);
+  } finally { client.release(); }
 };
