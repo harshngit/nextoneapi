@@ -82,7 +82,7 @@ const projectDocFilter = (req, file, cb) => {
 const uploadProjectDocs = multer({
   storage: projectDocStorage,
   fileFilter: projectDocFilter,
-  limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB max per file
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB max per file
 });
 
 // ── Storage engine for lead voice recordings ───────────────────────────────────
@@ -136,7 +136,7 @@ const genericStorage = multer.diskStorage({
 
 const uploadGeneric = multer({
   storage: genericStorage,
-  limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB max
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB max
 });
 
 // ── Middleware factories ──────────────────────────────────────────────────────
