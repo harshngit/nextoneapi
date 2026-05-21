@@ -116,6 +116,7 @@ const createRevisit = async (req, res, next) => {
 
     await client.query('BEGIN');
 
+    // 1. Create the re-visit
     const result = await client.query(
       `INSERT INTO site_revisits
          (original_visit_id, lead_id, project_id, visit_date, visit_time,
@@ -126,12 +127,18 @@ const createRevisit = async (req, res, next) => {
        execId, transport_arranged || false, reason || null, notes || null, req.user.id]
     );
 
-    // Log activity on the lead
+    // 2. Update original site visit status to 'rescheduled'
+    await client.query(
+      `UPDATE site_visits SET status = 'rescheduled', updated_at = NOW() WHERE id = $1`,
+      [original_visit_id]
+    );
+
+    // 3. Log activity on the lead
     await client.query(
       `INSERT INTO lead_activities (lead_id, type, note, performed_by)
        VALUES ($1,'note',$2,$3)`,
       [orig.lead_id,
-       `Re-visit scheduled for ${visit_date} at ${visit_time}${reason ? ` — ${reason}` : ''}`,
+       `Re-visit scheduled for ${visit_date} at ${visit_time}${reason ? ` — ${reason}` : ''} (Original visit marked as rescheduled)`,
        req.user.id]
     );
 
@@ -143,7 +150,13 @@ const createRevisit = async (req, res, next) => {
         const scheduledByRow = await pool.query(
           `SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1`, [req.user.id]
         );
-        if (assigneeEmail) {
+
+        const adminEmailsRes = await pool.query(
+          "SELECT email FROM users WHERE role IN ('admin','super_admin') AND is_active = true"
+        );
+        const adminEmails = adminEmailsRes.rows.map(r => r.email);
+
+        if (assigneeEmail || orig.lead_email) {
           await emailService.notifySiteVisitScheduled({
             lead:         { id: orig.lead_id, name: orig.lead_name, phone: orig.lead_phone, email: orig.lead_email },
             project:      { id: orig.project_id, name: orig.project_name },
@@ -151,7 +164,7 @@ const createRevisit = async (req, res, next) => {
             assignedTo:   assigneeName,
             scheduledBy:  scheduledByRow.rows[0]?.name || 'System',
             assigneeEmail,
-            adminEmails:  [],
+            adminEmails,
           });
         }
       } catch (e) { console.error('[Email] createRevisit notification failed:', e.message); }

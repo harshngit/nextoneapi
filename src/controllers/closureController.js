@@ -168,32 +168,26 @@ const createClosure = async (req, res, next) => {
     // ── Email ──────────────────────────────────────────────────────────────────
     setImmediate(async () => {
       try {
-        // Notify lead (if email) of booking confirmation
-        if (lead.email) {
-          await emailService.notifyLeadStatusChanged({
-            lead: { ...lead, email: lead.email },
-            oldStatus: lead.status,
-            newStatus: 'booked',
-            changedBy: 'System',
-            note: `Your booking has been confirmed${unit_number ? ` for Unit ${unit_number}` : ''}. Our team will contact you with next steps.`,
-          });
-        }
-        // Notify admins/managers of new booking
-        const adminEmails = await pool.query(
+        const closedByRow = await pool.query(
+          `SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1`, [closedBy]
+        );
+        const closedByName = closedByRow.rows[0]?.name || 'Sales Executive';
+
+        const adminEmailsRes = await pool.query(
           `SELECT email FROM users WHERE role IN ('admin','super_admin','sales_manager') AND is_active = true`
         );
-        if (adminEmails.rows.length) {
-          const closedByRow = await pool.query(
-            `SELECT CONCAT(first_name,' ',last_name) AS name, email FROM users WHERE id = $1`, [closedBy]
-          );
-          await emailService.notifyLeadAssigned({
-            lead: { ...lead, email: lead.email },
-            assigneeName:  closedByRow.rows[0]?.name || 'Sales Executive',
-            assignerName:  'System',
-            assigneeEmail: adminEmails.rows.map(r => r.email).join(','),
-            note: `BOOKING CONFIRMED${unit_number ? ` — Unit ${unit_number}` : ''}${agreed_price ? `. Deal ₹${Number(agreed_price).toLocaleString('en-IN')}` : ''}. Closed by ${closedByRow.rows[0]?.name || 'exec'}.`,
-          });
-        }
+        const adminEmails = adminEmailsRes.rows.map(r => r.email);
+
+        await emailService.notifyBookingConfirmed({
+          lead: { id: lead.id, name: lead.name, phone: lead.phone, email: lead.email },
+          project: { id: projId, name: lead.project_name || 'Project' },
+          closure: {
+            unit_number, tower_block, booking_date,
+            agreed_price, booking_amount
+          },
+          closedBy: closedByName,
+          adminEmails
+        });
       } catch (e) { console.error('[Email] createClosure notification failed:', e.message); }
     });
 

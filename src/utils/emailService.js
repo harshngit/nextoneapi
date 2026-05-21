@@ -476,6 +476,57 @@ const sendLeadProjectDetails = async ({ lead, customMessage }) => {
 
 
 // ════════════════════════════════════════════════════════════════════════════
+// 12. BOOKING CONFIRMED (CLOSURE)
+//     → Client confirmation email
+//     → Admin/Manager notification
+// ════════════════════════════════════════════════════════════════════════════
+const notifyBookingConfirmed = async ({ lead, project, closure, closedBy, adminEmails }) => {
+  const promises = [];
+  const dealValue = closure.agreed_price ? `₹${Number(closure.agreed_price).toLocaleString('en-IN')}` : '—';
+  const bookingAmt = closure.booking_amount ? `₹${Number(closure.booking_amount).toLocaleString('en-IN')}` : '—';
+
+  // A. Client confirmation
+  if (lead.email) {
+    const html = wrap(`
+      <h3 style="color:${BRAND};margin-top:0;">Booking Confirmed! 🎊</h3>
+      <p style="color:#333;font-size:14px;">Dear <strong>${lead.name}</strong>,</p>
+      <p style="color:#555;font-size:14px;">Congratulations! Your booking for <strong>${project.name}</strong> has been successfully confirmed. We are excited to have you with us!</p>
+      ${table(
+        field('Project',      project.name) +
+        field('Unit Number',  closure.unit_number || '—') +
+        field('Tower/Block',  closure.tower_block || '—') +
+        field('Booking Date', closure.booking_date ? new Date(closure.booking_date).toLocaleDateString('en-IN') : '—') +
+        field('Deal Value',   dealValue)
+      )}
+      <p style="color:#555;font-size:14px;">Our team will contact you shortly regarding the next steps in the documentation process.</p>
+      <p style="color:#555;font-size:14px;">Welcome to the family!</p>
+    `);
+    promises.push(send({ to: lead.email, subject: `Booking Confirmed: ${project.name} — Next One Realty`, html }));
+  }
+
+  // B. Admin notification
+  if (adminEmails?.length) {
+    const html = wrap(`
+      <h3 style="color:${BRAND};margin-top:0;">New Booking Confirmed 🎊</h3>
+      <p style="color:#555;font-size:14px;">A new booking (closure) has been recorded in the CRM by <strong>${closedBy}</strong>.</p>
+      ${table(
+        field('Lead Name',    lead.name) +
+        field('Phone',        lead.phone) +
+        field('Project',      project.name) +
+        field('Unit No',      closure.unit_number || '—') +
+        field('Deal Value',   dealValue) +
+        field('Booking Amt',  bookingAmt) +
+        field('Closed By',    closedBy)
+      )}
+      ${btn('View Closure Details', `${CRM_URL}/closures`)}
+    `);
+    promises.push(send({ to: adminEmails, subject: `BOOKING CONFIRMED: ${lead.name} — ${project.name}`, html }));
+  }
+
+  await Promise.allSettled(promises);
+};
+
+// ════════════════════════════════════════════════════════════════════════════
 module.exports = {
   sendTestEmail,
   notifyLeadCreated,
@@ -489,4 +540,5 @@ module.exports = {
   notifySiteVisitStatusChanged,
   notifySiteVisitFeedback,
   sendLeadProjectDetails,
+  notifyBookingConfirmed,
 };
