@@ -38,6 +38,8 @@ app.use("/api/v1/leads",         leadReassignRoutes);
 app.use("/api/v1/leads",         require("./routes/leadRoutes"));
 app.use("/api/v1/projects",      require("./routes/projectRoutes"));
 app.use("/api/v1/site-visits",   require("./routes/siteVisitRoutes"));
+app.use('/api/v1/site-revisits', require('./routes/siteRevisitRoutes'));
+app.use('/api/v1/closures',      require('./routes/closureRoutes'));
 app.use("/api/v1/tasks",         require("./routes/taskRoutes"));
 app.use("/api/v1/notifications", require("./routes/notificationRoutes"));
 app.use("/api/v1/dashboard",     require("./routes/dashboardRoutes"));

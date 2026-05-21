@@ -1,30 +1,24 @@
-const express = require("express");
-const router = express.Router();
-const siteVisitController = require("../controllers/siteVisitController");
-const { authenticate, authorize } = require("../middleware/auth");
+const express = require('express');
+const router  = express.Router();
+const ctrl    = require('../controllers/siteRevisitController');
+const { authenticate, authorize } = require('../middleware/auth');
+
+const ADMIN   = ['super_admin', 'admin'];
+const MANAGER = ['super_admin', 'admin', 'sales_manager'];
 
 /**
  * @swagger
  * tags:
- *   name: Site Visit Management
- *   description: >
- *     Schedule, manage, and track site visits for leads.
- *     Supports calendar-based scheduling, rescheduling, status updates,
- *     and post-visit feedback capture.
+ *   name: Site Revisits
+ *   description: Follow-up re-visits linked to an original site visit
  */
 
 /**
  * @swagger
- * /api/v1/site-visits:
+ * /api/v1/site-revisits:
  *   get:
- *     summary: List all site visits with filters
- *     description: >
- *       Returns a paginated list of site visits.
- *       Sales Executive sees only their own visits.
- *       Sales Manager sees their team's visits.
- *       Admin and Super Admin see all visits.
- *       Supports filtering by status, date range, and assigned user.
- *     tags: [Site Visit Management]
+ *     summary: List all re-visits (paginated, filterable)
+ *     tags: [Site Revisits]
  *     security:
  *       - BearerAuth: []
  *     parameters:
@@ -33,76 +27,66 @@ const { authenticate, authorize } = require("../middleware/auth");
  *         schema:
  *           type: string
  *           enum: [scheduled, done, cancelled, rescheduled, no_show]
- *         example: scheduled
  *       - in: query
- *         name: assigned_to
- *         schema:
- *           type: string
- *           format: uuid
- *         description: Filter by assigned sales executive
+ *         name: lead_id
+ *         schema: { type: string, format: uuid }
  *       - in: query
  *         name: project_id
- *         schema:
- *           type: string
- *           format: uuid
- *         description: Filter visits for a specific project
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: original_visit_id
+ *         schema: { type: string, format: uuid }
+ *         description: Filter by the original site visit
+ *       - in: query
+ *         name: assigned_to
+ *         schema: { type: string, format: uuid }
  *       - in: query
  *         name: from
- *         schema:
- *           type: string
- *           format: date
- *         example: "2025-04-20"
+ *         schema: { type: string, format: date }
+ *         example: "2026-05-01"
  *       - in: query
  *         name: to
- *         schema:
- *           type: string
- *           format: date
- *         example: "2025-04-30"
+ *         schema: { type: string, format: date }
+ *         example: "2026-05-31"
  *       - in: query
  *         name: page
- *         schema:
- *           type: integer
- *           default: 1
+ *         schema: { type: integer, default: 1 }
  *       - in: query
  *         name: per_page
- *         schema:
- *           type: integer
- *           default: 20
+ *         schema: { type: integer, default: 20 }
  *     responses:
  *       200:
- *         description: Site visits list returned
+ *         description: Re-visits list
  *         content:
  *           application/json:
  *             example:
- *               success: true
  *               data:
- *                 - id: "sv-uuid-001"
- *                   lead_id: "lead-uuid-001"
- *                   lead_name: "Suresh Patel"
- *                   project_id: "proj-uuid-001"
- *                   project_name: "Skyline Heights"
- *                   visit_date: "2025-04-25"
+ *                 - id: "rv-uuid-001"
+ *                   original_visit_id: "sv-uuid-001"
+ *                   visit_date: "2026-06-10"
  *                   visit_time: "11:00"
  *                   status: "scheduled"
- *                   assigned_to: "Rahul Sharma"
+ *                   lead_name: "Suresh Patel"
+ *                   project_name: "Skyline Heights"
+ *                   assigned_to_name: "Rahul Sharma"
+ *                   reason: "Client wanted to check 3BHK units again"
  *               pagination:
- *                 total: 30
+ *                 total: 5
  *                 page: 1
  *                 per_page: 20
- *                 total_pages: 2
  */
-router.get("/", authenticate, siteVisitController.getAllSiteVisits);
+router.get('/', authenticate, ctrl.getAllRevisits);
 
 /**
  * @swagger
- * /api/v1/site-visits:
+ * /api/v1/site-revisits:
  *   post:
- *     summary: Schedule a new site visit
+ *     summary: Schedule a re-visit linked to an original site visit
  *     description: >
- *       Schedules a site visit for a lead at a specific project.
- *       The lead's status is automatically updated to 'site_visit_scheduled'.
- *       A notification is sent to the assigned sales executive.
- *     tags: [Site Visit Management]
+ *       Creates a follow-up visit for a lead.
+ *       The lead_id and project_id are inherited from the original visit.
+ *       Use this when the client wants to see the property again before deciding.
+ *     tags: [Site Revisits]
  *     security:
  *       - BearerAuth: []
  *     requestBody:
@@ -111,143 +95,138 @@ router.get("/", authenticate, siteVisitController.getAllSiteVisits);
  *         application/json:
  *           schema:
  *             type: object
- *             required: [lead_id, project_id, visit_date, visit_time]
+ *             required: [original_visit_id, visit_date, visit_time]
  *             properties:
- *               lead_id:
+ *               original_visit_id:
  *                 type: string
  *                 format: uuid
- *                 example: "lead-uuid-001"
- *               project_id:
- *                 type: string
- *                 format: uuid
- *                 example: "proj-uuid-001"
+ *                 description: ID of the original site visit this re-visit is linked to
  *               visit_date:
  *                 type: string
  *                 format: date
- *                 example: "2025-04-25"
+ *                 example: "2026-06-10"
  *               visit_time:
  *                 type: string
  *                 example: "11:00"
- *                 description: Time in HH:MM (24hr) format
  *               assigned_to:
  *                 type: string
  *                 format: uuid
- *                 example: "user-uuid-001"
- *                 description: Sales Executive conducting the visit (defaults to lead's assigned executive)
+ *                 description: Override assigned exec. Defaults to original visit's assignee
+ *               reason:
+ *                 type: string
+ *                 description: Why a re-visit was needed
+ *                 example: "Client wanted to see 3BHK units again and check parking space"
  *               notes:
  *                 type: string
- *                 example: "Client wants to see 2BHK and 3BHK units. Prefers upper floors."
+ *                 example: "Bring updated price list"
  *               transport_arranged:
  *                 type: boolean
- *                 example: true
- *                 description: Whether pickup/transport has been arranged for the client
+ *                 default: false
  *           example:
- *             lead_id: "lead-uuid-001"
- *             project_id: "proj-uuid-001"
- *             visit_date: "2025-04-25"
+ *             original_visit_id: "sv-uuid-001"
+ *             visit_date: "2026-06-10"
  *             visit_time: "11:00"
- *             assigned_to: "user-uuid-001"
- *             notes: "Client wants to see 2BHK and 3BHK units. Prefers upper floors."
+ *             reason: "Client wanted to see 3BHK units again"
+ *             notes: "Bring updated price list and floor plans"
  *             transport_arranged: true
  *     responses:
  *       201:
- *         description: Site visit scheduled successfully
+ *         description: Re-visit scheduled
  *         content:
  *           application/json:
  *             example:
  *               success: true
- *               message: "Site visit scheduled successfully"
+ *               message: "Re-visit scheduled successfully"
  *               data:
- *                 id: "sv-uuid-001"
+ *                 id: "rv-uuid-001"
+ *                 original_visit_id: "sv-uuid-001"
  *                 lead_id: "lead-uuid-001"
- *                 visit_date: "2025-04-25"
+ *                 project_id: "proj-uuid-001"
+ *                 visit_date: "2026-06-10"
  *                 visit_time: "11:00"
  *                 status: "scheduled"
+ *                 transport_arranged: true
  *       400:
- *         description: Missing required fields or invalid date
+ *         description: Missing required fields
  *       404:
- *         description: Lead or project not found
+ *         description: Original site visit not found
  */
-router.post("/", authenticate, siteVisitController.createSiteVisit);
+router.post('/', authenticate, ctrl.createRevisit);
 
 /**
  * @swagger
- * /api/v1/site-visits/{id}:
+ * /api/v1/site-revisits/original/{visitId}:
  *   get:
- *     summary: Get site visit details
- *     description: >
- *       Returns full details of a site visit including lead info,
- *       project info, assigned executive, and any feedback submitted.
- *     tags: [Site Visit Management]
+ *     summary: Get all re-visits for a specific original site visit
+ *     tags: [Site Revisits]
  *     security:
  *       - BearerAuth: []
  *     parameters:
  *       - in: path
- *         name: id
+ *         name: visitId
  *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *         example: "sv-uuid-001"
+ *         schema: { type: string, format: uuid }
+ *         description: Original site visit ID
  *     responses:
  *       200:
- *         description: Site visit details returned
+ *         description: Re-visits for this original visit
  *         content:
  *           application/json:
  *             example:
  *               success: true
  *               data:
- *                 id: "sv-uuid-001"
- *                 lead:
- *                   id: "lead-uuid-001"
- *                   name: "Suresh Patel"
- *                   phone: "+919876543210"
- *                 project:
- *                   id: "proj-uuid-001"
- *                   name: "Skyline Heights"
- *                   address: "Plot 14, Andheri West"
- *                 visit_date: "2025-04-25"
- *                 visit_time: "11:00"
- *                 status: "done"
- *                 transport_arranged: true
- *                 notes: "Client wants to see 2BHK and 3BHK units"
- *                 feedback:
- *                   rating: 4
- *                   client_reaction: "positive"
- *                   interested_in: "3BHK"
- *                   next_step: "negotiation"
- *                   remarks: "Client loved the view, wants to negotiate price"
- *                 assigned_to:
- *                   id: "user-uuid-001"
- *                   full_name: "Rahul Sharma"
- *                 created_at: "2025-04-20T10:00:00Z"
- *       404:
- *         description: Site visit not found
+ *                 original_visit_id: "sv-uuid-001"
+ *                 revisits:
+ *                   - id: "rv-uuid-001"
+ *                     visit_date: "2026-06-10"
+ *                     visit_time: "11:00"
+ *                     status: "done"
+ *                     reason: "Client wanted to see 3BHK again"
+ *                     assigned_to_name: "Rahul Sharma"
+ *                     rating: 4
+ *                     client_reaction: "positive"
+ *                     next_step: "negotiation"
  */
-router.get("/:id", authenticate, siteVisitController.getSiteVisitById);
+router.get('/original/:visitId', authenticate, ctrl.getRevisitsByOriginalVisit);
 
 /**
  * @swagger
- * /api/v1/site-visits/{id}:
- *   put:
- *     summary: Update or reschedule a site visit
- *     description: >
- *       Updates the details of a site visit — including rescheduling the date/time.
- *       If visit_date or visit_time is changed, status is automatically set to 'rescheduled'.
- *       Rescheduling is logged in the lead's activity history.
- *     tags: [Site Visit Management]
+ * /api/v1/site-revisits/{id}:
+ *   get:
+ *     summary: Get a re-visit by ID
+ *     tags: [Site Revisits]
  *     security:
  *       - BearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
  *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *         example: "sv-uuid-001"
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Re-visit details
+ *       404:
+ *         description: Re-visit not found
+ */
+router.get('/:id', authenticate, ctrl.getRevisitById);
+
+/**
+ * @swagger
+ * /api/v1/site-revisits/{id}:
+ *   put:
+ *     summary: Update a re-visit
+ *     description: >
+ *       Update date/time/notes/assignee. If visit_date or visit_time changes
+ *       the status is automatically set to rescheduled.
+ *     tags: [Site Revisits]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
  *     requestBody:
- *       required: true
  *       content:
  *         application/json:
  *           schema:
@@ -258,56 +237,50 @@ router.get("/:id", authenticate, siteVisitController.getSiteVisitById);
  *                 format: date
  *               visit_time:
  *                 type: string
+ *                 example: "14:00"
  *               assigned_to:
  *                 type: string
  *                 format: uuid
+ *               reason:
+ *                 type: string
  *               notes:
  *                 type: string
  *               transport_arranged:
  *                 type: boolean
  *               reschedule_reason:
  *                 type: string
- *                 description: Required if rescheduling the visit
+ *                 description: Logged to lead activity if date/time changes
  *           example:
- *             visit_date: "2025-04-27"
- *             visit_time: "14:00"
- *             reschedule_reason: "Client requested later date due to travel"
+ *             visit_date: "2026-06-12"
+ *             visit_time: "10:00"
+ *             reschedule_reason: "Client requested morning slot"
  *     responses:
  *       200:
- *         description: Site visit updated successfully
- *         content:
- *           application/json:
- *             example:
- *               success: true
- *               message: "Site visit rescheduled to 2025-04-27 at 14:00"
+ *         description: Re-visit updated
  *       400:
- *         description: Cannot update a completed visit
+ *         description: Cannot update a completed re-visit
  *       404:
- *         description: Site visit not found
+ *         description: Re-visit not found
  */
-router.put("/:id", authenticate, siteVisitController.updateSiteVisit);
+router.put('/:id', authenticate, ctrl.updateRevisit);
 
 /**
  * @swagger
- * /api/v1/site-visits/{id}/status:
+ * /api/v1/site-revisits/{id}/status:
  *   patch:
- *     summary: Update site visit status
+ *     summary: Update re-visit status
  *     description: >
- *       Updates the status of a site visit.
- *       When marked as 'done', the lead's status is automatically
- *       updated to 'site_visit_done'.
- *       When marked as 'cancelled' or 'no_show', a note is added to the lead's activity log.
- *     tags: [Site Visit Management]
+ *       Valid statuses: scheduled, done, cancelled, rescheduled, no_show.
+ *       note is required when setting cancelled or no_show.
+ *       When set to done, lead status is updated to site_visit_done.
+ *     tags: [Site Revisits]
  *     security:
  *       - BearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
  *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *         example: "sv-uuid-001"
+ *         schema: { type: string, format: uuid }
  *     requestBody:
  *       required: true
  *       content:
@@ -321,56 +294,34 @@ router.put("/:id", authenticate, siteVisitController.updateSiteVisit);
  *                 enum: [scheduled, done, cancelled, rescheduled, no_show]
  *               note:
  *                 type: string
- *                 description: Required when cancelling or marking no_show
- *           examples:
- *             MarkDone:
- *               summary: Mark visit as done
- *               value:
- *                 status: "done"
- *             Cancel:
- *               summary: Cancel visit
- *               value:
- *                 status: "cancelled"
- *                 note: "Client cancelled — going out of town"
- *             NoShow:
- *               summary: Mark as no-show
- *               value:
- *                 status: "no_show"
- *                 note: "Client did not show up, not reachable on phone"
+ *                 description: Required for cancelled and no_show
+ *           example:
+ *             status: "done"
+ *             note: "Client visited, very positive reaction"
  *     responses:
  *       200:
- *         description: Visit status updated
- *         content:
- *           application/json:
- *             example:
- *               success: true
- *               message: "Site visit marked as done"
+ *         description: Status updated
  *       400:
- *         description: Invalid status or note required
+ *         description: Invalid status or missing note
  */
-router.patch("/:id/status", authenticate, siteVisitController.updateSiteVisitStatus);
+router.patch('/:id/status', authenticate, ctrl.updateRevisitStatus);
 
 /**
  * @swagger
- * /api/v1/site-visits/{id}/feedback:
+ * /api/v1/site-revisits/{id}/feedback:
  *   post:
- *     summary: Submit post-visit feedback
+ *     summary: Submit feedback after a completed re-visit
  *     description: >
- *       Submits feedback after a site visit is completed.
- *       Can only be submitted for visits with status 'done'.
- *       Feedback captures client reaction, interest level, and suggested next step.
- *       The lead's activity log is updated with the feedback summary.
- *     tags: [Site Visit Management]
+ *       Can only be submitted once and only when the re-visit status is done.
+ *       next_step includes an extra option: another_revisit (unlike site visit feedback).
+ *     tags: [Site Revisits]
  *     security:
  *       - BearerAuth: []
  *     parameters:
  *       - in: path
  *         name: id
  *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *         example: "sv-uuid-001"
+ *         schema: { type: string, format: uuid }
  *     requestBody:
  *       required: true
  *       content:
@@ -383,90 +334,53 @@ router.patch("/:id/status", authenticate, siteVisitController.updateSiteVisitSta
  *                 type: integer
  *                 minimum: 1
  *                 maximum: 5
- *                 example: 4
- *                 description: Overall visit rating out of 5
  *               client_reaction:
  *                 type: string
  *                 enum: [very_positive, positive, neutral, negative, not_interested]
- *                 example: "positive"
  *               interested_in:
  *                 type: string
- *                 example: "3BHK - Floor 12"
- *                 description: Specific unit/config the client showed interest in
+ *                 example: "3BHK with study room, high floor, west facing"
  *               next_step:
  *                 type: string
- *                 enum: [negotiation, follow_up, send_proposal, booked, lost]
- *                 example: "negotiation"
+ *                 enum: [negotiation, follow_up, send_proposal, booked, lost, another_revisit]
+ *                 description: another_revisit is available here (not in site_visit_feedback)
  *               remarks:
  *                 type: string
- *                 example: "Client loved the view from 12th floor. Concerned about parking. Will discuss pricing next week."
+ *                 example: "Client liked Tower B units, comparing with competitor project"
  *           example:
  *             rating: 4
  *             client_reaction: "positive"
- *             interested_in: "3BHK - Floor 12"
+ *             interested_in: "3BHK, floor 12-15, west facing"
  *             next_step: "negotiation"
- *             remarks: "Client loved the view. Concerned about parking. Will discuss pricing next week."
+ *             remarks: "Client happy with amenities. Wants final price quote."
  *     responses:
  *       201:
- *         description: Feedback submitted successfully
- *         content:
- *           application/json:
- *             example:
- *               success: true
- *               message: "Visit feedback submitted successfully"
- *               data:
- *                 id: "fb-uuid-001"
- *                 site_visit_id: "sv-uuid-001"
- *                 rating: 4
- *                 client_reaction: "positive"
- *                 next_step: "negotiation"
+ *         description: Feedback submitted
  *       400:
- *         description: Feedback already submitted or visit not completed yet
+ *         description: Visit not done or feedback already submitted
  */
-router.post("/:id/feedback", authenticate, siteVisitController.submitFeedback);
+router.post('/:id/feedback', authenticate, ctrl.submitRevisitFeedback);
 
 /**
  * @swagger
- * /api/v1/leads/{leadId}/site-visits:
- *   get:
- *     summary: Get all site visits for a specific lead
- *     description: >
- *       Returns the complete history of site visits for a lead,
- *       ordered from most recent to oldest. Includes feedback for completed visits.
- *     tags: [Site Visit Management]
+ * /api/v1/site-revisits/{id}:
+ *   delete:
+ *     summary: Delete a scheduled re-visit (Admin/Manager)
+ *     description: Cannot delete a completed (done) re-visit.
+ *     tags: [Site Revisits]
  *     security:
  *       - BearerAuth: []
  *     parameters:
  *       - in: path
- *         name: leadId
+ *         name: id
  *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *         example: "lead-uuid-001"
+ *         schema: { type: string, format: uuid }
  *     responses:
  *       200:
- *         description: Site visits for this lead returned
- *         content:
- *           application/json:
- *             example:
- *               success: true
- *               data:
- *                 - id: "sv-uuid-001"
- *                   project_name: "Skyline Heights"
- *                   visit_date: "2025-04-25"
- *                   visit_time: "11:00"
- *                   status: "done"
- *                   feedback:
- *                     rating: 4
- *                     client_reaction: "positive"
- *                     next_step: "negotiation"
- *                 - id: "sv-uuid-002"
- *                   project_name: "Marina Bay Residences"
- *                   visit_date: "2025-04-15"
- *                   visit_time: "15:00"
- *                   status: "cancelled"
+ *         description: Re-visit deleted
+ *       400:
+ *         description: Cannot delete a completed re-visit
  */
-router.get("/lead/:leadId", authenticate, siteVisitController.getVisitsByLead);
+router.delete('/:id', authenticate, authorize(...MANAGER), ctrl.deleteRevisit);
 
 module.exports = router;
