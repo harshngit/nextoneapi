@@ -345,16 +345,17 @@ const deleteProjectDocument = async (req, res, next) => {
  */
 const uploadStandaloneUnitPlan = async (req, res, next) => {
   try {
-    if (!req.file) {
+    const file = req.file || (req.files && req.files[0]);
+    if (!file) {
       return next(new AppError('No unit plan file uploaded', 400));
     }
 
     const fileData = {
-      file_name: req.file.originalname,
-      file_path: req.file.path.replace(/\\/g, '/'),
-      file_size: req.file.size,
-      mime_type: req.file.mimetype,
-      url: `/uploads/projects/temp/unit_plans/${req.file.filename}`,
+      file_name: file.originalname,
+      file_path: file.path.replace(/\\/g, '/'),
+      file_size: file.size,
+      mime_type: file.mimetype,
+      url: `/uploads/projects/temp/unit_plans/${file.filename}`,
       document_type: 'unit_plan'
     };
 
@@ -370,16 +371,17 @@ const uploadStandaloneUnitPlan = async (req, res, next) => {
  */
 const uploadStandaloneCreative = async (req, res, next) => {
   try {
-    if (!req.file) {
+    const file = req.file || (req.files && req.files[0]);
+    if (!file) {
       return next(new AppError('No creative file uploaded', 400));
     }
 
     const fileData = {
-      file_name: req.file.originalname,
-      file_path: req.file.path.replace(/\\/g, '/'),
-      file_size: req.file.size,
-      mime_type: req.file.mimetype,
-      url: `/uploads/projects/temp/creatives/${req.file.filename}`,
+      file_name: file.originalname,
+      file_path: file.path.replace(/\\/g, '/'),
+      file_size: file.size,
+      mime_type: file.mimetype,
+      url: `/uploads/projects/temp/creatives/${file.filename}`,
       document_type: 'creative'
     };
 

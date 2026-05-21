@@ -41,9 +41,10 @@ const { uploadUnitPlan, uploadCreative } = require('../middleware/uploadMiddlewa
  *           schema:
  *             type: object
  *             properties:
- *               unit_plans:
+ *               file:
  *                 type: string
  *                 format: binary
+ *                 description: Unit plan document (accepts any field name)
  *     responses:
  *       201:
  *         description: Unit plan uploaded successfully
@@ -55,7 +56,7 @@ router.post('/upload-unit-plan', authenticate, uploadUnitPlan, uploadStandaloneU
  * /api/v1/projects/upload-creative:
  *   post:
  *     summary: Upload a single creative
- *     description: Uploads a creative document without requiring a project ID. Returns file details.
+ *     description: Uploads a creative document without requiring a project ID. Returns file details. Accepts any field name for the file.
  *     tags: [Project Documents]
  *     security:
  *       - BearerAuth: []
@@ -66,9 +67,10 @@ router.post('/upload-unit-plan', authenticate, uploadUnitPlan, uploadStandaloneU
  *           schema:
  *             type: object
  *             properties:
- *               creatives:
+ *               file:
  *                 type: string
  *                 format: binary
+ *                 description: Creative document (accepts any field name)
  *     responses:
  *       201:
  *         description: Creative uploaded successfully

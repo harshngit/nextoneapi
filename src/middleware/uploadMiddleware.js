@@ -157,16 +157,14 @@ const uploadProjectDocuments = uploadProjectDocs.fields([
 ]);
 
 /**
- * Single file upload for unit plan
- * Field name: `unit_plans`
+ * Single file upload for unit plan (accepts any field name)
  */
-const uploadUnitPlan = uploadProjectDocs.single('unit_plans');
+const uploadUnitPlan = uploadProjectDocs.any();
 
 /**
- * Single file upload for creative
- * Field name: `creatives`
+ * Single file upload for creative (accepts any field name)
  */
-const uploadCreative = uploadProjectDocs.single('creatives');
+const uploadCreative = uploadProjectDocs.any();
 
 const uploadSingleFile = uploadGeneric.single('file');
 const uploadMultipleFiles = uploadGeneric.array('files', 10);
