@@ -388,4 +388,77 @@ router.patch("/:id/status", authenticate, authorize("super_admin", "admin"), pro
  */
 router.get("/:id/leads", authenticate, authorize("super_admin", "admin", "sales_manager"), projectController.getProjectLeads);
 
+/**
+ * @swagger
+ * /api/v1/projects/{id}/share:
+ *   post:
+ *     summary: Share project details via email with ZIP attachment
+ *     description: >
+ *       Sends a branded HTML email to one or more email addresses with:
+ *         - Full project details (name, location, price, configs, RERA, possession, amenities)
+ *         - All unit plans and creatives as a ZIP attachment (organised into Unit Plans / Creatives folders)
+ *         - Optional personalised message from the sender
+ *       The ZIP is built on-the-fly — no temp files stored.
+ *     tags: [Projects]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Project UUID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [emails]
+ *             properties:
+ *               emails:
+ *                 description: One email address (string) or multiple (array of strings)
+ *                 oneOf:
+ *                   - type: string
+ *                     format: email
+ *                     example: "client@example.com"
+ *                   - type: array
+ *                     items:
+ *                       type: string
+ *                       format: email
+ *                     example: ["client@example.com", "partner@example.com"]
+ *               message:
+ *                 type: string
+ *                 description: Optional personalised note shown at top of the email
+ *                 example: "Hi Suresh, please find the Skyline Heights project details as discussed."
+ *           example:
+ *             emails: ["client@example.com", "partner@example.com"]
+ *             message: "Hi, please find the project details as discussed."
+ *     responses:
+ *       200:
+ *         description: Project shared — email sent successfully
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Project shared successfully"
+ *               data:
+ *                 project_id: "proj-uuid-001"
+ *                 project_name: "Skyline Heights"
+ *                 sent_to: ["client@example.com", "partner@example.com"]
+ *                 total_sent: 2
+ *                 attached:
+ *                   zip_name: "Skyline Heights_Documents.zip"
+ *                   files: 5
+ *                 shared_by: "Rahul Sharma"
+ *       400:
+ *         description: Missing emails, invalid email format
+ *       404:
+ *         description: Project not found
+ */
+const shareProjectController = require("../controllers/shareProjectController").shareProject;
+router.post("/:id/share", authenticate, shareProjectController);
+
 module.exports = router;
