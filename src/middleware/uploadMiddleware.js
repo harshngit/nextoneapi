@@ -85,24 +85,6 @@ const uploadProjectDocs = multer({
   limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB max per file
 });
 
-// ── Middleware factories ──────────────────────────────────────────────────────
-
-/**
- * Single Excel file upload for bulk lead import
- * Field name: `file`
- */
-const uploadLeadsBulkFile = uploadLeadsBulk.single('file');
-
-/**
- * Multiple files upload for project documents
- * Fields: 'unit_plans' (up to 10 files), 'creatives' (up to 10 files)
- */
-const uploadProjectDocuments = uploadProjectDocs.fields([
-  { name: 'unit_plans', maxCount: 10 },
-  { name: 'creatives', maxCount: 10 },
-]);
-
-
 // ── Storage engine for lead voice recordings ───────────────────────────────────
 const leadVoiceStorage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -138,8 +120,63 @@ const uploadLeadVoice = multer({
   limits:     { fileSize: 25 * 1024 * 1024 }, // 25 MB max
 }).single('voice_recording');
 
+// ── Generic storage for one-off uploads ──────────────────────────────────────
+const genericStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(process.cwd(), 'uploads', 'temp');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const timestamp = Date.now();
+    const sanitized = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    cb(null, `${timestamp}_${sanitized}`);
+  },
+});
+
+const uploadGeneric = multer({
+  storage: genericStorage,
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20 MB max
+});
+
+// ── Middleware factories ──────────────────────────────────────────────────────
+
+/**
+ * Single Excel file upload for bulk lead import
+ * Field name: `file`
+ */
+const uploadLeadsBulkFile = uploadLeadsBulk.single('file');
+
+/**
+ * Multiple files upload for project documents
+ * Fields: 'unit_plans' (up to 10 files), 'creatives' (up to 10 files)
+ */
+const uploadProjectDocuments = uploadProjectDocs.fields([
+  { name: 'unit_plans', maxCount: 10 },
+  { name: 'creatives',  maxCount: 10 },
+]);
+
+/**
+ * Single file upload for unit plan
+ * Field name: `unit_plans`
+ */
+const uploadUnitPlan = uploadProjectDocs.single('unit_plans');
+
+/**
+ * Single file upload for creative
+ * Field name: `creatives`
+ */
+const uploadCreative = uploadProjectDocs.single('creatives');
+
+const uploadSingleFile = uploadGeneric.single('file');
+const uploadMultipleFiles = uploadGeneric.array('files', 10);
+
 module.exports = {
   uploadLeadsBulkFile,
   uploadProjectDocuments,
+  uploadUnitPlan,
+  uploadCreative,
   uploadLeadVoice,
+  uploadSingleFile,
+  uploadMultipleFiles,
 };

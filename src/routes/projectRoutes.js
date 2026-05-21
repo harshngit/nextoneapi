@@ -83,11 +83,12 @@ router.get("/", authenticate, projectController.getAllProjects);
  * @swagger
  * /api/v1/projects:
  *   post:
- *     summary: Create a new project
+ *     summary: Create a new project (JSON)
  *     description: >
  *       Adds a new real estate project to the system.
  *       Only Admin and Super Admin can create projects.
- *       Projects are then available for the sales team to map leads against.
+ *       This version takes a JSON body with optional unit_plans and creatives arrays
+ *       containing file information from the upload API.
  *     tags: [Project Management]
  *     security:
  *       - BearerAuth: []
@@ -95,107 +96,6 @@ router.get("/", authenticate, projectController.getAllProjects);
  *       required: true
  *       content:
  *         application/json:
- *           schema:
- *             type: object
- *             required: [name, city]
- *             properties:
- *               name:
- *                 type: string
- *                 example: "Skyline Heights"
- *               developer:
- *                 type: string
- *                 example: "Lodha Group"
- *               city:
- *                 type: string
- *                 example: "Mumbai"
- *               locality:
- *                 type: string
- *                 example: "Andheri West"
- *               address:
- *                 type: string
- *                 example: "Plot 14, Veera Desai Road, Andheri West"
- *               configurations:
- *                 type: array
- *                 items:
- *                   type: string
- *                 example: ["1BHK", "2BHK", "3BHK"]
- *               price_range:
- *                 type: string
- *                 example: "80L - 2Cr"
- *               total_units:
- *                 type: integer
- *                 example: 240
- *               possession_date:
- *                 type: string
- *                 format: date
- *                 example: "2027-12-01"
- *               rera_number:
- *                 type: string
- *                 example: "P51800045678"
- *               amenities:
- *                 type: array
- *                 items:
- *                   type: string
- *                 example: ["Swimming Pool", "Gym", "Clubhouse"]
- *               status:
- *                 type: string
- *                 enum: [active, inactive, upcoming, completed]
- *                 example: "active"
- *               brochure_url:
- *                 type: string
- *                 example: "https://cdn.nextonerealty.com/brochures/skyline.pdf"
- *               description:
- *                 type: string
- *                 example: "Premium residential project in the heart of Andheri West"
- *           example:
- *             name: "Skyline Heights"
- *             developer: "Lodha Group"
- *             city: "Mumbai"
- *             locality: "Andheri West"
- *             address: "Plot 14, Veera Desai Road, Andheri West"
- *             configurations: ["1BHK", "2BHK", "3BHK"]
- *             price_range: "80L - 2Cr"
- *             total_units: 240
- *             possession_date: "2027-12-01"
- *             rera_number: "P51800045678"
- *             amenities: ["Swimming Pool", "Gym", "Clubhouse"]
- *             status: "active"
- *             description: "Premium residential project in the heart of Andheri West"
- *     responses:
- *       201:
- *         description: Project created successfully
- *         content:
- *           application/json:
- *             example:
- *               success: true
- *               message: "Project created successfully"
- *               data:
- *                 id: "proj-uuid-001"
- *                 name: "Skyline Heights"
- *                 status: "active"
- *       403:
- *         description: Insufficient permissions
- */
-/**
- * @swagger
- * /api/v1/projects:
- *   post:
- *     summary: Create a new project (with optional document upload)
- *     description: >
- *       Creates a project. You can optionally upload unit plans and creative
- *       documents in the SAME request using multipart/form-data.
- *       All data is processed in a single transaction — if document upload fails
- *       the project is also rolled back.
- *
- *       Content-Type must be multipart/form-data even if no files are attached.
- *       Use form fields for all text data.
- *     tags: [Projects]
- *     security:
- *       - BearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         multipart/form-data:
  *           schema:
  *             type: object
  *             required: [name, city]
@@ -211,15 +111,25 @@ router.get("/", authenticate, projectController.getAllProjects);
  *               description:     { type: string }
  *               unit_plans:
  *                 type: array
- *                 items: { type: string, format: binary }
- *                 description: Unit plan files (PDF, JPEG, PNG, WEBP, Word — max 20MB each, up to 10)
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     file_name: { type: string }
+ *                     file_path: { type: string }
+ *                     file_size: { type: integer }
+ *                     mime_type: { type: string }
  *               creatives:
  *                 type: array
- *                 items: { type: string, format: binary }
- *                 description: Creative files (PDF, JPEG, PNG, WEBP, Word — max 20MB each, up to 10)
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     file_name: { type: string }
+ *                     file_path: { type: string }
+ *                     file_size: { type: integer }
+ *                     mime_type: { type: string }
  *     responses:
  *       201:
- *         description: Project created with any uploaded documents
+ *         description: Project created successfully
  *         content:
  *           application/json:
  *             example:
@@ -228,20 +138,7 @@ router.get("/", authenticate, projectController.getAllProjects);
  *               data:
  *                 id: "proj-uuid"
  *                 name: "Skyline Heights"
- *                 city: "Mumbai"
  *                 status: "active"
- *                 documents:
- *                   count: 2
- *                   unit_plans:
- *                     - id: "doc-uuid-1"
- *                       document_type: "unit_plan"
- *                       file_name: "floor_plan.pdf"
- *                       url: "/api/v1/projects/proj-uuid/documents/doc-uuid-1/download"
- *                   creatives:
- *                     - id: "doc-uuid-2"
- *                       document_type: "creative"
- *                       file_name: "banner.jpg"
- *                       url: "/api/v1/projects/proj-uuid/documents/doc-uuid-2/download"
  *       400:
  *         description: name and city are required
  */
@@ -249,7 +146,6 @@ router.post(
   "/",
   authenticate,
   authorize("super_admin", "admin"),
-  uploadProjectDocuments,          // multer — optional files, fields: unit_plans[], creatives[]
   projectController.createProject
 );
 

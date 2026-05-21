@@ -76,6 +76,7 @@ const createProject = async (req, res, next) => {
       name, developer, city, locality, address, configurations,
       price_range, total_units, possession_date, rera_number,
       amenities, status = "active", brochure_url, description,
+      unit_plans, creatives, // Arrays of document objects from JSON body
     } = req.body;
 
     if (!name || !city) return next(new AppError("name and city are required", 400));
@@ -99,50 +100,52 @@ const createProject = async (req, res, next) => {
 
     const project = result.rows[0];
 
-    // ── 2. Insert documents if uploaded alongside creation ────────────────────
-    const uploadedDocs = [];
+    // ── 2. Insert documents from JSON body ────────────────────
+    const savedDocs = [];
 
-    if (req.files) {
-      const processFiles = async (files, docType) => {
-        for (const file of (files || [])) {
-          const docResult = await client.query(
-            `INSERT INTO project_documents
-               (project_id, document_type, file_name, file_path, file_size, mime_type, uploaded_by)
-             VALUES ($1,$2,$3,$4,$5,$6,$7)
-             RETURNING *`,
-            [project.id, docType, file.originalname, file.path, file.size, file.mimetype, req.user.id]
-          );
-          uploadedDocs.push({
-            ...docResult.rows[0],
-            url: `/api/v1/projects/${project.id}/documents/${docResult.rows[0].id}/download`,
-          });
-        }
-      };
+    const processDocuments = async (docs, docType) => {
+      for (const doc of (docs || [])) {
+        const docResult = await client.query(
+          `INSERT INTO project_documents
+             (project_id, document_type, file_name, file_path, file_size, mime_type, uploaded_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)
+           RETURNING *`,
+          [
+            project.id, 
+            docType, 
+            doc.file_name, 
+            doc.file_path, 
+            doc.file_size || 0, 
+            doc.mime_type || 'application/octet-stream', 
+            req.user.id
+          ]
+        );
+        savedDocs.push({
+          ...docResult.rows[0],
+          url: `/api/v1/projects/${project.id}/documents/${docResult.rows[0].id}/download`,
+        });
+      }
+    };
 
-      await processFiles(req.files.unit_plans, "unit_plan");
-      await processFiles(req.files.creatives,  "creative");
+    if (unit_plans && Array.isArray(unit_plans)) {
+      await processDocuments(unit_plans, "unit_plan");
+    }
+    if (creatives && Array.isArray(creatives)) {
+      await processDocuments(creatives, "creative");
     }
 
     await client.query("COMMIT");
 
     return sendSuccess(res, "Project created successfully", {
       ...project,
-      documents: uploadedDocs.length > 0 ? {
-        count:     uploadedDocs.length,
-        unit_plans: uploadedDocs.filter(d => d.document_type === "unit_plan"),
-        creatives:  uploadedDocs.filter(d => d.document_type === "creative"),
+      documents: savedDocs.length > 0 ? {
+        count:     savedDocs.length,
+        unit_plans: savedDocs.filter(d => d.document_type === "unit_plan"),
+        creatives:  savedDocs.filter(d => d.document_type === "creative"),
       } : null,
     }, 201);
   } catch (err) {
     await client.query("ROLLBACK");
-    // Clean up any uploaded files on error
-    if (req.files) {
-      const allFiles = [
-        ...(req.files.unit_plans || []),
-        ...(req.files.creatives  || []),
-      ];
-      allFiles.forEach(f => { if (fs.existsSync(f.path)) fs.unlinkSync(f.path); });
-    }
     next(err);
   } finally {
     client.release();

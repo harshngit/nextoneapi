@@ -13,7 +13,10 @@ const {
   downloadProjectDocument,
   downloadAllProjectDocuments,
   deleteProjectDocument,
+  uploadStandaloneUnitPlan,
+  uploadStandaloneCreative,
 } = require('../controllers/projectDocumentsController');
+const { uploadUnitPlan, uploadCreative } = require('../middleware/uploadMiddleware');
 
 /**
  * @swagger
@@ -21,6 +24,56 @@ const {
  *   name: Project Documents
  *   description: Management of unit plans and creatives for projects
  */
+
+/**
+ * @swagger
+ * /api/v1/projects/upload-unit-plan:
+ *   post:
+ *     summary: Upload a single unit plan
+ *     description: Uploads a unit plan document without requiring a project ID. Returns file details.
+ *     tags: [Project Documents]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               unit_plans:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       201:
+ *         description: Unit plan uploaded successfully
+ */
+router.post('/upload-unit-plan', authenticate, uploadUnitPlan, uploadStandaloneUnitPlan);
+
+/**
+ * @swagger
+ * /api/v1/projects/upload-creative:
+ *   post:
+ *     summary: Upload a single creative
+ *     description: Uploads a creative document without requiring a project ID. Returns file details.
+ *     tags: [Project Documents]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               creatives:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       201:
+ *         description: Creative uploaded successfully
+ */
+router.post('/upload-creative', authenticate, uploadCreative, uploadStandaloneCreative);
 
 /**
  * @swagger

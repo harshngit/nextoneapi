@@ -339,10 +339,62 @@ const deleteProjectDocument = async (req, res, next) => {
   }
 };
 
+/**
+ * POST /api/v1/projects/upload-unit-plan
+ * Upload a single unit plan (no project ID required)
+ */
+const uploadStandaloneUnitPlan = async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return next(new AppError('No unit plan file uploaded', 400));
+    }
+
+    const fileData = {
+      file_name: req.file.originalname,
+      file_path: req.file.path.replace(/\\/g, '/'),
+      file_size: req.file.size,
+      mime_type: req.file.mimetype,
+      url: `/uploads/projects/temp/unit_plans/${req.file.filename}`,
+      document_type: 'unit_plan'
+    };
+
+    return sendSuccess(res, 'Unit plan uploaded successfully', fileData, 201);
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * POST /api/v1/projects/upload-creative
+ * Upload a single creative (no project ID required)
+ */
+const uploadStandaloneCreative = async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return next(new AppError('No creative file uploaded', 400));
+    }
+
+    const fileData = {
+      file_name: req.file.originalname,
+      file_path: req.file.path.replace(/\\/g, '/'),
+      file_size: req.file.size,
+      mime_type: req.file.mimetype,
+      url: `/uploads/projects/temp/creatives/${req.file.filename}`,
+      document_type: 'creative'
+    };
+
+    return sendSuccess(res, 'Creative uploaded successfully', fileData, 201);
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   uploadProjectDocuments,
   getProjectDocuments,
   downloadProjectDocument,
   downloadAllProjectDocuments,
   deleteProjectDocument,
+  uploadStandaloneUnitPlan,
+  uploadStandaloneCreative,
 };
