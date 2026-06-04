@@ -5,9 +5,9 @@ const { getMessaging }                  = require('firebase-admin/messaging');
 if (!getApps().length) {
   initializeApp({
     credential: cert({
-      projectId    : process.env.FCM_PROJECT_ID,
-      clientEmail  : process.env.FCM_CLIENT_EMAIL,
-      privateKey   : (process.env.FCM_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
+      project_id    : process.env.FCM_PROJECT_ID,
+      client_email  : process.env.FCM_CLIENT_EMAIL,
+      private_key   : (process.env.FCM_PRIVATE_KEY || '').replace(/\\n/g, '\n'),
     }),
   });
 }
