@@ -32,6 +32,15 @@ const MANAGER = ['super_admin', 'admin', 'sales_manager'];
  *         name: project_id
  *         schema: { type: string, format: uuid }
  *       - in: query
+ *         name: assigned_to
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: from
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: to
+ *         schema: { type: string, format: date }
+ *       - in: query
  *         name: page
  *         schema: { type: integer, default: 1 }
  *       - in: query
@@ -168,6 +177,19 @@ router.delete('/:id', authenticate, authorize(...ADMIN), ctrl.deleteSiteVisit);
  *         name: id
  *         required: true
  *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [client_reaction, next_step]
+ *             properties:
+ *               rating: { type: integer, minimum: 1, maximum: 5, description: "Rating from 1 to 5" }
+ *               client_reaction: { type: string, enum: ["very_positive", "positive", "neutral", "negative", "not_interested"], description: "Client's reaction to the site visit" }
+ *               interested_in: { type: string, description: "What the client is interested in" }
+ *               next_step: { type: string, enum: ["negotiation", "follow_up", "send_proposal", "booked", "lost", "site_revisit"], description: "Next step to take" }
+ *               remarks: { type: string, description: "Additional remarks or notes" }
  *     responses:
  *       201:
  *         description: Feedback submitted
