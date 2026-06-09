@@ -11,13 +11,12 @@ const AppError = require('../utils/AppError')
  * ─── Attendance Rules ────────────────────────────────────────────────────────
  *
  * CHECK-IN window determines status:
- *   Before 10:30          → present  (on time)
- *   10:30 – 14:00         → present  (allowed window, still counts as full day)
- *   After  14:00          → half_day (too late for full day)
+ *   Before or at 10:30 → present (on time, full day)
+ *   After 10:30        → half_day (too late for full day)
  *
  * CHECK-OUT rule (applied at checkout):
- *   Checked out BEFORE 19:30  → downgrades to half_day (left too early)
- *   Checked out AT/AFTER 19:30 → keeps existing check-in status
+ *   Checked out BEFORE 19:30  → remains half_day (left too early)
+ *   Checked out AT/AFTER 19:30 → if checked in on time (present), keeps present; if half_day, remains half_day
  *
  * SALARY impact:
  *   present / late  → 100% of per-day salary
@@ -25,8 +24,7 @@ const AppError = require('../utils/AppError')
  *   absent          → 0%
  */
 
-const CHECKIN_WINDOW_START = '10:30'  // earliest allowed check-in for full day
-const CHECKIN_HALF_DAY_CUTOFF = '14:00' // after this → half day
+const CHECKIN_HALF_DAY_CUTOFF = '10:30' // after this → half day
 const CHECKOUT_FULL_DAY_TIME  = '19:30' // must check out at/after this for full day
 
 const resolveStatus = async (checkInTime) => {
@@ -38,15 +36,14 @@ const resolveStatus = async (checkInTime) => {
 
     // Parse cutoffs
     const [hdH, hdM] = CHECKIN_HALF_DAY_CUTOFF.split(':').map(Number)
-    const halfDayCutoffMins = hdH * 60 + hdM  // 14:00 = 840
+    const halfDayCutoffMins = hdH * 60 + hdM  // 10:30 = 630
 
-    // After 14:00 → half_day immediately at check-in
+    // After 10:30 → half_day immediately at check-in
     if (totalMinutes > halfDayCutoffMins) {
       return 'half_day'
     }
 
-    // 10:30 to 14:00 → present (full day, on time or slightly late but acceptable)
-    // Before 10:30 → also present
+    // Before or at 10:30 → present (full day)
     return 'present'
   } catch {
     return 'present'
@@ -233,6 +230,8 @@ const checkOut = async (req, res, next) => {
 
     const statusMessage = finalStatus === 'half_day' && currentStatus !== 'half_day'
       ? 'Checked out — marked as half day (checkout before 7:30 PM)'
+      : finalStatus === 'half_day' && currentStatus === 'half_day'
+      ? 'Checked out — marked as half day (check-in after 10:30 AM)'
       : 'Checked out successfully'
 
     return sendSuccess(res, statusMessage, {
