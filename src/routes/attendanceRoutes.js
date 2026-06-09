@@ -719,4 +719,94 @@ router.get('/pending', authenticate, authorize(...ADMIN), ctrl.getPendingApprova
  */
 router.patch('/:id/approve', authenticate, authorize(...ADMIN), ctrl.approveStatus)
 
+/**
+ * @swagger
+ * /api/v1/attendance/{id}/status:
+ *   patch:
+ *     summary: Change attendance status and auto-update salary slip (Admin)
+ *     description: >
+ *       Changes an attendance record's status to any valid value
+ *       (present, half_day, absent, on_leave, late) AND automatically
+ *       recalculates the salary slip for that month if one already exists.
+ *
+ *       **Salary recalculation rules:**
+ *       - present / late  → counts as 1 full day
+ *       - half_day        → counts as 0.5 day (50% of per-day salary)
+ *       - absent / on_leave → counts as 0 days (no pay)
+ *
+ *       The entire month's attendance is re-summed and the salary slip
+ *       is updated in one transaction. The response shows the exact
+ *       salary difference caused by this status change.
+ *
+ *       If no salary slip exists for that month yet, the attendance is
+ *       still updated and a message tells you to generate the slip.
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Attendance record UUID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [status]
+ *             properties:
+ *               status:
+ *                 type: string
+ *                 enum: [present, half_day, absent, on_leave, late]
+ *                 example: present
+ *               reason:
+ *                 type: string
+ *                 description: Reason for the change (stored in manual_reason)
+ *                 example: "Employee was present but check-in failed"
+ *     responses:
+ *       200:
+ *         description: Attendance updated and salary slip recalculated
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Attendance changed from \"half_day\" to \"present\" successfully"
+ *               data:
+ *                 attendance:
+ *                   id: "att-uuid"
+ *                   date: "2026-06-10"
+ *                   status: "present"
+ *                   employee_name: "Rahul Sharma"
+ *                   is_manual_entry: true
+ *                 salary_slip:
+ *                   month: 6
+ *                   year: 2026
+ *                   month_label: "June 2026"
+ *                   monthly_salary: 40000
+ *                   working_days: 22
+ *                   present_days: 20.5
+ *                   per_day_salary: 1818.18
+ *                   earned_salary: 37272.73
+ *                   deductions: 0
+ *                   final_salary: 37272.73
+ *                 salary_impact:
+ *                   old_final_salary: 35454.55
+ *                   new_final_salary: 37272.73
+ *                   difference: 1818.18
+ *                   difference_label: "+₹1818.18"
+ *                   old_present_days: 19.5
+ *                   new_present_days: 20.5
+ *                   per_day_salary: 1818.18
+ *                 slip_updated: true
+ *       400:
+ *         description: Invalid status or already set to this status
+ *       404:
+ *         description: Attendance record not found
+ */
+router.patch('/:id/status', authenticate, authorize(...ADMIN), ctrl.changeAttendanceStatus)
+
 module.exports = router

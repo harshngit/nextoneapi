@@ -6,6 +6,18 @@ const { sendSuccess, sendError, paginate } = require('../utils/response')
 const AppError = require('../utils/AppError')
 const { createNotification, notifyAdmins } = require('./notificationController')
 
+// ─── Salary recalculation helper ──────────────────────────────────────────────
+// Counts Mon–Fri days in a given month/year (same logic as salaryController)
+const countWorkingDays = (year, month) => {
+  const daysInMonth = new Date(year, month, 0).getDate()
+  let count = 0
+  for (let d = 1; d <= daysInMonth; d++) {
+    const day = new Date(year, month - 1, d).getDay()
+    if (day !== 0 && day !== 6) count++
+  }
+  return count
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /**
@@ -189,44 +201,6 @@ const checkIn = async (req, res, next) => {
     }
 
     return sendSuccess(res, 'Checked in successfully', { attendance: record, user: userMeta }, 201)
-
-    // ── Push + in-app notifications ───────────────────────────────────────────
-    setImmediate(async () => {
-      try {
-        const statusLabel = { present: 'on time', late: 'late', half_day: 'half day' }[status] || status
-        // Notify manager if exec is late or half_day
-        if (['late', 'half_day'].includes(status)) {
-          const mgrRow = await pool.query(
-            `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [userId]
-          )
-          if (mgrRow.rows.length) {
-            await createNotification(mgrRow.rows[0].manager_id, {
-              type:           'attendance_checkin',
-              title:          `Team Member Checked In ${status === 'late' ? '(Late)' : '(Half Day)'}`,
-              message:        `${userMeta.full_name} checked in ${statusLabel}`,
-              reference_id:   record.id,
-              reference_type: 'attendance',
-              metadata:       { user_id: userId, status, date: today },
-            })
-          }
-        }
-        // Notify admins if late or half_day
-        if (['late', 'half_day'].includes(status)) {
-          await notifyAdmins({
-            type:           'attendance_checkin',
-            title:          `Late Check-In — ${userMeta.full_name}`,
-            message:        `${userMeta.full_name} checked in ${statusLabel} today`,
-            reference_id:   record.id,
-            reference_type: 'attendance',
-            metadata:       { user_id: userId, status, date: today },
-          })
-        }
-      } catch (e) {
-        console.error('[Notification] checkIn failed:', e.message)
-      }
-    })
-
-    return sendSuccess(res, 'Checked in successfully', { attendance: record, user: userMeta }, 201)
   } catch (err) { next(err) }
 }
 
@@ -272,37 +246,6 @@ const checkOut = async (req, res, next) => {
       : finalStatus === 'half_day' && currentStatus === 'half_day'
       ? 'Checked out — marked as half day (check-in after 10:30 AM)'
       : 'Checked out successfully'
-
-    // ── Push + in-app: notify manager + admins on early checkout (half_day) ──
-    if (finalStatus === 'half_day' && currentStatus !== 'half_day') {
-      setImmediate(async () => {
-        try {
-          const mgrRow = await pool.query(
-            `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [userId]
-          )
-          if (mgrRow.rows.length) {
-            await createNotification(mgrRow.rows[0].manager_id, {
-              type:           'attendance_checkout',
-              title:          'Team Member Left Early (Half Day)',
-              message:        `${userMeta.full_name} checked out early — marked as half day`,
-              reference_id:   r.rows[0].id,
-              reference_type: 'attendance',
-              metadata:       { user_id: userId, status: finalStatus, date: today },
-            })
-          }
-          await notifyAdmins({
-            type:           'attendance_checkout',
-            title:          `Early Checkout — ${userMeta.full_name}`,
-            message:        `${userMeta.full_name} left early and was marked as half day`,
-            reference_id:   r.rows[0].id,
-            reference_type: 'attendance',
-            metadata:       { user_id: userId, status: finalStatus, date: today },
-          })
-        } catch (e) {
-          console.error('[Notification] checkOut failed:', e.message)
-        }
-      })
-    }
 
     return sendSuccess(res, statusMessage, {
       attendance:    r.rows[0],
@@ -832,23 +775,6 @@ const manualEntry = async (req, res, next) => {
     if (!userMeta) return next(new AppError('User not found',404))
     const wh=calcWorkingHours(check_in_time,check_out_time)
     const r=await pool.query(`INSERT INTO attendance (user_id,date,status,check_in_time,check_out_time,working_hours,reason,is_manual_entry,manual_by) VALUES ($1,$2,$3,$4,$5,$6,$7,true,$8) ON CONFLICT (user_id,date) DO UPDATE SET status=EXCLUDED.status,check_in_time=EXCLUDED.check_in_time,check_out_time=EXCLUDED.check_out_time,working_hours=EXCLUDED.working_hours,reason=EXCLUDED.reason,is_manual_entry=true,manual_by=EXCLUDED.manual_by,updated_at=NOW() RETURNING *`,[user_id,date,status,check_in_time||null,check_out_time||null,wh,reason||null,req.user.id])
-
-    // ── Push: notify the employee about manual entry ──────────────────────────
-    setImmediate(async () => {
-      try {
-        await createNotification(user_id, {
-          type:           'attendance_manual',
-          title:          'Your Attendance Was Updated',
-          message:        `Your attendance for ${date} was manually set to "${status}" by admin`,
-          reference_id:   r.rows[0].id,
-          reference_type: 'attendance',
-          metadata:       { date, status, reason: reason || null },
-        })
-      } catch (e) {
-        console.error('[Notification] manualEntry failed:', e.message)
-      }
-    })
-
     return sendSuccess(res,'Manual entry saved',{attendance:r.rows[0],user:userMeta},201)
   } catch (err) { next(err) }
 }
@@ -1122,22 +1048,6 @@ const approveStatus = async (req, res, next) => {
 
     const approvedBy = await getUserMeta(req.user.id)
 
-    // ── Push: notify the employee their attendance was approved/updated ───────
-    setImmediate(async () => {
-      try {
-        await createNotification(rec.user_id, {
-          type:           'attendance_approved',
-          title:          'Attendance Status Updated',
-          message:        `Your attendance for ${rec.date} was updated to "${status}"${reason ? ` — ${reason}` : ''}`,
-          reference_id:   result.rows[0].id,
-          reference_type: 'attendance',
-          metadata:       { old_status: oldStatus, new_status: status, date: rec.date, reason: reason || null },
-        })
-      } catch (e) {
-        console.error('[Notification] approveStatus failed:', e.message)
-      }
-    })
-
     return sendSuccess(res, `Status updated to "${status}" successfully`, {
       attendance: result.rows[0],
       employee: {
@@ -1203,6 +1113,229 @@ const getPendingApprovals = async (req, res, next) => {
   }
 }
 
+// ─── PATCH /api/v1/attendance/:id/status ─────────────────────────────────────
+/**
+ * Change an attendance record status AND automatically recalculate
+ * the salary slip for that month if one exists.
+ *
+ * Body: { status, reason? }
+ * status: present | half_day | absent | on_leave | late
+ *
+ * Salary recalculation rules (same as generateSalarySlip):
+ *   present / late  → 1.0 day
+ *   half_day        → 0.5 day
+ *   absent / on_leave → 0 day
+ *
+ * Response includes:
+ *   - updated attendance record
+ *   - updated salary slip (if it existed for that month)
+ *   - salary diff showing how much changed
+ */
+const changeAttendanceStatus = async (req, res, next) => {
+  const client = await pool.connect()
+  try {
+    const { id }             = req.params
+    const { status, reason } = req.body
+
+    const VALID = ['present', 'half_day', 'absent', 'on_leave', 'late']
+    if (!status || !VALID.includes(status)) {
+      return next(new AppError(`status is required and must be one of: ${VALID.join(', ')}`, 400))
+    }
+
+    // ── Fetch attendance record ───────────────────────────────────────────────
+    const attRes = await pool.query(
+      `SELECT a.*, 
+              CONCAT(u.first_name,' ',u.last_name) AS full_name,
+              u.role, u.email, u.id AS uid
+       FROM attendance a
+       JOIN users u ON u.id = a.user_id
+       WHERE a.id = $1`,
+      [id]
+    )
+    if (!attRes.rows.length) return next(new AppError('Attendance record not found', 404))
+
+    const rec       = attRes.rows[0]
+    const oldStatus = rec.status
+    const userId    = rec.user_id
+
+    if (oldStatus === status) {
+      return next(new AppError(`Status is already "${status}"`, 400))
+    }
+
+    // ── Extract month and year from attendance date ───────────────────────────
+    const attDate = new Date(rec.date)
+    const month   = attDate.getMonth() + 1   // 1–12
+    const year    = attDate.getFullYear()
+
+    await client.query('BEGIN')
+
+    // ── Step 1: Update attendance status ─────────────────────────────────────
+    const updatedAtt = await client.query(
+      `UPDATE attendance
+       SET status          = $1,
+           manual_reason   = $2,
+           is_manual_entry = true,
+           manual_by       = $3,
+           updated_at      = NOW()
+       WHERE id = $4
+       RETURNING *`,
+      [
+        status,
+        reason || `Status changed from ${oldStatus} to ${status} by admin`,
+        req.user.id,
+        id,
+      ]
+    )
+
+    // ── Step 2: Check if a salary slip exists for this month ──────────────────
+    const slipRes = await client.query(
+      `SELECT * FROM salary_slips WHERE user_id = $1 AND month = $2 AND year = $3`,
+      [userId, month, year]
+    )
+
+    let updatedSlip   = null
+    let salaryImpact  = null
+
+    if (slipRes.rows.length) {
+      const existingSlip = slipRes.rows[0]
+
+      // ── Step 3: Recalculate attendance totals for the whole month ─────────
+      const start = `${year}-${String(month).padStart(2, '0')}-01`
+      const end   = new Date(year, month, 0).toISOString().split('T')[0]
+
+      const attSummary = await client.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE status IN ('present','late'))  AS present_count,
+           COUNT(*) FILTER (WHERE status = 'half_day')           AS half_day_count,
+           COUNT(*) FILTER (WHERE status = 'on_leave')           AS leave_count,
+           COUNT(*) FILTER (WHERE status = 'absent')             AS absent_count
+         FROM attendance
+         WHERE user_id = $1 AND date BETWEEN $2 AND $3`,
+        [userId, start, end]
+      )
+
+      const att          = attSummary.rows[0]
+      const presentCount = parseFloat(att.present_count)  || 0
+      const halfDayCount = parseFloat(att.half_day_count) || 0
+      const leaveCount   = parseFloat(att.leave_count)    || 0
+      const absentCount  = parseFloat(att.absent_count)   || 0
+
+      // half_day = 0.5 day, present/late = 1 day, absent/on_leave = 0
+      const newPresentDays = presentCount + (halfDayCount * 0.5)
+      const newAbsentDays  = absentCount
+      const newLeaveDays   = leaveCount
+
+      const workingDays   = parseFloat(existingSlip.working_days) || countWorkingDays(year, month)
+      const monthlySalary = parseFloat(existingSlip.monthly_salary)
+      const perDaySalary  = parseFloat((monthlySalary / workingDays).toFixed(2))
+      const earnedSalary  = parseFloat((perDaySalary * newPresentDays).toFixed(2))
+      const deductions    = parseFloat(existingSlip.deductions) || 0
+      const newFinalSalary = parseFloat((earnedSalary - deductions).toFixed(2))
+      const oldFinalSalary = parseFloat(existingSlip.final_salary)
+
+      // ── Step 4: Update salary slip ────────────────────────────────────────
+      const slipUpdate = await client.query(
+        `UPDATE salary_slips
+         SET present_days  = $1,
+             absent_days   = $2,
+             leave_days    = $3,
+             per_day_salary = $4,
+             earned_salary  = $5,
+             final_salary   = $6,
+             updated_at     = NOW()
+         WHERE user_id = $7 AND month = $8 AND year = $9
+         RETURNING *`,
+        [
+          newPresentDays, newAbsentDays, newLeaveDays,
+          perDaySalary, earnedSalary, newFinalSalary,
+          userId, month, year,
+        ]
+      )
+
+      updatedSlip  = slipUpdate.rows[0]
+      const diff   = parseFloat((newFinalSalary - oldFinalSalary).toFixed(2))
+      salaryImpact = {
+        old_final_salary:  oldFinalSalary,
+        new_final_salary:  newFinalSalary,
+        difference:        diff,
+        difference_label:  diff > 0 ? `+₹${diff}` : diff < 0 ? `-₹${Math.abs(diff)}` : 'No change',
+        old_present_days:  parseFloat(existingSlip.present_days),
+        new_present_days:  newPresentDays,
+        per_day_salary:    perDaySalary,
+        month,
+        year,
+      }
+    }
+
+    await client.query('COMMIT')
+
+    // ── Push notifications ────────────────────────────────────────────────────
+    setImmediate(async () => {
+      try {
+        const monthName = new Date(year, month - 1).toLocaleString('en-IN', { month: 'long' })
+        const salaryMsg = salaryImpact
+          ? ` Your ${monthName} salary has been updated to ₹${salaryImpact.new_final_salary.toLocaleString('en-IN')}.`
+          : ''
+
+        // Notify the employee
+        await createNotification(userId, {
+          type:           'attendance_approved',
+          title:          'Attendance Status Changed',
+          message:        `Your attendance for ${new Date(rec.date).toLocaleDateString('en-IN')} was changed from "${oldStatus}" to "${status}".${salaryMsg}`,
+          reference_id:   id,
+          reference_type: 'attendance',
+          metadata:       { old_status: oldStatus, new_status: status, salary_impact: salaryImpact },
+        })
+
+        // Notify admins
+        await notifyAdmins({
+          type:           'attendance_approved',
+          title:          'Attendance Status Updated',
+          message:        `${rec.full_name}'s attendance changed from "${oldStatus}" to "${status}"${salaryImpact ? ` — salary updated to ₹${salaryImpact.new_final_salary.toLocaleString('en-IN')}` : ''}`,
+          reference_id:   id,
+          reference_type: 'attendance',
+          metadata:       { user_id: userId, old_status: oldStatus, new_status: status },
+        })
+      } catch (e) {
+        console.error('[Notification] changeAttendanceStatus failed:', e.message)
+      }
+    })
+
+    // ── Response ──────────────────────────────────────────────────────────────
+    const monthName = new Date(year, month - 1).toLocaleString('en-IN', { month: 'long' })
+
+    return sendSuccess(res, `Attendance changed from "${oldStatus}" to "${status}" successfully`, {
+      attendance: {
+        ...updatedAtt.rows[0],
+        employee_name: rec.full_name,
+        role:          rec.role,
+      },
+      salary_slip: updatedSlip ? {
+        ...updatedSlip,
+        month_label:    `${monthName} ${year}`,
+        present_days:   parseFloat(updatedSlip.present_days),
+        absent_days:    parseFloat(updatedSlip.absent_days),
+        leave_days:     parseFloat(updatedSlip.leave_days),
+        monthly_salary: parseFloat(updatedSlip.monthly_salary),
+        per_day_salary: parseFloat(updatedSlip.per_day_salary),
+        earned_salary:  parseFloat(updatedSlip.earned_salary),
+        deductions:     parseFloat(updatedSlip.deductions),
+        final_salary:   parseFloat(updatedSlip.final_salary),
+      } : null,
+      salary_impact:    salaryImpact,
+      slip_updated:     !!updatedSlip,
+      slip_not_found:   !updatedSlip
+        ? `No salary slip found for ${monthName} ${year}. Generate one via POST /api/v1/salary/generate to reflect this change.`
+        : null,
+    })
+  } catch (err) {
+    await client.query('ROLLBACK')
+    next(err)
+  } finally {
+    client.release()
+  }
+}
+
 module.exports = {
   uploadPhoto, checkIn, checkOut, getToday, getMyAttendance,
   getByDate, getByMonth, getByUser, getAll,
@@ -1211,4 +1344,5 @@ module.exports = {
   exportExcel, markAbsentEOD,
   approveStatus, getPendingApprovals,
   getTeamAttendance,
+  changeAttendanceStatus,
 }
