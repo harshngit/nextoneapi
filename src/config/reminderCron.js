@@ -342,13 +342,10 @@ const start = () => {
   console.log('[Reminder Cron] Starting — runs every 15 minutes');
   console.log('[Reminder Cron] Jobs: follow_up_reminder, follow_up_overdue, visit_reminder, revisit_reminder');
 
-  // Run once immediately on startup (catches anything missed during downtime)
-  runAllJobs();
-
-  // Then every 15 minutes
+  // Run every 15 minutes
   setInterval(runAllJobs, INTERVAL_MS);
 
-  console.log('[Reminder Cron] Scheduled');
+  console.log('[Reminder Cron] Scheduled — first tick in 15 minutes');
 };
 
 module.exports = {
