@@ -468,10 +468,18 @@ router.get("/:id/leads", authenticate, authorize("super_admin", "admin", "sales_
  *                   format: uuid
  *                 description: Optional list of document IDs to include (single or multiple). If not provided, all documents are included.
  *                 example: ["doc-uuid-001", "doc-uuid-002"]
+ *               fields:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   enum: [name, developer, location, address, price_range, configurations, total_units, possession_date, rera_number, status, description, amenities, video_url, payment_plan, home_loan_info]
+ *                 description: Optional list of project fields to include in email. If not provided, all fields are included.
+ *                 example: ["name", "price_range", "configurations"]
  *           example:
  *             emails: ["client@example.com", "partner@example.com"]
  *             message: "Hi, please find the project details as discussed."
  *             document_ids: ["doc-uuid-001", "doc-uuid-002"]
+ *             fields: ["name", "price_range", "configurations"]
  *     responses:
  *       200:
  *         description: Project shared — email sent successfully
@@ -489,6 +497,7 @@ router.get("/:id/leads", authenticate, authorize("super_admin", "admin", "sales_
  *                   zip_name: "Skyline Heights_Documents.zip"
  *                   files: 2
  *                   document_ids: ["doc-uuid-001", "doc-uuid-002"]
+ *                 fields: ["name", "price_range", "configurations"]
  *                 shared_by: "Rahul Sharma"
  *       400:
  *         description: Missing emails, invalid email format, or no valid documents found for provided IDs

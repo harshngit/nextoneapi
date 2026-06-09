@@ -132,7 +132,11 @@ const buildZipBuffer = (docs) => {
 const shareProject = async (req, res, next) => {
   try {
     const { id: projectId } = req.params;
-    const { emails, message, document_ids } = req.body;
+    const { emails, message, document_ids, fields } = req.body;
+    
+    // Default fields to include in email
+    const defaultFields = ['name', 'developer', 'location', 'address', 'price_range', 'configurations', 'total_units', 'possession_date', 'rera_number', 'status', 'description', 'amenities', 'video_url', 'payment_plan', 'home_loan_info'];
+    const selectedFields = fields && fields.length > 0 ? fields : defaultFields;
 
     // ── Validate emails ──────────────────────────────────────────────────────
     if (!emails) return next(new AppError('emails field is required', 400));
@@ -252,26 +256,26 @@ const shareProject = async (req, res, next) => {
       </div>` : ''}
 
       ${section('Project Overview', `<table cellpadding="0" cellspacing="0" style="width:100%;">
-        ${row('Project Name',  project.name)}
-        ${row('Developer',     project.developer)}
-        ${row('Location',      [project.locality, project.city].filter(Boolean).join(', '))}
-        ${row('Address',       project.address)}
-        ${row('Price Range',   project.price_range)}
-        ${row('Configurations',configs.length > 0 ? configs.join(' | ') : null)}
-        ${row('Total Units',   project.total_units)}
-        ${row('Possession',    possDate)}
-        ${row('RERA No.',      project.rera_number)}
-        ${row('Status',        project.status ? project.status.charAt(0).toUpperCase() + project.status.slice(1) : null)}
-        ${project.video_url ? row('Video', `<a href="${project.video_url}" style="color:${BRAND};">View Project Video</a>`) : ''}
-        ${project.payment_plan ? row('Payment Plan', project.payment_plan) : ''}
-        ${project.home_loan_info ? row('Home Loan Info', project.home_loan_info) : ''}
+        ${selectedFields.includes('name') ? row('Project Name', project.name) : ''}
+        ${selectedFields.includes('developer') ? row('Developer', project.developer) : ''}
+        ${selectedFields.includes('location') ? row('Location', [project.locality, project.city].filter(Boolean).join(', ')) : ''}
+        ${selectedFields.includes('address') ? row('Address', project.address) : ''}
+        ${selectedFields.includes('price_range') ? row('Price Range', project.price_range) : ''}
+        ${selectedFields.includes('configurations') ? row('Configurations', configs.length > 0 ? configs.join(' | ') : null) : ''}
+        ${selectedFields.includes('total_units') ? row('Total Units', project.total_units) : ''}
+        ${selectedFields.includes('possession_date') ? row('Possession', possDate) : ''}
+        ${selectedFields.includes('rera_number') ? row('RERA No.', project.rera_number) : ''}
+        ${selectedFields.includes('status') ? row('Status', project.status ? project.status.charAt(0).toUpperCase() + project.status.slice(1) : null) : ''}
+        ${selectedFields.includes('video_url') && project.video_url ? row('Video', `<a href="${project.video_url}" style="color:${BRAND};">View Project Video</a>`) : ''}
+        ${selectedFields.includes('payment_plan') && project.payment_plan ? row('Payment Plan', project.payment_plan) : ''}
+        ${selectedFields.includes('home_loan_info') && project.home_loan_info ? row('Home Loan Info', project.home_loan_info) : ''}
       </table>`)}
 
-      ${project.description ? section('About the Project', `
+      ${selectedFields.includes('description') && project.description ? section('About the Project', `
         <p style="color:#444;font-size:13px;line-height:1.7;margin:0;">${project.description}</p>
       `) : ''}
 
-      ${amenList.length > 0 ? section('Amenities', `
+      ${selectedFields.includes('amenities') && amenList.length > 0 ? section('Amenities', `
         <div style="display:flex;flex-wrap:wrap;gap:6px;">
           ${amenList.map(a => `
             <span style="background:#e8f0fe;color:${BRAND};padding:4px 12px;border-radius:20px;font-size:12px;font-weight:bold;">
@@ -338,6 +342,7 @@ const shareProject = async (req, res, next) => {
       sent_to:      emailList,
       total_sent:   emailList.length,
       attached:     zipBuffer ? { zip_name: zipFileName, files: selectedDocs.length, document_ids: selectedDocs.map(d => d.id) } : null,
+      fields:       selectedFields,
       shared_by:    sharedBy,
     });
 
