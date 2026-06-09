@@ -265,7 +265,7 @@ router.get("/:id", authenticate, projectController.getProjectById);
  *                 type: string
  *               video_url:
  *                 type: string
- *               payment_plan_url:
+ *               payment_plan:
  *                 type: string
  *               home_loan_info:
  *                 type: string
@@ -424,7 +424,7 @@ router.get("/:id/leads", authenticate, authorize("super_admin", "admin", "sales_
  *     description: >
  *       Sends a branded HTML email to one or more email addresses with:
  *         - Full project details (name, location, price, configs, RERA, possession, amenities)
- *         - All unit plans and creatives as a ZIP attachment (organised into Unit Plans / Creatives folders)
+ *         - Selected documents (or all if not specified) as a ZIP attachment
  *         - Optional personalised message from the sender
  *       The ZIP is built on-the-fly — no temp files stored.
  *     tags: [Projects]
@@ -461,9 +461,17 @@ router.get("/:id/leads", authenticate, authorize("super_admin", "admin", "sales_
  *                 type: string
  *                 description: Optional personalised note shown at top of the email
  *                 example: "Hi Suresh, please find the Skyline Heights project details as discussed."
+ *               document_ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: uuid
+ *                 description: Optional list of document IDs to include (single or multiple). If not provided, all documents are included.
+ *                 example: ["doc-uuid-001", "doc-uuid-002"]
  *           example:
  *             emails: ["client@example.com", "partner@example.com"]
  *             message: "Hi, please find the project details as discussed."
+ *             document_ids: ["doc-uuid-001", "doc-uuid-002"]
  *     responses:
  *       200:
  *         description: Project shared — email sent successfully
@@ -479,10 +487,11 @@ router.get("/:id/leads", authenticate, authorize("super_admin", "admin", "sales_
  *                 total_sent: 2
  *                 attached:
  *                   zip_name: "Skyline Heights_Documents.zip"
- *                   files: 5
+ *                   files: 2
+ *                   document_ids: ["doc-uuid-001", "doc-uuid-002"]
  *                 shared_by: "Rahul Sharma"
  *       400:
- *         description: Missing emails, invalid email format
+ *         description: Missing emails, invalid email format, or no valid documents found for provided IDs
  *       404:
  *         description: Project not found
  */

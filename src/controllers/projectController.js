@@ -84,10 +84,10 @@ const createProject = async (req, res, next) => {
   try {
     const {
       name, developer, city, locality, address, configurations,
-      price_range, total_units, possession_date, rera_number,
-      amenities, status = "active", brochure_url, description,
-      video_url, payment_plan_url, home_loan_info,
-      unit_plans, creatives, payment_plans, videos, // Arrays of document objects from JSON body
+        price_range, total_units, possession_date, rera_number,
+        amenities, status = "active", brochure_url, description,
+        video_url, payment_plan, home_loan_info,
+        unit_plans, creatives, payment_plans, videos, // Arrays of document objects from JSON body
     } = req.body;
 
     if (!name || !city) return next(new AppError("name and city are required", 400));
@@ -98,16 +98,16 @@ const createProject = async (req, res, next) => {
     const result = await client.query(
       `INSERT INTO projects
         (name, developer, city, locality, address, configurations, price_range,
-         total_units, possession_date, rera_number, amenities, status, brochure_url, description, 
-         video_url, payment_plan_url, home_loan_info, created_by)
+         total_units, possession_date, rera_number, amenities, status, brochure_url, description,
+         video_url, payment_plan, home_loan_info, created_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
        RETURNING *`,
       [
         name.trim(), developer || null, city.trim(), locality || null, address || null,
         JSON.stringify(configurations || []), price_range || null, total_units || null,
         possession_date || null, rera_number || null, JSON.stringify(amenities || []),
-        status, brochure_url || null, description || null, 
-        video_url || null, payment_plan_url || null, home_loan_info || null,
+        status, brochure_url || null, description || null,
+        video_url || null, payment_plan || null, home_loan_info || null,
         req.user.id,
       ]
     );
@@ -236,7 +236,7 @@ const updateProject = async (req, res, next) => {
 
     const fields = ["name", "developer", "city", "locality", "address", "price_range",
                     "total_units", "possession_date", "rera_number", "brochure_url", "description",
-                    "video_url", "payment_plan_url", "home_loan_info"];
+                    "video_url", "payment_plan", "home_loan_info"];
     const jsonFields = ["configurations", "amenities"];
 
     const updates = []; const params = []; let idx = 1;

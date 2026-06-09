@@ -95,7 +95,23 @@ const buildZipBuffer = (docs) => {
     let addedCount = 0;
     for (const doc of docs) {
       if (doc.file_path && fs.existsSync(doc.file_path)) {
-        const folder = doc.document_type === 'unit_plan' ? 'Unit Plans' : 'Creatives';
+        let folder;
+        switch (doc.document_type) {
+          case 'unit_plan':
+            folder = 'Unit Plans';
+            break;
+          case 'creative':
+            folder = 'Creatives';
+            break;
+          case 'payment_plan':
+            folder = 'Payment Plans';
+            break;
+          case 'video':
+            folder = 'Videos';
+            break;
+          default:
+            folder = 'Other';
+        }
         archive.file(doc.file_path, { name: `${folder}/${doc.file_name}` });
         addedCount++;
       }
@@ -116,7 +132,7 @@ const buildZipBuffer = (docs) => {
 const shareProject = async (req, res, next) => {
   try {
     const { id: projectId } = req.params;
-    const { emails, message } = req.body;
+    const { emails, message, document_ids } = req.body;
 
     // ── Validate emails ──────────────────────────────────────────────────────
     if (!emails) return next(new AppError('emails field is required', 400));
@@ -152,8 +168,20 @@ const shareProject = async (req, res, next) => {
       [projectId]
     );
     const allDocs    = docsResult.rows;
-    const unitPlans  = allDocs.filter(d => d.document_type === 'unit_plan');
-    const creatives  = allDocs.filter(d => d.document_type === 'creative');
+    
+    // Filter documents if document_ids are provided
+    let selectedDocs = allDocs;
+    if (document_ids && Array.isArray(document_ids) && document_ids.length > 0) {
+      selectedDocs = allDocs.filter(d => document_ids.includes(d.id));
+      if (selectedDocs.length === 0) {
+        return next(new AppError('No valid documents found with the provided IDs', 400));
+      }
+    }
+    
+    const unitPlans  = selectedDocs.filter(d => d.document_type === 'unit_plan');
+    const creatives  = selectedDocs.filter(d => d.document_type === 'creative');
+    const paymentPlans = selectedDocs.filter(d => d.document_type === 'payment_plan');
+    const videos = selectedDocs.filter(d => d.document_type === 'video');
 
     // ── Parse project fields ─────────────────────────────────────────────────
     const configs  = (() => {
@@ -175,8 +203,8 @@ const shareProject = async (req, res, next) => {
     // ── Build ZIP attachment ─────────────────────────────────────────────────
     let zipBuffer  = null;
     let zipFileName = null;
-    if (allDocs.length > 0) {
-      zipBuffer  = await buildZipBuffer(allDocs);
+    if (selectedDocs.length > 0) {
+      zipBuffer  = await buildZipBuffer(selectedDocs);
       zipFileName = `${project.name.replace(/[^a-zA-Z0-9 ]/g, '').trim()}_Documents.zip`;
     }
 
@@ -193,6 +221,18 @@ const shareProject = async (req, res, next) => {
         items.push(`<li style="color:#333;font-size:13px;margin-bottom:4px;">
           <strong>Creatives / Marketing Materials</strong> (${creatives.length} file${creatives.length > 1 ? 's' : ''}) — 
           ${creatives.map(d => d.file_name).join(', ')}
+        </li>`);
+      }
+      if (paymentPlans.length > 0) {
+        items.push(`<li style="color:#333;font-size:13px;margin-bottom:4px;">
+          <strong>Payment Plans</strong> (${paymentPlans.length} file${paymentPlans.length > 1 ? 's' : ''}) — 
+          ${paymentPlans.map(d => d.file_name).join(', ')}
+        </li>`);
+      }
+      if (videos.length > 0) {
+        items.push(`<li style="color:#333;font-size:13px;margin-bottom:4px;">
+          <strong>Videos</strong> (${videos.length} file${videos.length > 1 ? 's' : ''}) — 
+          ${videos.map(d => d.file_name).join(', ')}
         </li>`);
       }
       return items.length > 0
@@ -222,6 +262,9 @@ const shareProject = async (req, res, next) => {
         ${row('Possession',    possDate)}
         ${row('RERA No.',      project.rera_number)}
         ${row('Status',        project.status ? project.status.charAt(0).toUpperCase() + project.status.slice(1) : null)}
+        ${project.video_url ? row('Video', `<a href="${project.video_url}" style="color:${BRAND};">View Project Video</a>`) : ''}
+        ${project.payment_plan ? row('Payment Plan', project.payment_plan) : ''}
+        ${project.home_loan_info ? row('Home Loan Info', project.home_loan_info) : ''}
       </table>`)}
 
       ${project.description ? section('About the Project', `
@@ -294,7 +337,7 @@ const shareProject = async (req, res, next) => {
       project_name: project.name,
       sent_to:      emailList,
       total_sent:   emailList.length,
-      attached:     zipBuffer ? { zip_name: zipFileName, files: allDocs.length } : null,
+      attached:     zipBuffer ? { zip_name: zipFileName, files: selectedDocs.length, document_ids: selectedDocs.map(d => d.id) } : null,
       shared_by:    sharedBy,
     });
 

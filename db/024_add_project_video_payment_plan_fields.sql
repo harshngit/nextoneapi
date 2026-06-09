@@ -1,12 +1,12 @@
 -- ============================================================
--- Migration 024 — Add video_url, payment_plan_url, home_loan_info to projects
+-- Migration 024 — Add video_url, payment_plan, home_loan_info to projects
 --              and update project_documents document_type
 -- ============================================================
 
 -- 1. Add new columns to projects table
 ALTER TABLE projects 
 ADD COLUMN IF NOT EXISTS video_url TEXT,
-ADD COLUMN IF NOT EXISTS payment_plan_url TEXT,
+ADD COLUMN IF NOT EXISTS payment_plan TEXT,
 ADD COLUMN IF NOT EXISTS home_loan_info TEXT;
 
 -- 2. Update project_documents document_type check constraint
