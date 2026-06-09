@@ -15,6 +15,7 @@ const { pool }        = require("../config/db");
 const { sendSuccess, paginate } = require("../utils/response");
 const AppError        = require("../utils/AppError");
 const emailService    = require("../utils/emailService");
+const { createNotification, createBulkNotifications, notifyAdmins } = require("./notificationController");
 
 const VALID_STATUSES = [
   "new", "contacted", "interested", "follow_up",
@@ -236,7 +237,48 @@ const createLead = async (req, res, next) => {
 
     await client.query("COMMIT");
 
-    // ── ✉ Fire-and-forget emails (never blocks the API response) ─────────────
+    // ── Push + in-app notifications ───────────────────────────────────────────
+    setImmediate(async () => {
+      try {
+        // 1. Notify all admins: new lead created
+        await notifyAdmins({
+          type:           'lead_new',
+          title:          'New Lead Created',
+          message:        `${name.trim()} (${phone}) was added${assigned_to ? ' and assigned' : ''}`,
+          reference_id:   lead.id,
+          reference_type: 'lead',
+          metadata:       { lead_id: lead.id, created_by: req.user.id },
+        });
+
+        // 2. Notify assigned exec if lead was assigned on creation
+        if (assigned_to) {
+          await createNotification(assigned_to, {
+            type:           'lead_assigned',
+            title:          'New Lead Assigned to You',
+            message:        `Lead "${name.trim()}" has been assigned to you`,
+            reference_id:   lead.id,
+            reference_type: 'lead',
+            metadata:       { lead_id: lead.id, phone },
+          });
+          // 3. Notify their manager too
+          const mgrRow = await pool.query(
+            `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [assigned_to]
+          );
+          if (mgrRow.rows.length) {
+            await createNotification(mgrRow.rows[0].manager_id, {
+              type:           'lead_assigned',
+              title:          'Lead Assigned to Your Team',
+              message:        `Lead "${name.trim()}" was assigned to one of your executives`,
+              reference_id:   lead.id,
+              reference_type: 'lead',
+              metadata:       { lead_id: lead.id, assigned_to },
+            });
+          }
+        }
+      } catch (notifErr) {
+        console.error('[Notification] createLead failed:', notifErr.message);
+      }
+    });
     setImmediate(async () => {
       try {
         const fullLead = await fetchLeadWithProject(lead.id);
@@ -446,19 +488,67 @@ const updateLeadStatus = async (req, res, next) => {
     );
     await client.query("COMMIT");
 
+    // ── Push + in-app notifications ───────────────────────────────────────────
+    setImmediate(async () => {
+      try {
+        const lead = existing.rows[0];
+        const isBooked = status === 'booked';
+
+        // Notify assigned exec
+        if (lead.assigned_to) {
+          await createNotification(lead.assigned_to, {
+            type:           'lead_status_changed',
+            title:          isBooked ? '🎉 Lead Booked!' : 'Lead Status Updated',
+            message:        `Lead status changed from ${oldStatus} to ${status}`,
+            reference_id:   id,
+            reference_type: 'lead',
+            metadata:       { old_status: oldStatus, new_status: status },
+          });
+          // Notify their manager
+          const mgrRow = await pool.query(
+            `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [lead.assigned_to]
+          );
+          if (mgrRow.rows.length) {
+            await createNotification(mgrRow.rows[0].manager_id, {
+              type:           isBooked ? 'booking_new' : 'lead_status_changed',
+              title:          isBooked ? 'Lead Booked by Your Team' : 'Lead Status Changed',
+              message:        isBooked
+                ? `A lead in your team was booked`
+                : `Lead status changed from ${oldStatus} to ${status}`,
+              reference_id:   id,
+              reference_type: 'lead',
+              metadata:       { old_status: oldStatus, new_status: status },
+            });
+          }
+        }
+
+        // Notify all admins
+        await notifyAdmins({
+          type:           isBooked ? 'booking_new' : 'lead_status_changed',
+          title:          isBooked ? 'New Booking Confirmed' : 'Lead Status Changed',
+          message:        isBooked
+            ? `A lead has been booked`
+            : `Lead status changed from ${oldStatus} to ${status}`,
+          reference_id:   id,
+          reference_type: 'lead',
+          metadata:       { old_status: oldStatus, new_status: status },
+        });
+      } catch (notifErr) {
+        console.error('[Notification] updateLeadStatus failed:', notifErr.message);
+      }
+    });
+
     // ── ✉ Email ───────────────────────────────────────────────────────────────
     setImmediate(async () => {
       try {
         const fullLead = await fetchLeadWithProject(id);
         if (!fullLead) return;
-
         const { adminEmails } = await getEmailContext(null);
         const changedByRow = await pool.query(
           "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1", [callerId]
         );
-
         await emailService.notifyLeadStatusChanged({
-          lead:          fullLead,           // fullLead.email = client email ✅
+          lead:          fullLead,
           oldStatus,
           newStatus:     status,
           changedBy:     changedByRow.rows[0]?.name || "System",
@@ -525,6 +615,51 @@ const assignLead = async (req, res, next) => {
     if (!sameAssignee) {
       setImmediate(async () => {
         try {
+          // Push: notify new assignee
+          await createNotification(assigned_to, {
+            type:           'lead_assigned',
+            title:          'Lead Assigned to You',
+            message:        `A lead has been assigned to you`,
+            reference_id:   id,
+            reference_type: 'lead',
+            metadata:       { lead_id: id, assigned_by: callerId },
+          });
+
+          // Push: notify old assignee if there was one
+          if (prevAssignee) {
+            await createNotification(prevAssignee, {
+              type:           'lead_assigned',
+              title:          'Lead Reassigned',
+              message:        `A lead has been reassigned away from you`,
+              reference_id:   id,
+              reference_type: 'lead',
+              metadata:       { lead_id: id },
+            });
+          }
+
+          // Push: notify manager of new assignee
+          if (assignee.manager_id) {
+            await createNotification(assignee.manager_id, {
+              type:           'lead_assigned',
+              title:          'Lead Assigned to Your Team',
+              message:        `A lead was assigned to ${assignee.first_name} ${assignee.last_name}`,
+              reference_id:   id,
+              reference_type: 'lead',
+              metadata:       { lead_id: id, assigned_to },
+            });
+          }
+
+          // Push: notify admins
+          await notifyAdmins({
+            type:           'lead_assigned',
+            title:          'Lead Assignment Updated',
+            message:        `A lead was assigned to ${assignee.first_name} ${assignee.last_name}`,
+            reference_id:   id,
+            reference_type: 'lead',
+            metadata:       { lead_id: id, assigned_to },
+          });
+
+          // Email (existing)
           const fullLead    = await fetchLeadWithProject(id);
           if (!fullLead) return;
           const assignerRow = await pool.query(
@@ -537,8 +672,8 @@ const assignLead = async (req, res, next) => {
             assigneeEmail: assignee.email,
             note:          note || null,
           });
-        } catch (emailErr) {
-          console.error("[Email] assignLead notification failed:", emailErr.message);
+        } catch (err) {
+          console.error("[Notification/Email] assignLead failed:", err.message);
         }
       });
     }
@@ -639,17 +774,57 @@ const convertLead = async (req, res, next) => {
 
     await client.query("COMMIT");
 
+    // ── Push + in-app notifications ───────────────────────────────────────────
+    setImmediate(async () => {
+      try {
+        // Notify assigned exec
+        if (lead.assigned_to) {
+          await createNotification(lead.assigned_to, {
+            type:           'booking_new',
+            title:          '🎉 Lead Booked!',
+            message:        `Lead "${lead.name}" has been converted to a booking`,
+            reference_id:   id,
+            reference_type: 'lead',
+            metadata:       { lead_id: id, booking_amount: booking_amount || null },
+          });
+          // Notify their manager
+          const mgrRow = await pool.query(
+            `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [lead.assigned_to]
+          );
+          if (mgrRow.rows.length) {
+            await createNotification(mgrRow.rows[0].manager_id, {
+              type:           'booking_new',
+              title:          'New Booking by Your Team',
+              message:        `Lead "${lead.name}" was booked by your executive`,
+              reference_id:   id,
+              reference_type: 'lead',
+              metadata:       { lead_id: id },
+            });
+          }
+        }
+        // Notify admins
+        await notifyAdmins({
+          type:           'booking_new',
+          title:          'New Booking Confirmed',
+          message:        `Lead "${lead.name}" has been converted to a booking${booking_amount ? ` — ₹${Number(booking_amount).toLocaleString('en-IN')}` : ''}`,
+          reference_id:   id,
+          reference_type: 'lead',
+          metadata:       { lead_id: id, booking_amount: booking_amount || null },
+        });
+      } catch (notifErr) {
+        console.error('[Notification] convertLead failed:', notifErr.message);
+      }
+    });
+
     // ── ✉ Email ───────────────────────────────────────────────────────────────
     setImmediate(async () => {
       try {
         const fullLead = await fetchLeadWithProject(id);
         if (!fullLead) return;
-
         const { adminEmails } = await getEmailContext(null);
         const convertedByRow  = await pool.query(
           "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1", [callerId]
         );
-
         await emailService.notifyLeadStatusChanged({
           lead:          fullLead,
           oldStatus,

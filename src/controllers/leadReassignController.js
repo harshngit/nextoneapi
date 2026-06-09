@@ -10,6 +10,7 @@ const { pool } = require('../config/db');
 const { sendSuccess } = require('../utils/response');
 const AppError = require('../utils/AppError');
 const emailService = require('../utils/emailService');
+const { createNotification, notifyAdmins } = require('./notificationController');
 
 /**
  * PATCH /api/v1/leads/:id/reassign
@@ -115,43 +116,80 @@ const reassignLead = async (req, res, next) => {
       ? `${performerDetails.rows[0].first_name} ${performerDetails.rows[0].last_name}`
       : 'System';
 
-    // Send email notifications asynchronously
+    // ── Push + in-app + email (all fire-and-forget) ───────────────────────────
     setImmediate(async () => {
       try {
-        // Notify new assignee
+        const newAssigneeName = `${newAssignee.first_name} ${newAssignee.last_name}`;
+
+        // Push: notify NEW assignee
+        await createNotification(newAssignee.id, {
+          type:           'lead_assigned',
+          title:          'Lead Assigned to You',
+          message:        `Lead "${lead.name}" has been assigned to you by ${performerName}`,
+          reference_id:   leadId,
+          reference_type: 'lead',
+          metadata:       { lead_id: leadId, reason: reason || null },
+        });
+
+        // Push: notify OLD assignee (if existed)
+        if (oldAssignedTo) {
+          await createNotification(oldAssignedTo, {
+            type:           'lead_assigned',
+            title:          'Lead Reassigned Away',
+            message:        `Lead "${lead.name}" has been reassigned to ${newAssigneeName}`,
+            reference_id:   leadId,
+            reference_type: 'lead',
+            metadata:       { lead_id: leadId, reason: reason || null },
+          });
+        }
+
+        // Push: notify manager of new assignee
+        const mgrRow = await pool.query(
+          `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [newAssignee.id]
+        );
+        if (mgrRow.rows.length) {
+          await createNotification(mgrRow.rows[0].manager_id, {
+            type:           'lead_assigned',
+            title:          'Lead Assigned to Your Team',
+            message:        `Lead "${lead.name}" was assigned to ${newAssigneeName}`,
+            reference_id:   leadId,
+            reference_type: 'lead',
+            metadata:       { lead_id: leadId },
+          });
+        }
+
+        // Push: notify admins
+        await notifyAdmins({
+          type:           'lead_assigned',
+          title:          'Lead Reassigned',
+          message:        `Lead "${lead.name}" was reassigned to ${newAssigneeName} by ${performerName}`,
+          reference_id:   leadId,
+          reference_type: 'lead',
+          metadata:       { lead_id: leadId, reason: reason || null },
+        });
+
+        // Emails (existing)
         if (newAssignee.email) {
           await emailService.notifyLeadAssigned({
-            lead: {
-              id: lead.id,
-              name: lead.name,
-              phone: lead.phone,
-              email: lead.email,
-              project_name: lead.project_name,
-            },
-            assigneeName: `${newAssignee.first_name} ${newAssignee.last_name}`,
+            lead: { id: lead.id, name: lead.name, phone: lead.phone, email: lead.email, project_name: lead.project_name },
+            assigneeName: newAssigneeName,
             assignerName: performerName,
             assigneeEmail: newAssignee.email,
             note: reason || 'This lead has been reassigned to you.',
           });
         }
-
-        // Optionally notify old assignee about reassignment
         if (oldAssignedTo && lead.current_assignee_email) {
           await emailService.notifyLeadReassigned({
-            lead: {
-              id: lead.id,
-              name: lead.name,
-              phone: lead.phone,
-            },
+            lead: { id: lead.id, name: lead.name, phone: lead.phone },
             oldAssigneeName: lead.current_assignee_name,
             oldAssigneeEmail: lead.current_assignee_email,
-            newAssigneeName: `${newAssignee.first_name} ${newAssignee.last_name}`,
+            newAssigneeName,
             performedBy: performerName,
             reason: reason || null,
           });
         }
-      } catch (emailErr) {
-        console.error('[Email] Reassignment notification failed:', emailErr.message);
+      } catch (err) {
+        console.error('[Notification/Email] Reassignment failed:', err.message);
       }
     });
 
@@ -299,20 +337,60 @@ const bulkReassignLeads = async (req, res, next) => {
 
     await client.query('COMMIT');
 
-    // Send email notification to new assignee asynchronously
+    // Send push + email notification to new assignee asynchronously
     setImmediate(async () => {
       try {
-        if (newAssignee.email && successfulReassignments.length > 0) {
-          await emailService.notifyBulkLeadsAssigned({
-            assigneeName: `${newAssignee.first_name} ${newAssignee.last_name}`,
-            assigneeEmail: newAssignee.email,
-            leadsCount: successfulReassignments.length,
-            performedBy: performerName,
-            reason: reason || null,
+        if (successfulReassignments.length === 0) return;
+        const newAssigneeName = `${newAssignee.first_name} ${newAssignee.last_name}`;
+        const count = successfulReassignments.length;
+
+        // Push: notify new assignee (single combined notification)
+        await createNotification(newAssignee.id, {
+          type:           'lead_assigned',
+          title:          `${count} Lead${count > 1 ? 's' : ''} Assigned to You`,
+          message:        `${count} lead${count > 1 ? 's have' : ' has'} been assigned to you by ${performerName}`,
+          reference_id:   null,
+          reference_type: 'lead',
+          metadata:       { lead_ids: successfulReassignments.map(r => r.leadId), count, reason: reason || null },
+        });
+
+        // Push: notify manager of new assignee
+        const mgrRow = await pool.query(
+          `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [newAssignee.id]
+        );
+        if (mgrRow.rows.length) {
+          await createNotification(mgrRow.rows[0].manager_id, {
+            type:           'lead_assigned',
+            title:          `${count} Lead${count > 1 ? 's' : ''} Assigned to Your Team`,
+            message:        `${count} lead${count > 1 ? 's were' : ' was'} bulk-assigned to ${newAssigneeName}`,
+            reference_id:   null,
+            reference_type: 'lead',
+            metadata:       { count, assigned_to: newAssignee.id },
           });
         }
-      } catch (emailErr) {
-        console.error('[Email] Bulk reassignment notification failed:', emailErr.message);
+
+        // Push: notify admins
+        await notifyAdmins({
+          type:           'lead_assigned',
+          title:          'Bulk Lead Reassignment',
+          message:        `${count} lead${count > 1 ? 's were' : ' was'} bulk-assigned to ${newAssigneeName} by ${performerName}`,
+          reference_id:   null,
+          reference_type: 'lead',
+          metadata:       { count, assigned_to: newAssignee.id, reason: reason || null },
+        });
+
+        // Email (existing)
+        if (newAssignee.email) {
+          await emailService.notifyBulkLeadsAssigned({
+            assigneeName:  newAssigneeName,
+            assigneeEmail: newAssignee.email,
+            leadsCount:    count,
+            performedBy:   performerName,
+            reason:        reason || null,
+          });
+        }
+      } catch (err) {
+        console.error('[Notification/Email] Bulk reassignment failed:', err.message);
       }
     });
 

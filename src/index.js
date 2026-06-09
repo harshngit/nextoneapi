@@ -8,6 +8,8 @@ const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./config/swagger");
 const { initSocket }    = require("./config/socket");
 const whatsappCron      = require("./config/whatsappCron");
+const attendanceCron    = require("./config/attendanceCron");
+const reminderCron      = require("./config/reminderCron");
 const { sendError }  = require("./utils/response");
 const AppError       = require("./utils/AppError");
 const bulkLeadsRoutes = require('./routes/bulkLeadsRoutes');
@@ -96,6 +98,8 @@ app.use((err, req, res, next) => {
 // ─── Init WebSocket ───────────────────────────────────────────
 initSocket(server);
 whatsappCron.start();
+attendanceCron.start();
+reminderCron.start();
 
 // ─── Start Server ─────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;

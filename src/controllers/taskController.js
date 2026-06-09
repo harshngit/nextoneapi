@@ -10,7 +10,7 @@ const { sendSuccess, paginate } = require("../utils/response");
 const AppError       = require("../utils/AppError");
 const { emitToUser } = require("../config/socket");
 const emailService   = require("../utils/emailService");
-const { createNotification, createBulkNotifications } = require("./notificationController");
+const { createNotification, createBulkNotifications, notifyAdmins } = require("./notificationController");
 
 const VALID_PRIORITIES = ["low", "medium", "high"];
 
@@ -320,30 +320,55 @@ const completeTask = async (req, res, next) => {
       });
     }
 
-    // ── ✉ Email only when completing (not un-completing), only if state changed ─
+    // ── Push + in-app: task completed ────────────────────────────────────────
     if (is_completed && !alreadySame) {
       setImmediate(async () => {
         try {
           const leadRow = await pool.query(
             `SELECT l.*, p.name AS project_name FROM leads l
-             LEFT JOIN projects p ON p.id = l.project_id
-             WHERE l.id = $1`,
+             LEFT JOIN projects p ON p.id = l.project_id WHERE l.id = $1`,
             [task.lead_id]
           );
+          const lead = leadRow.rows[0];
+
+          // Notify manager of the exec
+          const mgrRow = await pool.query(
+            `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [task.assigned_to]
+          );
+          if (mgrRow.rows.length) {
+            await createNotification(mgrRow.rows[0].manager_id, {
+              type:           'follow_up_completed',
+              title:          'Follow-Up Completed',
+              message:        `Task "${task.title}"${lead ? ` for "${lead.name}"` : ''} was completed`,
+              reference_id:   task.id,
+              reference_type: 'task',
+              metadata:       { lead_id: task.lead_id, lead_name: lead?.name },
+            });
+          }
+          // Notify admins
+          await notifyAdmins({
+            type:           'follow_up_completed',
+            title:          'Follow-Up Task Completed',
+            message:        `Task "${task.title}"${lead ? ` for "${lead.name}"` : ''} was completed`,
+            reference_id:   task.id,
+            reference_type: 'task',
+            metadata:       { lead_id: task.lead_id },
+          });
+
+          // Email (existing)
           const completedByRow = await pool.query(
             "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1",
             [req.user.id]
           );
           const managerEmails = await getManagerEmails();
-
           await emailService.notifyFollowUpCompleted({
             task:           { ...task },
-            lead:           leadRow.rows[0] || { name: "Unknown", phone: "" },
+            lead:           lead || { name: "Unknown", phone: "" },
             completedBy:    completedByRow.rows[0]?.name || "System",
             managerEmails,
           });
-        } catch (emailErr) {
-          console.error("[Email] completeTask notification failed:", emailErr.message);
+        } catch (err) {
+          console.error("[Notification/Email] completeTask failed:", err.message);
         }
       });
     }

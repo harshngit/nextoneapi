@@ -4,6 +4,7 @@ const ExcelJS  = require('exceljs')
 const { pool } = require('../config/db')
 const { sendSuccess, sendError, paginate } = require('../utils/response')
 const AppError = require('../utils/AppError')
+const { createNotification, notifyAdmins } = require('./notificationController')
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -188,6 +189,44 @@ const checkIn = async (req, res, next) => {
     }
 
     return sendSuccess(res, 'Checked in successfully', { attendance: record, user: userMeta }, 201)
+
+    // ── Push + in-app notifications ───────────────────────────────────────────
+    setImmediate(async () => {
+      try {
+        const statusLabel = { present: 'on time', late: 'late', half_day: 'half day' }[status] || status
+        // Notify manager if exec is late or half_day
+        if (['late', 'half_day'].includes(status)) {
+          const mgrRow = await pool.query(
+            `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [userId]
+          )
+          if (mgrRow.rows.length) {
+            await createNotification(mgrRow.rows[0].manager_id, {
+              type:           'attendance_checkin',
+              title:          `Team Member Checked In ${status === 'late' ? '(Late)' : '(Half Day)'}`,
+              message:        `${userMeta.full_name} checked in ${statusLabel}`,
+              reference_id:   record.id,
+              reference_type: 'attendance',
+              metadata:       { user_id: userId, status, date: today },
+            })
+          }
+        }
+        // Notify admins if late or half_day
+        if (['late', 'half_day'].includes(status)) {
+          await notifyAdmins({
+            type:           'attendance_checkin',
+            title:          `Late Check-In — ${userMeta.full_name}`,
+            message:        `${userMeta.full_name} checked in ${statusLabel} today`,
+            reference_id:   record.id,
+            reference_type: 'attendance',
+            metadata:       { user_id: userId, status, date: today },
+          })
+        }
+      } catch (e) {
+        console.error('[Notification] checkIn failed:', e.message)
+      }
+    })
+
+    return sendSuccess(res, 'Checked in successfully', { attendance: record, user: userMeta }, 201)
   } catch (err) { next(err) }
 }
 
@@ -233,6 +272,37 @@ const checkOut = async (req, res, next) => {
       : finalStatus === 'half_day' && currentStatus === 'half_day'
       ? 'Checked out — marked as half day (check-in after 10:30 AM)'
       : 'Checked out successfully'
+
+    // ── Push + in-app: notify manager + admins on early checkout (half_day) ──
+    if (finalStatus === 'half_day' && currentStatus !== 'half_day') {
+      setImmediate(async () => {
+        try {
+          const mgrRow = await pool.query(
+            `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [userId]
+          )
+          if (mgrRow.rows.length) {
+            await createNotification(mgrRow.rows[0].manager_id, {
+              type:           'attendance_checkout',
+              title:          'Team Member Left Early (Half Day)',
+              message:        `${userMeta.full_name} checked out early — marked as half day`,
+              reference_id:   r.rows[0].id,
+              reference_type: 'attendance',
+              metadata:       { user_id: userId, status: finalStatus, date: today },
+            })
+          }
+          await notifyAdmins({
+            type:           'attendance_checkout',
+            title:          `Early Checkout — ${userMeta.full_name}`,
+            message:        `${userMeta.full_name} left early and was marked as half day`,
+            reference_id:   r.rows[0].id,
+            reference_type: 'attendance',
+            metadata:       { user_id: userId, status: finalStatus, date: today },
+          })
+        } catch (e) {
+          console.error('[Notification] checkOut failed:', e.message)
+        }
+      })
+    }
 
     return sendSuccess(res, statusMessage, {
       attendance:    r.rows[0],
@@ -762,6 +832,23 @@ const manualEntry = async (req, res, next) => {
     if (!userMeta) return next(new AppError('User not found',404))
     const wh=calcWorkingHours(check_in_time,check_out_time)
     const r=await pool.query(`INSERT INTO attendance (user_id,date,status,check_in_time,check_out_time,working_hours,reason,is_manual_entry,manual_by) VALUES ($1,$2,$3,$4,$5,$6,$7,true,$8) ON CONFLICT (user_id,date) DO UPDATE SET status=EXCLUDED.status,check_in_time=EXCLUDED.check_in_time,check_out_time=EXCLUDED.check_out_time,working_hours=EXCLUDED.working_hours,reason=EXCLUDED.reason,is_manual_entry=true,manual_by=EXCLUDED.manual_by,updated_at=NOW() RETURNING *`,[user_id,date,status,check_in_time||null,check_out_time||null,wh,reason||null,req.user.id])
+
+    // ── Push: notify the employee about manual entry ──────────────────────────
+    setImmediate(async () => {
+      try {
+        await createNotification(user_id, {
+          type:           'attendance_manual',
+          title:          'Your Attendance Was Updated',
+          message:        `Your attendance for ${date} was manually set to "${status}" by admin`,
+          reference_id:   r.rows[0].id,
+          reference_type: 'attendance',
+          metadata:       { date, status, reason: reason || null },
+        })
+      } catch (e) {
+        console.error('[Notification] manualEntry failed:', e.message)
+      }
+    })
+
     return sendSuccess(res,'Manual entry saved',{attendance:r.rows[0],user:userMeta},201)
   } catch (err) { next(err) }
 }
@@ -1034,6 +1121,22 @@ const approveStatus = async (req, res, next) => {
     )
 
     const approvedBy = await getUserMeta(req.user.id)
+
+    // ── Push: notify the employee their attendance was approved/updated ───────
+    setImmediate(async () => {
+      try {
+        await createNotification(rec.user_id, {
+          type:           'attendance_approved',
+          title:          'Attendance Status Updated',
+          message:        `Your attendance for ${rec.date} was updated to "${status}"${reason ? ` — ${reason}` : ''}`,
+          reference_id:   result.rows[0].id,
+          reference_type: 'attendance',
+          metadata:       { old_status: oldStatus, new_status: status, date: rec.date, reason: reason || null },
+        })
+      } catch (e) {
+        console.error('[Notification] approveStatus failed:', e.message)
+      }
+    })
 
     return sendSuccess(res, `Status updated to "${status}" successfully`, {
       attendance: result.rows[0],

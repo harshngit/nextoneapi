@@ -11,6 +11,7 @@ const { pool }     = require('../config/db');
 const { sendSuccess, paginate } = require('../utils/response');
 const AppError     = require('../utils/AppError');
 const emailService = require('../utils/emailService');
+const { createNotification, notifyAdmins } = require('./notificationController');
 
 const VALID_STATUSES = ['confirmed', 'cancelled', 'on_hold'];
 
@@ -165,7 +166,49 @@ const createClosure = async (req, res, next) => {
 
     await client.query('COMMIT');
 
-    // ── Email ──────────────────────────────────────────────────────────────────
+    // ── Push + in-app notifications ───────────────────────────────────────────
+    setImmediate(async () => {
+      try {
+        const dealValue = agreed_price ? `₹${Number(agreed_price).toLocaleString('en-IN')}` : null;
+
+        // Notify exec who owns the lead
+        if (lead.assigned_to) {
+          await createNotification(lead.assigned_to, {
+            type:           'booking_new',
+            title:          '🎉 Lead Booked!',
+            message:        `Lead "${lead.name}" has been booked${dealValue ? ` — ${dealValue}` : ''}`,
+            reference_id:   result.rows[0].id,
+            reference_type: 'closure',
+            metadata:       { lead_id, agreed_price: agreed_price || null },
+          });
+          // Notify their manager
+          const mgrRow = await pool.query(
+            `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [lead.assigned_to]
+          );
+          if (mgrRow.rows.length) {
+            await createNotification(mgrRow.rows[0].manager_id, {
+              type:           'booking_new',
+              title:          'New Booking by Your Team',
+              message:        `Lead "${lead.name}" was booked${dealValue ? ` — ${dealValue}` : ''}`,
+              reference_id:   result.rows[0].id,
+              reference_type: 'closure',
+              metadata:       { lead_id, agreed_price: agreed_price || null },
+            });
+          }
+        }
+        // Notify all admins
+        await notifyAdmins({
+          type:           'booking_new',
+          title:          'New Booking Confirmed',
+          message:        `Lead "${lead.name}" booked${dealValue ? ` — ${dealValue}` : ''}`,
+          reference_id:   result.rows[0].id,
+          reference_type: 'closure',
+          metadata:       { lead_id, agreed_price: agreed_price || null },
+        });
+      } catch (notifErr) {
+        console.error('[Notification] createClosure failed:', notifErr.message);
+      }
+    });
     setImmediate(async () => {
       try {
         const closedByRow = await pool.query(
@@ -293,6 +336,47 @@ const updateClosure = async (req, res, next) => {
       [existing.rows[0].lead_id, 'Closure record updated', req.user.id]
     );
     await client.query('COMMIT');
+
+    // ── Push: commission credited notification ────────────────────────────────
+    const wasUnpaid     = existing.rows[0].commission_paid === false;
+    const nowPaid       = commission_paid === true;
+    const commAmt       = result.rows[0].commission_amount;
+    if (wasUnpaid && nowPaid && existing.rows[0].lead_id) {
+      setImmediate(async () => {
+        try {
+          // Find exec assigned to this lead
+          const leadRow = await pool.query(
+            `SELECT l.assigned_to, l.name AS lead_name FROM leads l WHERE l.id = $1`,
+            [existing.rows[0].lead_id]
+          );
+          const execId   = leadRow.rows[0]?.assigned_to;
+          const leadName = leadRow.rows[0]?.lead_name || 'a lead';
+          const commStr  = commAmt ? `₹${Number(commAmt).toLocaleString('en-IN')}` : '';
+
+          if (execId) {
+            await createNotification(execId, {
+              type:           'commission_credited',
+              title:          '💰 Commission Credited',
+              message:        `Your commission${commStr ? ` of ${commStr}` : ''} for "${leadName}" has been credited`,
+              reference_id:   id,
+              reference_type: 'closure',
+              metadata:       { commission_amount: commAmt, lead_id: existing.rows[0].lead_id },
+            });
+          }
+          // Notify admins too
+          await notifyAdmins({
+            type:           'commission_credited',
+            title:          'Commission Marked as Paid',
+            message:        `Commission${commStr ? ` of ${commStr}` : ''} for "${leadName}" has been marked as paid`,
+            reference_id:   id,
+            reference_type: 'closure',
+            metadata:       { commission_amount: commAmt, lead_id: existing.rows[0].lead_id },
+          });
+        } catch (notifErr) {
+          console.error('[Notification] commission_credited failed:', notifErr.message);
+        }
+      });
+    }
 
     return sendSuccess(res, 'Closure updated', result.rows[0]);
   } catch (err) {

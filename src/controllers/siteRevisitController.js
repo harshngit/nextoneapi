@@ -11,6 +11,7 @@ const { pool }        = require('../config/db');
 const { sendSuccess, paginate } = require('../utils/response');
 const AppError        = require('../utils/AppError');
 const emailService    = require('../utils/emailService');
+const { createNotification, notifyAdmins } = require('./notificationController');
 
 const VALID_STATUSES   = ['scheduled', 'done', 'cancelled', 'rescheduled', 'no_show'];
 const VALID_REACTIONS  = ['very_positive', 'positive', 'neutral', 'negative', 'not_interested'];
@@ -144,18 +145,58 @@ const createRevisit = async (req, res, next) => {
 
     await client.query('COMMIT');
 
+    // ── Push + in-app notifications ───────────────────────────────────────────
+    setImmediate(async () => {
+      try {
+        const revisitId   = result.rows[0].id;
+        const projectName = orig.project_name || 'project';
+
+        if (execId) {
+          await createNotification(execId, {
+            type:           'visit_scheduled',
+            title:          'Re-visit Scheduled',
+            message:        `Re-visit for "${orig.lead_name}" on ${visit_date} at ${visit_time}`,
+            reference_id:   revisitId,
+            reference_type: 'site_revisit',
+            metadata:       { lead_id: orig.lead_id, visit_date, visit_time, project: projectName },
+          });
+          const mgrRow = await pool.query(
+            `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [execId]
+          );
+          if (mgrRow.rows.length) {
+            await createNotification(mgrRow.rows[0].manager_id, {
+              type:           'visit_scheduled',
+              title:          'Re-visit Scheduled for Your Team',
+              message:        `Re-visit for "${orig.lead_name}" on ${visit_date} assigned to your executive`,
+              reference_id:   revisitId,
+              reference_type: 'site_revisit',
+              metadata:       { lead_id: orig.lead_id, visit_date, project: projectName },
+            });
+          }
+        }
+        await notifyAdmins({
+          type:           'visit_scheduled',
+          title:          'Re-visit Scheduled',
+          message:        `Re-visit for "${orig.lead_name}" on ${visit_date} at ${visit_time}`,
+          reference_id:   revisitId,
+          reference_type: 'site_revisit',
+          metadata:       { lead_id: orig.lead_id, visit_date, project: projectName },
+        });
+      } catch (notifErr) {
+        console.error('[Notification] createRevisit failed:', notifErr.message);
+      }
+    });
+
     // ── Email notification ────────────────────────────────────────────────────
     setImmediate(async () => {
       try {
         const scheduledByRow = await pool.query(
           `SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1`, [req.user.id]
         );
-
         const adminEmailsRes = await pool.query(
           "SELECT email FROM users WHERE role IN ('admin','super_admin') AND is_active = true"
         );
         const adminEmails = adminEmailsRes.rows.map(r => r.email);
-
         if (assigneeEmail || orig.lead_email) {
           await emailService.notifySiteVisitScheduled({
             lead:         { id: orig.lead_id, name: orig.lead_name, phone: orig.lead_phone, email: orig.lead_email },
@@ -319,6 +360,50 @@ const updateRevisitStatus = async (req, res, next) => {
     );
 
     await client.query('COMMIT');
+
+    // ── Push + in-app notifications ───────────────────────────────────────────
+    setImmediate(async () => {
+      try {
+        const typeMap  = { done: 'visit_done', cancelled: 'visit_cancelled', rescheduled: 'visit_rescheduled' };
+        const titleMap = { done: 'Re-visit Completed', cancelled: 'Re-visit Cancelled', rescheduled: 'Re-visit Rescheduled' };
+        const notifType  = typeMap[status]  || 'visit_scheduled';
+        const notifTitle = titleMap[status] || `Re-visit ${status}`;
+
+        if (rv.assigned_to) {
+          await createNotification(rv.assigned_to, {
+            type:           notifType,
+            title:          notifTitle,
+            message:        `Re-visit for "${rv.lead_name}" has been marked as ${status}`,
+            reference_id:   id,
+            reference_type: 'site_revisit',
+            metadata:       { lead_id: rv.lead_id, status },
+          });
+          const mgrRow = await pool.query(
+            `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [rv.assigned_to]
+          );
+          if (mgrRow.rows.length) {
+            await createNotification(mgrRow.rows[0].manager_id, {
+              type:           notifType,
+              title:          `${notifTitle} (Your Team)`,
+              message:        `Re-visit for "${rv.lead_name}" was marked as ${status}`,
+              reference_id:   id,
+              reference_type: 'site_revisit',
+              metadata:       { lead_id: rv.lead_id, status },
+            });
+          }
+        }
+        await notifyAdmins({
+          type:           notifType,
+          title:          notifTitle,
+          message:        `Re-visit for "${rv.lead_name}" was marked as ${status}`,
+          reference_id:   id,
+          reference_type: 'site_revisit',
+          metadata:       { lead_id: rv.lead_id, status },
+        });
+      } catch (notifErr) {
+        console.error('[Notification] updateRevisitStatus failed:', notifErr.message);
+      }
+    });
 
     // ── Email ──────────────────────────────────────────────────────────────────
     setImmediate(async () => {

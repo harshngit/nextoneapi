@@ -10,6 +10,7 @@ const { pool }        = require('../config/db');
 const { sendSuccess, paginate } = require('../utils/response');
 const AppError        = require('../utils/AppError');
 const emailService    = require('../utils/emailService');
+const { createNotification, notifyAdmins } = require('./notificationController');
 
 const VALID_STATUSES   = ['scheduled', 'done', 'cancelled', 'rescheduled', 'no_show'];
 const VALID_REACTIONS  = ['very_positive', 'positive', 'neutral', 'negative', 'not_interested'];
@@ -121,6 +122,46 @@ const createSiteVisit = async (req, res, next) => {
     );
 
     await client.query('COMMIT');
+
+    // ── Push + in-app notifications ───────────────────────────────────────────
+    setImmediate(async () => {
+      try {
+        const projectName = projectRes.rows[0]?.name || 'project';
+        if (execId) {
+          await createNotification(execId, {
+            type:           'visit_scheduled',
+            title:          'Site Visit Scheduled',
+            message:        `Site visit for "${lead.name}" on ${visit_date} at ${visit_time}`,
+            reference_id:   result.rows[0].id,
+            reference_type: 'site_visit',
+            metadata:       { lead_id, visit_date, visit_time, project: projectName },
+          });
+          const mgrRow = await pool.query(
+            `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [execId]
+          );
+          if (mgrRow.rows.length) {
+            await createNotification(mgrRow.rows[0].manager_id, {
+              type:           'visit_scheduled',
+              title:          'Site Visit Scheduled for Your Team',
+              message:        `Site visit for "${lead.name}" on ${visit_date} assigned to your executive`,
+              reference_id:   result.rows[0].id,
+              reference_type: 'site_visit',
+              metadata:       { lead_id, visit_date, project: projectName },
+            });
+          }
+        }
+        await notifyAdmins({
+          type:           'visit_scheduled',
+          title:          'New Site Visit Scheduled',
+          message:        `Site visit for "${lead.name}" on ${visit_date} at ${visit_time}`,
+          reference_id:   result.rows[0].id,
+          reference_type: 'site_visit',
+          metadata:       { lead_id, visit_date, project: projectName },
+        });
+      } catch (notifErr) {
+        console.error('[Notification] createSiteVisit failed:', notifErr.message);
+      }
+    });
 
     // ── Email notification ────────────────────────────────────────────────────
     setImmediate(async () => {
@@ -241,6 +282,52 @@ const updateSiteVisitStatus = async (req, res, next) => {
     );
 
     await client.query('COMMIT');
+
+    // ── Push + in-app notifications ───────────────────────────────────────────
+    setImmediate(async () => {
+      try {
+        const sv      = existing.rows[0];
+        const typeMap = { done: 'visit_done', cancelled: 'visit_cancelled', rescheduled: 'visit_rescheduled' };
+        const notifType = typeMap[status] || 'visit_scheduled';
+        const titleMap  = { done: 'Site Visit Completed', cancelled: 'Site Visit Cancelled', rescheduled: 'Site Visit Rescheduled' };
+        const notifTitle = titleMap[status] || `Site Visit ${status}`;
+
+        if (sv.assigned_to) {
+          await createNotification(sv.assigned_to, {
+            type:           notifType,
+            title:          notifTitle,
+            message:        `Site visit has been marked as ${status}`,
+            reference_id:   id,
+            reference_type: 'site_visit',
+            metadata:       { lead_id: sv.lead_id, status },
+          });
+          const mgrRow = await pool.query(
+            `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [sv.assigned_to]
+          );
+          if (mgrRow.rows.length) {
+            await createNotification(mgrRow.rows[0].manager_id, {
+              type:           notifType,
+              title:          `${notifTitle} (Your Team)`,
+              message:        `A site visit in your team was marked as ${status}`,
+              reference_id:   id,
+              reference_type: 'site_visit',
+              metadata:       { lead_id: sv.lead_id, status },
+            });
+          }
+        }
+        await notifyAdmins({
+          type:           notifType,
+          title:          notifTitle,
+          message:        `A site visit was marked as ${status}`,
+          reference_id:   id,
+          reference_type: 'site_visit',
+          metadata:       { lead_id: sv.lead_id, status },
+        });
+      } catch (notifErr) {
+        console.error('[Notification] updateSiteVisitStatus failed:', notifErr.message);
+      }
+    });
+
     return sendSuccess(res, `Site visit marked as ${status}`);
   } catch (err) {
     await client.query('ROLLBACK'); next(err);
