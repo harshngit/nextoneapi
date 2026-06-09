@@ -1,10 +1,9 @@
 /**
  * bulkLeadsRoutes.js — Nextone Reality
- * Routes for bulk lead operations
  */
 
-const express = require('express');
-const router = express.Router();
+const express  = require('express');
+const router   = express.Router();
 const { authenticate } = require('../middleware/auth');
 const { uploadLeadsBulkFile } = require('../middleware/uploadMiddleware');
 const {
@@ -17,7 +16,7 @@ const {
  * @swagger
  * tags:
  *   name: Bulk Leads
- *   description: Bulk lead operations like template download and bulk upload
+ *   description: Download the Excel template and bulk-upload leads from it
  */
 
 /**
@@ -25,18 +24,41 @@ const {
  * /api/v1/leads/bulk/template:
  *   get:
  *     summary: Download Excel template for bulk lead upload
- *     description: Returns an Excel file template with instructions and sample data for bulk lead upload.
+ *     description: >
+ *       Returns an .xlsx file ready to fill in and re-upload.
+ *
+ *       **Column layout (fixed order — do not move columns):**
+ *       | Col | Header | Type | Required |
+ *       |-----|--------|------|----------|
+ *       | A | Name | Free text | ✅ Yes |
+ *       | B | Phone Number | 10-digit number | ✅ Yes |
+ *       | C | Alternate Phone | 10-digit number | No |
+ *       | D | Source | **Dropdown** (from lead_sources config) | No |
+ *       | E | Budget | Free text (e.g. "60-80 Lakhs") | ✅ Yes |
+ *       | F | Location Preference | Free text (e.g. "Andheri West") | ✅ Yes |
+ *       | G | Project Name | **Dropdown** (active projects) | No |
+ *       | H | Status | **Dropdown** (from lead_statuses config) | No — defaults to "new" |
+ *       | I | Assign To | **Dropdown** (non-super_admin users) | No |
+ *       | J | Configuration | **Dropdown** (unique configs across all projects, e.g. 1BHK / 2BHK) | ✅ Yes |
+ *
+ *       All dropdown lists are fetched **live from the database** each time the template is
+ *       downloaded, so they always reflect the latest admin configuration.
+ *
+ *       **Required fields for a row to be accepted on upload:**
+ *       Name, Phone Number, Budget, Location Preference, Configuration
  *     tags: [Bulk Leads]
  *     security:
  *       - BearerAuth: []
  *     responses:
  *       200:
- *         description: Excel template file
+ *         description: Excel file (.xlsx) with live dropdowns and 3 sample rows
  *         content:
  *           application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
  *             schema:
  *               type: string
  *               format: binary
+ *       401:
+ *         description: Unauthorised
  */
 router.get('/template', authenticate, downloadLeadTemplate);
 
@@ -44,11 +66,25 @@ router.get('/template', authenticate, downloadLeadTemplate);
  * @swagger
  * /api/v1/leads/bulk/upload:
  *   post:
- *     summary: Upload bulk leads from Excel file
+ *     summary: Upload leads from the filled-in Excel template
  *     description: >
- *       Processes an Excel file containing multiple leads. 
- *       Duplicates (by phone number) are skipped. 
- *       Returns a summary of successful imports, skipped records, and errors.
+ *       Accepts a `.xlsx` file matching the downloaded template.
+ *       Each row is validated and inserted as a lead.
+ *
+ *       **Required per row:** Name, Phone Number, Budget, Location Preference, Configuration
+ *
+ *       **Validation:**
+ *       - Rows missing any required field are rejected with an error entry
+ *       - Phone and Alternate Phone must be exactly 10 digits
+ *       - Duplicate phone numbers (already in the system) are skipped, not errored
+ *       - Status defaults to "new" if blank or unrecognised
+ *
+ *       **Assignment priority:**
+ *       1. `assign_to` UUID in the request body → all leads assigned to this user
+ *       2. Assign To column (col I) → per-lead assignment matched by full name
+ *       3. Neither → leads created unassigned
+ *
+ *       **Response:** JSON summary + a downloadable result `.xlsx` via `resultFile`
  *     tags: [Bulk Leads]
  *     security:
  *       - BearerAuth: []
@@ -58,28 +94,50 @@ router.get('/template', authenticate, downloadLeadTemplate);
  *         multipart/form-data:
  *           schema:
  *             type: object
+ *             required: [file]
  *             properties:
  *               file:
  *                 type: string
  *                 format: binary
- *                 description: The Excel file to upload
+ *                 description: The filled-in .xlsx template file
+ *               assign_to:
+ *                 type: string
+ *                 format: uuid
+ *                 description: >
+ *                   (Optional) UUID of a user to assign ALL leads to.
+ *                   Overrides the Assign To column for every row.
  *     responses:
  *       201:
- *         description: Upload processed successfully
+ *         description: Upload processed — check the summary for per-row results
  *         content:
  *           application/json:
  *             example:
  *               success: true
  *               message: "Bulk upload completed"
  *               data:
+ *                 total: 10
+ *                 inserted: 8
+ *                 skipped: 1
+ *                 errors: 1
+ *                 resultFile: "/uploads/leads/results/upload_result_1234567890.xlsx"
  *                 summary:
- *                   total: 10
- *                   success: 8
- *                   skipped: 1
- *                   errors: 1
- *                 resultFile: "/api/v1/leads/bulk/result/upload_result_12345.xlsx"
+ *                   insertedLeads:
+ *                     - id: "lead-uuid"
+ *                       name: "Rahul Patel"
+ *                       phone: "9876543210"
+ *                       configuration: "2BHK"
+ *                       assigned_to: "user-uuid"
+ *                   errors:
+ *                     - row: 5
+ *                       error: "Missing required fields: Budget, Configuration"
+ *                   skipped:
+ *                     - row: 8
+ *                       phone: "9000000001"
+ *                       reason: "Duplicate phone number"
  *       400:
- *         description: No file uploaded or invalid template
+ *         description: No file uploaded, wrong template, or no valid rows found
+ *       401:
+ *         description: Unauthorised
  */
 router.post('/upload', authenticate, uploadLeadsBulkFile, bulkUploadLeads);
 
@@ -87,8 +145,11 @@ router.post('/upload', authenticate, uploadLeadsBulkFile, bulkUploadLeads);
  * @swagger
  * /api/v1/leads/bulk/result/{filename}:
  *   get:
- *     summary: Download result file after bulk upload
- *     description: Downloads the Excel result file which contains details about successful and failed imports from a specific upload.
+ *     summary: Download the result file from a previous bulk upload
+ *     description: >
+ *       Downloads the `.xlsx` result file produced after a bulk upload.
+ *       The `filename` value comes from the `resultFile` field in the upload response.
+ *       The file contains three sheets: Upload Summary, Errors (if any), Skipped (if any).
  *     tags: [Bulk Leads]
  *     security:
  *       - BearerAuth: []
@@ -98,10 +159,10 @@ router.post('/upload', authenticate, uploadLeadsBulkFile, bulkUploadLeads);
  *         required: true
  *         schema:
  *           type: string
- *         description: The name of the result file to download
+ *           example: "upload_result_1234567890.xlsx"
  *     responses:
  *       200:
- *         description: Excel result file
+ *         description: Result Excel file
  *         content:
  *           application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
  *             schema:

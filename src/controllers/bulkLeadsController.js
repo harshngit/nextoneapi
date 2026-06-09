@@ -1,156 +1,259 @@
 /**
  * bulkLeadsController.js — Nextone Reality
- * Bulk lead operations:
- *  1. Generate Excel template for bulk upload
- *  2. Bulk upload leads from Excel file
- *  3. Download template with sample data
+ *
+ * Template columns (exact order):
+ *  1.  Name*                 — required
+ *  2.  Phone Number*         — required, 10 digits
+ *  3.  Alternate Phone       — optional
+ *  4.  Source                — dropdown from lead_sources table
+ *  5.  Budget                — free text (no dropdown)
+ *  6.  Location Preference   — free text (no dropdown)
+ *  7.  Project Name          — dropdown from projects table
+ *  8.  Status                — dropdown from lead_statuses table
+ *  9.  Assign To             — dropdown from users (non-super_admin)
+ *  10. Configuration         — dropdown of all unique configs across projects (e.g. 1BHK, 2BHK)
+ *
+ * Required fields for bulk upload:
+ *   Name, Phone Number, Budget, Location Preference, Configuration
  */
 
-const { pool } = require('../config/db');
+const { pool }        = require('../config/db');
 const { sendSuccess } = require('../utils/response');
-const AppError = require('../utils/AppError');
-const ExcelJS = require('exceljs');
-const fs = require('fs');
-const path = require('path');
+const AppError        = require('../utils/AppError');
+const ExcelJS         = require('exceljs');
+const fs              = require('fs');
+const path            = require('path');
 
+// ─── Helper ────────────────────────────────────────────────────────────────────
+const pick = (arr, fallback) =>
+  arr.length ? arr[Math.floor(Math.random() * arr.length)] : fallback;
+
+// ─── Hidden sheet helper ────────────────────────────────────────────────────────
 /**
- * GET /api/v1/leads/bulk/template
- * Generate and download Excel template for bulk lead upload.
- * Sample rows are populated with REAL data from the database so they
- * change on every download and show valid project names / user names.
+ * Creates a very-hidden worksheet whose column A holds the dropdown values,
+ * then attaches a list data-validation to the target range on the main sheet.
+ */
+const addDropdown = (workbook, mainSheet, targetRange, sheetName, values, promptTitle, promptMsg) => {
+  const hidden = workbook.addWorksheet(sheetName);
+  hidden.state = 'veryHidden';
+  values.forEach((v, i) => { hidden.getCell(i + 1, 1).value = v; });
+
+  mainSheet.dataValidations.add(targetRange, {
+    type:             'list',
+    allowBlank:       true,
+    formulae:         [`${sheetName}!$A$1:$A$${values.length}`],
+    showErrorMessage: true,
+    errorTitle:       'Invalid value',
+    error:            `Please select a value from the dropdown list.`,
+    showInputMessage: true,
+    promptTitle:      promptTitle,
+    prompt:           promptMsg,
+  });
+};
+
+// ─── GET /api/v1/leads/bulk/template ──────────────────────────────────────────
+/**
+ * Generates and streams an Excel template.
+ * All dropdown lists are pulled live from the DB so they reflect
+ * current admin config every time the template is downloaded.
  */
 const downloadLeadTemplate = async (req, res, next) => {
   try {
-    // ── Fetch live data for dynamic sample rows ──────────────────────────
-    const [projectsRes, usersRes] = await Promise.all([
-      pool.query(`SELECT name FROM projects WHERE status != 'deleted' ORDER BY created_at DESC LIMIT 6`),
-      pool.query(`SELECT CONCAT(first_name,' ',last_name) AS full_name, role
-                  FROM users WHERE is_active = true
-                  AND role IN ('sales_executive','external_caller','sales_manager')
-                  ORDER BY RANDOM() LIMIT 4`),
+    // ── 1. Fetch all dropdown data in parallel ─────────────────────────────
+    const [sourcesRes, statusesRes, projectsRes, usersRes, configsRes] = await Promise.all([
+      // Lead sources from config table
+      pool.query(`
+        SELECT name FROM lead_sources
+        WHERE is_active = true
+        ORDER BY name ASC
+      `),
+      // Lead statuses from config table
+      pool.query(`
+        SELECT key FROM lead_statuses
+        WHERE is_active = true
+        ORDER BY sort_order ASC, label ASC
+      `),
+      // Active projects for project name dropdown + sample rows
+      pool.query(`
+        SELECT id, name, configurations
+        FROM projects
+        WHERE status != 'deleted'
+        ORDER BY created_at DESC
+      `),
+      // All active non-super_admin users for Assign To dropdown
+      pool.query(`
+        SELECT CONCAT(first_name, ' ', last_name) AS full_name
+        FROM users
+        WHERE is_active = true
+          AND role != 'super_admin'
+        ORDER BY first_name ASC
+      `),
+      // All unique configurations across all active projects (e.g. 1BHK, 2BHK)
+      pool.query(`
+        SELECT DISTINCT TRIM(cfg::text, '"') AS config_value
+        FROM projects,
+             jsonb_array_elements(
+               CASE jsonb_typeof(configurations)
+                 WHEN 'array' THEN configurations
+                 ELSE '[]'::jsonb
+               END
+             ) AS cfg
+        WHERE status != 'deleted'
+          AND cfg::text != '""'
+          AND cfg::text != 'null'
+        ORDER BY config_value ASC
+      `),
     ]);
 
-    const projectNames  = projectsRes.rows.map(r => r.name);
-    const userNames     = usersRes.rows.map(r => r.full_name);
+    const sourceList  = sourcesRes.rows.map(r => r.name);
+    const statusList  = statusesRes.rows.map(r => r.key);
+    const projectList = projectsRes.rows.map(r => r.name);
+    const userList    = usersRes.rows.map(r => r.full_name);
+    const configList  = configsRes.rows.map(r => r.config_value).filter(Boolean);
 
-    // Helper — pick a random item or fallback
-    const pick = (arr, fallback) => arr.length ? arr[Math.floor(Math.random() * arr.length)] : fallback;
+    // Fallback lists if DB has no data yet
+    const safeSourceList  = sourceList.length  ? sourceList  : ['Facebook', 'Instagram', 'Google Ads', 'Referral', 'Walk-in', 'IVR'];
+    const safeStatusList  = statusList.length   ? statusList  : ['new', 'contacted', 'interested', 'follow_up', 'booked', 'lost'];
+    const safeConfigList  = configList.length   ? configList  : ['1BHK', '2BHK', '3BHK', '4BHK', 'Studio', 'Villa'];
 
-    // Dynamic sample data — different on every download
-    const sources       = ['Facebook','Instagram','Google Ads','IVR','Referral','Walk-in','99acres','Housing.com'];
-    const budgets       = ['40-60 Lakhs','60-80 Lakhs','80L-1Cr','1-1.5 Crores','1.5-2 Crores','2-3 Crores'];
-    const locations     = ['Andheri West','Bandra East','Powai','Thane West','Navi Mumbai','Borivali'];
-    const statuses      = ['new','contacted','interested','follow_up','new','new']; // weighted towards new
-    const firstNames    = ['Suresh','Priya','Amit','Neha','Rajesh','Pooja','Vikram','Anita','Ravi','Meera'];
-    const lastNames     = ['Patel','Sharma','Mehta','Joshi','Singh','Gupta','Shah','Verma','Nair','Kumar'];
-    const ts            = Date.now(); // ensures uniqueness per download
+    // ── 2. Build sample rows ───────────────────────────────────────────────
+    const firstNames = ['Suresh', 'Priya', 'Amit', 'Neha', 'Rajesh', 'Pooja', 'Vikram', 'Anita'];
+    const lastNames  = ['Patel', 'Sharma', 'Mehta', 'Joshi', 'Singh', 'Gupta', 'Shah', 'Verma'];
+    const budgets    = ['40-60 Lakhs', '60-80 Lakhs', '80L-1Cr', '1-1.5 Crores', '1.5-2 Crores'];
+    const locations  = ['Andheri West', 'Bandra East', 'Powai', 'Thane West', 'Navi Mumbai', 'Borivali'];
+    const ts         = Date.now();
 
-    const makeName  = (i) => `${pick(firstNames,`Sample${i}`)} ${pick(lastNames,'Lead')}`;
+    const makeName  = (i) => `${pick(firstNames, `Sample${i}`)} ${pick(lastNames, 'Lead')}`;
     const makePhone = (i) => `${9000000000 + ((ts + i * 137) % 999999999)}`.slice(0, 10);
-    const makeEmail = (name, i) => `${name.toLowerCase().replace(/\s+/g,'.')}${(ts + i) % 1000}@example.com`;
 
-    const sampleRows = Array.from({ length: 3 }, (_, i) => {
-      const name = makeName(i);
-      return {
-        name,
-        phone:               makePhone(i),
-        email:               makeEmail(name, i),
-        alternate_phone:     i === 0 ? makePhone(i + 10) : '',
-        source:              pick(sources, 'Facebook'),
-        budget:              pick(budgets, '60-80 Lakhs'),
-        location_preference: pick(locations, 'Mumbai'),
-        project_name:        pick(projectNames, 'Sample Project'),
-        status:              statuses[i % statuses.length],
-        assign_to:           i < userNames.length ? userNames[i] : '',
-      };
-    });
+    const sampleRows = Array.from({ length: 3 }, (_, i) => ({
+      name:               makeName(i),
+      phone:              makePhone(i),
+      alternate_phone:    i === 0 ? makePhone(i + 10) : '',
+      source:             pick(safeSourceList, 'Facebook'),
+      budget:             pick(budgets, '60-80 Lakhs'),
+      location:           pick(locations, 'Mumbai'),
+      project_name:       pick(projectList, ''),
+      status:             pick(safeStatusList, 'new'),
+      assign_to:          i < userList.length ? userList[i] : '',
+      configuration:      pick(safeConfigList, '2BHK'),
+    }));
 
+    // ── 3. Build workbook ──────────────────────────────────────────────────
     const workbook  = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet('Lead Template');
+    const ws        = workbook.addWorksheet('Lead Template');
 
-    // Define columns with headers
-    worksheet.columns = [
-      { header: 'Name*',                       key: 'name',               width: 25 },
-      { header: 'Phone*',                      key: 'phone',              width: 15 },
-      { header: 'Email',                       key: 'email',              width: 30 },
-      { header: 'Alternate Phone',             key: 'alternate_phone',    width: 15 },
-      { header: 'Source',                      key: 'source',             width: 20 },
-      { header: 'Budget',                      key: 'budget',             width: 20 },
-      { header: 'Location Preference',         key: 'location_preference',width: 25 },
-      { header: 'Project Name',                key: 'project_name',       width: 30 },
-      { header: 'Status',                      key: 'status',             width: 20 },
-      { header: 'Assign To (Name or Phone)',   key: 'assign_to',          width: 30 },
+    ws.columns = [
+      { header: 'Name*',                key: 'name',            width: 25 },
+      { header: 'Phone Number*',        key: 'phone',           width: 16 },
+      { header: 'Alternate Phone',      key: 'alternate_phone', width: 16 },
+      { header: 'Source',               key: 'source',          width: 20 },
+      { header: 'Budget',               key: 'budget',          width: 20 },
+      { header: 'Location Preference',  key: 'location',        width: 25 },
+      { header: 'Project Name',         key: 'project_name',    width: 30 },
+      { header: 'Status',               key: 'status',          width: 22 },
+      { header: 'Assign To',            key: 'assign_to',       width: 28 },
+      { header: 'Configuration*',       key: 'configuration',   width: 20 },
     ];
 
-    // ── Style header row ────────────────────────────────────────────────
-    const headerRow = worksheet.getRow(1);
+    // Style header row
+    const headerRow = ws.getRow(1);
     headerRow.font      = { bold: true, color: { argb: 'FFFFFFFF' } };
     headerRow.fill      = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF0066CC' } };
     headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
-    headerRow.height    = 20;
+    headerRow.height    = 22;
 
-    // ── Dynamic sample rows ─────────────────────────────────────────────
+    // Sample rows with alternating background
     sampleRows.forEach((row, i) => {
-      const dataRow = worksheet.addRow(row);
-      // Alternate row background for readability
+      const dataRow = ws.addRow(row);
       dataRow.fill = {
         type: 'pattern', pattern: 'solid',
         fgColor: { argb: i % 2 === 0 ? 'FFF0F7FF' : 'FFFFFFFF' },
       };
     });
 
-    // Add instructions worksheet
-    const instructionsSheet = workbook.addWorksheet('Instructions');
-    instructionsSheet.columns = [{ header: 'Instructions', key: 'instruction', width: 80 }];
+    // ── 4. Attach dropdowns via hidden sheets ──────────────────────────────
+    // Col D (4) — Source
+    if (safeSourceList.length) {
+      addDropdown(workbook, ws, 'D2:D1000', '_Sources', safeSourceList,
+        'Source', 'Select the lead source from the list.');
+    }
 
-    const instructions = [
+    // Col G (7) — Project Name
+    if (projectList.length) {
+      addDropdown(workbook, ws, 'G2:G1000', '_Projects', projectList,
+        'Project Name', 'Select a project from the list.');
+    }
+
+    // Col H (8) — Status
+    addDropdown(workbook, ws, 'H2:H1000', '_Statuses', safeStatusList,
+      'Status', 'Select the lead status.');
+
+    // Col I (9) — Assign To
+    if (userList.length) {
+      addDropdown(workbook, ws, 'I2:I1000', '_Users', userList,
+        'Assign To', 'Select the team member to assign this lead to.');
+    }
+
+    // Col J (10) — Configuration
+    if (safeConfigList.length) {
+      addDropdown(workbook, ws, 'J2:J1000', '_Configs', safeConfigList,
+        'Configuration', 'Select the unit type the lead is interested in (e.g. 2BHK).');
+    }
+
+    // ── 5. Instructions sheet ──────────────────────────────────────────────
+    const instrSheet = workbook.addWorksheet('Instructions');
+    instrSheet.columns = [{ header: 'Instructions', key: 'text', width: 85 }];
+
+    const lines = [
       'HOW TO USE THIS TEMPLATE:',
       '',
-      '1. Fill in the lead details in the "Lead Template" sheet',
-      '2. Fields marked with * are mandatory (Name and Phone)',
-      '3. Status values: new, contacted, interested, follow_up, site_visit_scheduled, site_visit_done, negotiation, booked, lost',
-      '4. Source examples: Website, Facebook, Instagram, Referral, Walk-in, Phone Call',
-      '5. Budget format: "50-75 Lakhs", "1-2 Crores", etc.',
-      '6. Project Name must match existing project names in the system',
-      '7. If Project Name is not found, the lead will be created without project assignment',
-      '8. Phone numbers should be 10 digits (Indian format)',
-      '9. Email must be in valid format (e.g., user@example.com)',
-      '10. Assign To: Enter the team member\'s full name or phone number to assign each lead individually',
-      '11. Alternatively, you can pass assign_to (user UUID) in the API request body to assign ALL leads to one person',
-      '12. Save the file and upload through the bulk upload API',
+      'REQUIRED FIELDS (marked with *):',
+      '  • Name             (column A) — Lead full name',
+      '  • Phone Number     (column B) — 10-digit Indian mobile number',
+      '  • Budget           (column E) — Enter budget range, e.g. "60-80 Lakhs"',
+      '  • Location         (column F) — Area preference, e.g. "Andheri West"',
+      '  • Configuration    (column J) — Unit type from dropdown, e.g. "2BHK"',
+      '',
+      'OPTIONAL FIELDS:',
+      '  • Alternate Phone  (column C) — 10-digit number',
+      '  • Source           (column D) — Select from dropdown (admin-configured)',
+      '  • Project Name     (column G) — Select from dropdown of active projects',
+      '  • Status           (column H) — Select from dropdown (defaults to "new" if blank)',
+      '  • Assign To        (column I) — Select team member from dropdown',
+      '',
+      'DROPDOWN FIELDS:',
+      '  Source, Project Name, Status, Assign To, and Configuration all have',
+      '  live dropdowns pulled from the system at the time of template download.',
+      '  If your value is not in the dropdown, ask your admin to add it.',
       '',
       'ASSIGNMENT RULES:',
-      '- assign_to in Excel (column 10): matched by full name or phone — assigns that specific lead to that user',
-      '- assign_to in API body (UUID): overrides Excel column — assigns ALL leads to that one user',
-      '- If both are provided, API body takes priority for all leads',
-      '- If neither is provided, leads are created as unassigned (assigned_to = NULL)',
+      '  • Assign To (col I): assigns that specific lead to that user',
+      '  • assign_to UUID in API body: overrides col I and assigns ALL leads to one user',
+      '  • If neither is set, leads are created as unassigned',
       '',
       'VALIDATION RULES:',
-      '- Name: Required, maximum 255 characters',
-      '- Phone: Required, 10 digits',
-      '- Email: Optional, valid email format',
-      '- Status: Must be one of the valid status values listed above',
+      '  • Phone: must be exactly 10 digits',
+      '  • Alternate Phone: must be 10 digits if provided',
+      '  • Duplicate phone numbers are skipped during upload',
+      '  • Name, Budget, Location and Configuration are required — rows missing them are skipped',
       '',
-      'NOTE: Duplicate phone numbers will be skipped during upload',
+      'NOTE: Do not rename or reorder columns. Save as .xlsx before uploading.',
     ];
 
-    instructions.forEach((instruction, index) => {
-      const row = instructionsSheet.addRow({ instruction });
-      if (index === 0) {
-        row.font = { bold: true, size: 14 };
-      } else if (instruction === '' || instruction.startsWith('HOW TO') || instruction.startsWith('VALIDATION')) {
-        row.font = { bold: true };
-      }
+    lines.forEach((line, idx) => {
+      const r = instrSheet.addRow({ text: line });
+      if (idx === 0)                          r.font = { bold: true, size: 14 };
+      else if (line.endsWith(':') && line.trim() !== '') r.font = { bold: true };
     });
 
-    // Set response headers
+    // ── 6. Stream response ─────────────────────────────────────────────────
     res.setHeader(
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     );
     res.setHeader('Content-Disposition', 'attachment; filename=Lead_Bulk_Upload_Template.xlsx');
 
-    // Write to response
     await workbook.xlsx.write(res);
     res.end();
   } catch (err) {
@@ -158,311 +261,300 @@ const downloadLeadTemplate = async (req, res, next) => {
   }
 };
 
+// ─── POST /api/v1/leads/bulk/upload ───────────────────────────────────────────
 /**
- * POST /api/v1/leads/bulk/upload
- * Upload and process bulk leads from Excel file.
+ * Processes the uploaded Excel file.
  *
- * Assignment logic (priority order):
- *  1. assign_to (UUID) in request body → assign ALL leads to this user
- *  2. assign_to column in Excel (col 10) → per-lead assignment matched by full name or phone
- *  3. Neither → leads created as unassigned (assigned_to = NULL)
+ * Required per row: name, phone, budget, location_preference, configuration
+ * Optional per row: alternate_phone, source, project_name, status, assign_to
  *
- * Body params (all optional):
- *   assign_to {string}  UUID of user to assign all leads to (overrides Excel column)
+ * Assignment priority:
+ *   1. assign_to UUID in body  → all leads
+ *   2. Assign To col (I)       → per-lead (matched by name)
+ *   3. null                    → unassigned
  */
 const bulkUploadLeads = async (req, res, next) => {
   const client = await pool.connect();
   try {
-    if (!req.file) {
-      return next(new AppError('No file uploaded', 400));
-    }
+    if (!req.file) return next(new AppError('No file uploaded', 400));
 
-    // ── Assignment override from body ──────────────────────────────────────
-    const globalAssignTo = req.body?.assign_to || null; // UUID — overrides Excel column
+    const globalAssignTo = req.body?.assign_to || null;
 
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.readFile(req.file.path);
 
-    const worksheet = workbook.getWorksheet('Lead Template');
-    if (!worksheet) {
+    const ws = workbook.getWorksheet('Lead Template');
+    if (!ws) {
       fs.unlinkSync(req.file.path);
-      return next(new AppError('Invalid template. Please use the correct template.', 400));
+      return next(new AppError('Invalid template. Please download and use the latest template.', 400));
     }
 
-    const leads = [];
-    const errors = [];
-    const skipped = [];
-
-    // ── Fetch lookup data ──────────────────────────────────────────────────
-    const [projectsResult, usersResult] = await Promise.all([
-      pool.query('SELECT id, name FROM projects WHERE status != $1', ['deleted']),
-      pool.query(`SELECT id, CONCAT(first_name,' ',last_name) AS full_name, phone_number, role
-                  FROM users WHERE is_active = true`),
+    // ── Lookup tables ─────────────────────────────────────────────────────
+    const [projectsRes, usersRes, sourcesRes, statusesRes] = await Promise.all([
+      pool.query(`SELECT id, name FROM projects WHERE status != 'deleted'`),
+      pool.query(`
+        SELECT id, CONCAT(first_name, ' ', last_name) AS full_name, phone_number, role
+        FROM users WHERE is_active = true
+      `),
+      pool.query(`SELECT name FROM lead_sources WHERE is_active = true`),
+      pool.query(`SELECT key FROM lead_statuses WHERE is_active = true`),
     ]);
 
-    const projectMap = new Map(
-      projectsResult.rows.map((p) => [p.name.toLowerCase().trim(), p.id])
-    );
+    const projectMap   = new Map(projectsRes.rows.map(p => [p.name.toLowerCase().trim(), p.id]));
+    const userByName   = new Map(usersRes.rows.map(u => [u.full_name.toLowerCase().trim(), u.id]));
+    const validSources = new Set(sourcesRes.rows.map(s => s.name.toLowerCase()));
+    const validStatuses = new Set(statusesRes.rows.map(s => s.key.toLowerCase()));
 
-    // User lookup by full name (lowercase) and by phone — for per-row assignment
-    const userByName  = new Map(usersResult.rows.map((u) => [u.full_name.toLowerCase().trim(), u.id]));
-    const userByPhone = new Map(usersResult.rows.map((u) => [u.phone_number?.toString().trim(), u.id]));
-
-    // Validate global assign_to UUID if provided
+    // Validate global assign_to UUID
     let validatedGlobalAssignTo = null;
     if (globalAssignTo) {
       const uCheck = await pool.query(
-        'SELECT id, role FROM users WHERE id = $1 AND is_active = true',
-        [globalAssignTo]
+        `SELECT id FROM users WHERE id = $1 AND is_active = true`, [globalAssignTo]
       );
-      if (uCheck.rows.length === 0) {
+      if (!uCheck.rows.length) {
         fs.unlinkSync(req.file.path);
         return next(new AppError('assign_to user not found or inactive', 400));
       }
       validatedGlobalAssignTo = uCheck.rows[0].id;
     }
 
-    // Valid statuses
-    const validStatuses = [
-      'new', 'contacted', 'interested', 'follow_up',
-      'site_visit_scheduled', 'site_visit_done', 'negotiation', 'booked', 'lost',
-    ];
+    const leads   = [];
+    const errors  = [];
+    const skipped = [];
+    const phoneRe = /^[0-9]{10}$/;
 
-    // ── Parse rows (skip header row 1) ────────────────────────────────────
-    worksheet.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) return;
+    // ── Parse rows ────────────────────────────────────────────────────────
+    // Column mapping (1-indexed):
+    //  1 name | 2 phone | 3 alternate_phone | 4 source | 5 budget
+    //  6 location | 7 project_name | 8 status | 9 assign_to | 10 configuration
+    ws.eachRow((row, rowNum) => {
+      if (rowNum === 1) return; // skip header
 
-      const name             = row.getCell(1).value?.toString().trim();
-      const phone            = row.getCell(2).value?.toString().trim();
-      const email            = row.getCell(3).value?.toString().trim() || null;
-      const alternatePhone   = row.getCell(4).value?.toString().trim() || null;
-      const source           = row.getCell(5).value?.toString().trim() || null;
-      const budget           = row.getCell(6).value?.toString().trim() || null;
-      const locationPref     = row.getCell(7).value?.toString().trim() || null;
-      const projectName      = row.getCell(8).value?.toString().trim() || null;
-      let   status           = row.getCell(9).value?.toString().trim().toLowerCase() || 'new';
-      const assignToRaw      = row.getCell(10).value?.toString().trim() || null; // name or phone
+      const cell = (n) => row.getCell(n).value?.toString().trim() || '';
 
-      // Required fields
-      if (!name || !phone) {
-        errors.push({ row: rowNumber, error: 'Name and Phone are required' });
+      const name          = cell(1);
+      const phone         = cell(2);
+      const altPhone      = cell(3) || null;
+      const source        = cell(4) || null;
+      const budget        = cell(5);
+      const location      = cell(6);
+      const projectName   = cell(7) || null;
+      let   status        = cell(8).toLowerCase() || 'new';
+      const assignToRaw   = cell(9) || null;
+      const configuration = cell(10);
+
+      // ── Required field validation ──────────────────────────────────────
+      const missing = [];
+      if (!name)          missing.push('Name');
+      if (!phone)         missing.push('Phone Number');
+      if (!budget)        missing.push('Budget');
+      if (!location)      missing.push('Location Preference');
+      if (!configuration) missing.push('Configuration');
+
+      if (missing.length) {
+        errors.push({ row: rowNum, error: `Missing required fields: ${missing.join(', ')}` });
         return;
       }
 
-      // Phone: 10 digits
-      const phoneRegex = /^[0-9]{10}$/;
-      if (!phoneRegex.test(phone)) {
-        errors.push({ row: rowNumber, error: 'Phone must be 10 digits' });
+      if (!phoneRe.test(phone)) {
+        errors.push({ row: rowNum, error: 'Phone Number must be exactly 10 digits' });
         return;
       }
 
-      // Email format
-      if (email) {
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(email)) {
-          errors.push({ row: rowNumber, error: 'Invalid email format' });
-          return;
-        }
+      if (altPhone && !phoneRe.test(altPhone)) {
+        errors.push({ row: rowNum, error: 'Alternate Phone must be exactly 10 digits if provided' });
+        return;
       }
 
-      // Status
-      if (!validStatuses.includes(status)) status = 'new';
+      // Source: accept if in config or leave as-is (admin may have typed a valid one)
+      const resolvedSource = source
+        ? (validSources.has(source.toLowerCase()) ? source : source)
+        : null;
+
+      // Status: default to 'new' if not recognised
+      if (!validStatuses.has(status)) status = 'new';
 
       // Project
       let projectId = null;
-      if (projectName) projectId = projectMap.get(projectName.toLowerCase().trim()) || null;
+      if (projectName) {
+        projectId = projectMap.get(projectName.toLowerCase().trim()) || null;
+      }
 
-      // Per-row assign_to — match by name then phone from col 10
+      // Per-row assign_to — match by full name
       let rowAssignTo = null;
       if (assignToRaw) {
-        rowAssignTo = userByName.get(assignToRaw.toLowerCase()) ||
-                      userByPhone.get(assignToRaw) ||
-                      null;
+        rowAssignTo = userByName.get(assignToRaw.toLowerCase().trim()) || null;
       }
 
       leads.push({
-        name, phone, email, alternatePhone, source, budget,
-        locationPref, projectId, status, rowNumber,
-        rowAssignTo, // per-row from Excel col 10
+        rowNum,
+        name, phone,
+        alternate_phone: altPhone,
+        source:          resolvedSource,
+        budget,
+        location_preference: location,
+        project_id:      projectId,
+        status,
+        configuration,
+        rowAssignTo,
       });
     });
 
-    if (leads.length === 0) {
+    if (!leads.length) {
       fs.unlinkSync(req.file.path);
       return next(new AppError('No valid leads found in the file', 400));
     }
 
-    // ── Insert in transaction ──────────────────────────────────────────────
+    // ── Insert ────────────────────────────────────────────────────────────
     await client.query('BEGIN');
 
-    const insertedLeads = [];
-    const createdBy     = req.user.id;
+    const inserted   = [];
+    const createdBy  = req.user.id;
 
     for (const lead of leads) {
       try {
         // Duplicate phone check
-        const dup = await client.query('SELECT id FROM leads WHERE phone = $1', [lead.phone]);
-        if (dup.rows.length > 0) {
-          skipped.push({ row: lead.rowNumber, phone: lead.phone, reason: 'Duplicate phone number' });
+        const dup = await client.query(
+          `SELECT id FROM leads WHERE phone = $1`, [lead.phone]
+        );
+        if (dup.rows.length) {
+          skipped.push({ row: lead.rowNum, phone: lead.phone, reason: 'Duplicate phone number' });
           continue;
         }
 
-        // Resolve final assigned_to:
-        // Priority 1 — global body param
-        // Priority 2 — per-row from Excel column 10
-        // Priority 3 — NULL (unassigned)
         const finalAssignTo = validatedGlobalAssignTo || lead.rowAssignTo || null;
 
         const result = await client.query(
           `INSERT INTO leads
-            (name, phone, email, alternate_phone_number, source, status, budget,
-             location_preference, project_id, created_by, assigned_to)
+             (name, phone, alternate_phone_number, source, budget,
+              location_preference, project_id, status, configuration,
+              assigned_to, created_by)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
            RETURNING *`,
           [
-            lead.name, lead.phone, lead.email, lead.alternatePhone,
-            lead.source, lead.status, lead.budget, lead.locationPref,
-            lead.projectId, createdBy, finalAssignTo,
+            lead.name,
+            lead.phone,
+            lead.alternate_phone,
+            lead.source,
+            lead.budget,
+            lead.location_preference,
+            lead.project_id,
+            lead.status,
+            lead.configuration,
+            finalAssignTo,
+            createdBy,
           ]
         );
 
-        const inserted = result.rows[0];
-        insertedLeads.push(inserted);
+        const row = result.rows[0];
+        inserted.push(row);
 
         // Activity log
         const actNote = finalAssignTo
-          ? `Lead created via bulk upload and assigned to user`
+          ? 'Lead created via bulk upload and assigned to user'
           : 'Lead created via bulk upload';
         await client.query(
-          `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1,$2,$3,$4)`,
-          [inserted.id, 'note', actNote, createdBy]
+          `INSERT INTO lead_activities (lead_id, type, note, performed_by)
+           VALUES ($1, 'note', $2, $3)`,
+          [row.id, actNote, createdBy]
         );
 
-        // Reassignment history entry if assigned
+        // Reassignment history
         if (finalAssignTo) {
           await client.query(
-            `INSERT INTO lead_reassignment_history (lead_id, from_user_id, to_user_id, reason, performed_by)
+            `INSERT INTO lead_reassignment_history
+               (lead_id, from_user_id, to_user_id, reason, performed_by)
              VALUES ($1, NULL, $2, $3, $4)`,
-            [inserted.id, finalAssignTo, 'Assigned during bulk upload', createdBy]
+            [row.id, finalAssignTo, 'Assigned during bulk upload', createdBy]
           );
         }
       } catch (err) {
-        errors.push({ row: lead.rowNumber, error: err.message });
+        errors.push({ row: lead.rowNum, error: err.message });
       }
     }
 
     await client.query('COMMIT');
-
-    // Clean up uploaded file
     fs.unlinkSync(req.file.path);
 
-    // Generate result Excel with summary
-    const resultWorkbook = new ExcelJS.Workbook();
-    const summarySheet = resultWorkbook.addWorksheet('Upload Summary');
+    // ── Result Excel ──────────────────────────────────────────────────────
+    const resultWb  = new ExcelJS.Workbook();
+    const summSheet = resultWb.addWorksheet('Upload Summary');
 
-    summarySheet.columns = [
-      { header: 'Metric', key: 'metric', width: 30 },
-      { header: 'Count', key: 'count', width: 15 },
+    summSheet.columns = [
+      { header: 'Metric', key: 'metric', width: 32 },
+      { header: 'Count',  key: 'count',  width: 12 },
     ];
+    summSheet.getRow(1).font = { bold: true };
+    summSheet.addRow({ metric: 'Total rows processed',    count: leads.length });
+    summSheet.addRow({ metric: 'Successfully inserted',   count: inserted.length });
+    summSheet.addRow({ metric: 'Skipped (duplicates)',    count: skipped.length });
+    summSheet.addRow({ metric: 'Errors (skipped)',        count: errors.length });
+    summSheet.addRow({ metric: 'Assigned',                count: inserted.filter(l => l.assigned_to).length });
+    summSheet.addRow({ metric: 'Unassigned',              count: inserted.filter(l => !l.assigned_to).length });
 
-    summarySheet.getRow(1).font = { bold: true };
-    summarySheet.addRow({ metric: 'Total Rows Processed',  count: leads.length });
-    summarySheet.addRow({ metric: 'Successfully Inserted',  count: insertedLeads.length });
-    summarySheet.addRow({ metric: 'Skipped (Duplicates)',   count: skipped.length });
-    summarySheet.addRow({ metric: 'Errors',                 count: errors.length });
-    summarySheet.addRow({ metric: 'Assigned (non-null)',    count: insertedLeads.filter(l => l.assigned_to).length });
-    summarySheet.addRow({ metric: 'Unassigned',             count: insertedLeads.filter(l => !l.assigned_to).length });
-
-    // Add errors sheet if any
-    if (errors.length > 0) {
-      const errorsSheet = resultWorkbook.addWorksheet('Errors');
-      errorsSheet.columns = [
-        { header: 'Row Number', key: 'row', width: 15 },
-        { header: 'Error', key: 'error', width: 50 },
+    if (errors.length) {
+      const errSheet = resultWb.addWorksheet('Errors');
+      errSheet.columns = [
+        { header: 'Row',   key: 'row',   width: 10 },
+        { header: 'Error', key: 'error', width: 60 },
       ];
-      errorsSheet.getRow(1).font = { bold: true };
-      errors.forEach((e) => errorsSheet.addRow(e));
+      errSheet.getRow(1).font = { bold: true };
+      errors.forEach(e => errSheet.addRow(e));
     }
 
-    // Add skipped sheet if any
-    if (skipped.length > 0) {
-      const skippedSheet = resultWorkbook.addWorksheet('Skipped');
-      skippedSheet.columns = [
-        { header: 'Row Number', key: 'row', width: 15 },
-        { header: 'Phone', key: 'phone', width: 15 },
+    if (skipped.length) {
+      const skipSheet = resultWb.addWorksheet('Skipped');
+      skipSheet.columns = [
+        { header: 'Row',    key: 'row',    width: 10 },
+        { header: 'Phone',  key: 'phone',  width: 16 },
         { header: 'Reason', key: 'reason', width: 40 },
       ];
-      skippedSheet.getRow(1).font = { bold: true };
-      skipped.forEach((s) => skippedSheet.addRow(s));
+      skipSheet.getRow(1).font = { bold: true };
+      skipped.forEach(s => skipSheet.addRow(s));
     }
 
-    // Save result file
     const resultDir = path.join(process.cwd(), 'uploads', 'leads', 'results');
     fs.mkdirSync(resultDir, { recursive: true });
-
     const resultFilename = `upload_result_${Date.now()}.xlsx`;
-    const resultPath = path.join(resultDir, resultFilename);
-    await resultWorkbook.xlsx.writeFile(resultPath);
+    await resultWb.xlsx.writeFile(path.join(resultDir, resultFilename));
 
-    return sendSuccess(
-      res,
-      'Bulk upload completed',
-      {
-        total: leads.length,
-        inserted: insertedLeads.length,
-        skipped: skipped.length,
-        errors: errors.length,
-        resultFile: `/uploads/leads/results/${resultFilename}`,
-        summary: {
-          insertedLeads: insertedLeads.map((l) => ({
-            id:          l.id,
-            name:        l.name,
-            phone:       l.phone,
-            assigned_to: l.assigned_to || null,
-          })),
-          errors: errors.slice(0, 10), // First 10 errors only
-          skipped: skipped.slice(0, 10), // First 10 skipped only
-        },
+    return sendSuccess(res, 'Bulk upload completed', {
+      total:      leads.length,
+      inserted:   inserted.length,
+      skipped:    skipped.length,
+      errors:     errors.length,
+      resultFile: `/uploads/leads/results/${resultFilename}`,
+      summary: {
+        insertedLeads: inserted.map(l => ({
+          id:            l.id,
+          name:          l.name,
+          phone:         l.phone,
+          configuration: l.configuration,
+          assigned_to:   l.assigned_to || null,
+        })),
+        errors:  errors.slice(0, 10),
+        skipped: skipped.slice(0, 10),
       },
-      201
-    );
+    }, 201);
   } catch (err) {
     await client.query('ROLLBACK');
-    // Clean up uploaded file if exists
-    if (req.file && fs.existsSync(req.file.path)) {
-      fs.unlinkSync(req.file.path);
-    }
+    if (req.file && fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path);
     next(err);
   } finally {
     client.release();
   }
 };
 
-/**
- * GET /api/v1/leads/bulk/result/:filename
- * Download result file after bulk upload
- */
+// ─── GET /api/v1/leads/bulk/result/:filename ──────────────────────────────────
 const downloadResultFile = async (req, res, next) => {
   try {
     const { filename } = req.params;
     const filePath = path.join(process.cwd(), 'uploads', 'leads', 'results', filename);
-
-    if (!fs.existsSync(filePath)) {
-      return next(new AppError('Result file not found', 404));
-    }
-
-    res.download(filePath, filename, (err) => {
-      if (err) {
-        next(err);
-      }
-    });
+    if (!fs.existsSync(filePath)) return next(new AppError('Result file not found', 404));
+    res.download(filePath, filename, err => { if (err) next(err); });
   } catch (err) {
     next(err);
   }
 };
 
-module.exports = {
-  downloadLeadTemplate,
-  bulkUploadLeads,
-  downloadResultFile,
-};
+module.exports = { downloadLeadTemplate, bulkUploadLeads, downloadResultFile };
