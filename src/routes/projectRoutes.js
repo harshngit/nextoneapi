@@ -111,7 +111,7 @@ router.get("/", authenticate, projectController.getAllProjects);
  *               description:     { type: string }
  *               brochure_url:    { type: string }
  *               video_url:       { type: string }
- *               payment_plan_url: { type: string }
+ *               payment_plan: { type: string }
  *               home_loan_info:  { type: string }
  *               unit_plans:
  *                 type: array
