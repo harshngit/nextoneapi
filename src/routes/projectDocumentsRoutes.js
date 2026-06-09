@@ -6,7 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticate } = require('../middleware/auth');
-const { uploadProjectDocuments } = require('../middleware/uploadMiddleware');
+const { uploadProjectDocuments, uploadUnitPlan, uploadCreative, uploadPaymentPlan, uploadVideo } = require('../middleware/uploadMiddleware');
 const {
   uploadProjectDocuments: uploadDocs,
   getProjectDocuments,
@@ -15,8 +15,9 @@ const {
   deleteProjectDocument,
   uploadStandaloneUnitPlan,
   uploadStandaloneCreative,
+  uploadStandalonePaymentPlan,
+  uploadStandaloneVideo,
 } = require('../controllers/projectDocumentsController');
-const { uploadUnitPlan, uploadCreative } = require('../middleware/uploadMiddleware');
 
 /**
  * @swagger
@@ -79,10 +80,62 @@ router.post('/upload-creative', authenticate, uploadCreative, uploadStandaloneCr
 
 /**
  * @swagger
+ * /api/v1/projects/upload-payment-plan:
+ *   post:
+ *     summary: Upload a single payment plan
+ *     description: Uploads a payment plan document without requiring a project ID. Returns file details. Accepts any field name for the file.
+ *     tags: [Project Documents]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *                 description: Payment plan document (accepts any field name)
+ *     responses:
+ *       201:
+ *         description: Payment plan uploaded successfully
+ */
+router.post('/upload-payment-plan', authenticate, uploadPaymentPlan, uploadStandalonePaymentPlan);
+
+/**
+ * @swagger
+ * /api/v1/projects/upload-video:
+ *   post:
+ *     summary: Upload a single video
+ *     description: Uploads a video document without requiring a project ID. Returns file details. Accepts any field name for the file.
+ *     tags: [Project Documents]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *                 description: Video document (accepts any field name)
+ *     responses:
+ *       201:
+ *         description: Video uploaded successfully
+ */
+router.post('/upload-video', authenticate, uploadVideo, uploadStandaloneVideo);
+
+/**
+ * @swagger
  * /api/v1/projects/{id}/documents:
  *   post:
  *     summary: Upload unit plans and creatives for a project
- *     description: Uploads multiple files as unit plans or creatives for a specific project.
+ *     description: Uploads multiple files as unit plans, creatives, payment plans, or videos for a specific project.
  *     tags: [Project Documents]
  *     security:
  *       - BearerAuth: []
@@ -113,6 +166,18 @@ router.post('/upload-creative', authenticate, uploadCreative, uploadStandaloneCr
  *                   type: string
  *                   format: binary
  *                 description: Creative documents (multiple)
+ *               payment_plans:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: binary
+ *                 description: Payment plan documents (multiple)
+ *               videos:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: binary
+ *                 description: Video documents (multiple)
  *     responses:
  *       200:
  *         description: Documents uploaded successfully

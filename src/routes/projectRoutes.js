@@ -87,7 +87,7 @@ router.get("/", authenticate, projectController.getAllProjects);
  *     description: >
  *       Adds a new real estate project to the system.
  *       Only Admin and Super Admin can create projects.
- *       This version takes a JSON body with optional unit_plans and creatives arrays
+ *       This version takes a JSON body with optional unit_plans, creatives, payment_plans, and videos arrays
  *       containing file information from the upload API.
  *     tags: [Project Management]
  *     security:
@@ -109,6 +109,10 @@ router.get("/", authenticate, projectController.getAllProjects);
  *               rera_number:     { type: string }
  *               status:          { type: string, enum: [active, upcoming, completed, inactive] }
  *               description:     { type: string }
+ *               brochure_url:    { type: string }
+ *               video_url:       { type: string }
+ *               payment_plan_url: { type: string }
+ *               home_loan_info:  { type: string }
  *               unit_plans:
  *                 type: array
  *                 items:
@@ -119,6 +123,24 @@ router.get("/", authenticate, projectController.getAllProjects);
  *                     file_size: { type: integer }
  *                     mime_type: { type: string }
  *               creatives:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     file_name: { type: string }
+ *                     file_path: { type: string }
+ *                     file_size: { type: integer }
+ *                     mime_type: { type: string }
+ *               payment_plans:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     file_name: { type: string }
+ *                     file_path: { type: string }
+ *                     file_size: { type: integer }
+ *                     mime_type: { type: string }
+ *               videos:
  *                 type: array
  *                 items:
  *                   type: object
@@ -240,6 +262,12 @@ router.get("/:id", authenticate, projectController.getProjectById);
  *                 type: string
  *                 format: date
  *               brochure_url:
+ *                 type: string
+ *               video_url:
+ *                 type: string
+ *               payment_plan_url:
+ *                 type: string
+ *               home_loan_info:
  *                 type: string
  *               description:
  *                 type: string

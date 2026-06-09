@@ -55,7 +55,7 @@ const projectDocStorage = multer.diskStorage({
   },
 });
 
-// ── File filter for project documents (PDF, images, docs) ─────────────────────
+// ── File filter for project documents (PDF, images, docs, videos) ─────────────────────
 const projectDocFilter = (req, file, cb) => {
   const allowed = [
     'application/pdf',
@@ -65,13 +65,17 @@ const projectDocFilter = (req, file, cb) => {
     'image/webp',
     'application/msword',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'video/mp4',
+    'video/webm',
+    'video/ogg',
+    'video/quicktime',
   ];
-  if (allowed.includes(file.mimetype)) {
+  if (allowed.includes(file.mimetype) || file.mimetype.startsWith('video/')) {
     cb(null, true);
   } else {
     cb(
       new AppError(
-        'Only PDF, images (JPEG, PNG, WEBP), and Word documents are allowed',
+        'Only PDF, images (JPEG, PNG, WEBP), Word documents, and videos (MP4, WEBM, etc.) are allowed',
         400
       ),
       false
@@ -149,11 +153,14 @@ const uploadLeadsBulkFile = uploadLeadsBulk.single('file');
 
 /**
  * Multiple files upload for project documents
- * Fields: 'unit_plans' (up to 10 files), 'creatives' (up to 10 files)
+ * Fields: 'unit_plans' (up to 10 files), 'creatives' (up to 10 files),
+ *         'payment_plans' (up to 10 files), 'videos' (up to 10 files)
  */
 const uploadProjectDocuments = uploadProjectDocs.fields([
   { name: 'unit_plans', maxCount: 10 },
   { name: 'creatives',  maxCount: 10 },
+  { name: 'payment_plans', maxCount: 10 },
+  { name: 'videos', maxCount: 10 },
 ]);
 
 /**
@@ -166,6 +173,16 @@ const uploadUnitPlan = uploadProjectDocs.any();
  */
 const uploadCreative = uploadProjectDocs.any();
 
+/**
+ * Single file upload for payment plan (accepts any field name)
+ */
+const uploadPaymentPlan = uploadProjectDocs.any();
+
+/**
+ * Single file upload for video (accepts any field name)
+ */
+const uploadVideo = uploadProjectDocs.any();
+
 const uploadSingleFile = uploadGeneric.single('file');
 const uploadMultipleFiles = uploadGeneric.array('files', 10);
 
@@ -174,6 +191,8 @@ module.exports = {
   uploadProjectDocuments,
   uploadUnitPlan,
   uploadCreative,
+  uploadPaymentPlan,
+  uploadVideo,
   uploadLeadVoice,
   uploadSingleFile,
   uploadMultipleFiles,

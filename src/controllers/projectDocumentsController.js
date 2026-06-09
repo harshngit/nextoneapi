@@ -34,7 +34,7 @@ const uploadProjectDocuments = async (req, res, next) => {
       return next(new AppError('Project not found', 404));
     }
 
-    if (!req.files || (!req.files.unit_plans && !req.files.creatives)) {
+    if (!req.files || (!req.files.unit_plans && !req.files.creatives && !req.files.payment_plans && !req.files.videos)) {
       return next(new AppError('No files uploaded', 400));
     }
 
@@ -93,6 +93,56 @@ const uploadProjectDocuments = async (req, res, next) => {
       }
     }
 
+    // Process payment plans
+    if (req.files.payment_plans) {
+      for (const file of req.files.payment_plans) {
+        const result = await client.query(
+          `INSERT INTO project_documents 
+            (project_id, document_type, file_name, file_path, file_size, mime_type, uploaded_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           RETURNING *`,
+          [
+            projectId,
+            'payment_plan',
+            file.originalname,
+            file.path,
+            file.size,
+            file.mimetype,
+            uploadedBy,
+          ]
+        );
+        uploadedDocs.push({
+          ...result.rows[0],
+          url: `/api/v1/projects/${projectId}/documents/${result.rows[0].id}/download`,
+        });
+      }
+    }
+
+    // Process videos
+    if (req.files.videos) {
+      for (const file of req.files.videos) {
+        const result = await client.query(
+          `INSERT INTO project_documents 
+            (project_id, document_type, file_name, file_path, file_size, mime_type, uploaded_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           RETURNING *`,
+          [
+            projectId,
+            'video',
+            file.originalname,
+            file.path,
+            file.size,
+            file.mimetype,
+            uploadedBy,
+          ]
+        );
+        uploadedDocs.push({
+          ...result.rows[0],
+          url: `/api/v1/projects/${projectId}/documents/${result.rows[0].id}/download`,
+        });
+      }
+    }
+
     await client.query('COMMIT');
 
     return sendSuccess(res, 'Documents uploaded successfully', {
@@ -115,6 +165,16 @@ const uploadProjectDocuments = async (req, res, next) => {
           if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
         });
       }
+      if (req.files.payment_plans) {
+        req.files.payment_plans.forEach((file) => {
+          if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+        });
+      }
+      if (req.files.videos) {
+        req.files.videos.forEach((file) => {
+          if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+        });
+      }
     }
     next(err);
   } finally {
@@ -129,7 +189,7 @@ const uploadProjectDocuments = async (req, res, next) => {
 const getProjectDocuments = async (req, res, next) => {
   try {
     const { id: projectId } = req.params;
-    const { document_type } = req.query; // Optional filter: 'unit_plan' or 'creative'
+    const { document_type } = req.query; // Optional filter: 'unit_plan', 'creative', 'payment_plan', 'video'
 
     // Check if project exists
     const projectCheck = await pool.query('SELECT id, name FROM projects WHERE id = $1', [
@@ -156,7 +216,7 @@ const getProjectDocuments = async (req, res, next) => {
 
     const params = [projectId];
 
-    if (document_type && ['unit_plan', 'creative'].includes(document_type)) {
+    if (document_type && ['unit_plan', 'creative', 'payment_plan', 'video'].includes(document_type)) {
       query += ' AND pd.document_type = $2';
       params.push(document_type);
     }
@@ -175,6 +235,8 @@ const getProjectDocuments = async (req, res, next) => {
     const groupedDocs = {
       unit_plans: documents.filter((d) => d.document_type === 'unit_plan'),
       creatives: documents.filter((d) => d.document_type === 'creative'),
+      payment_plans: documents.filter((d) => d.document_type === 'payment_plan'),
+      videos: documents.filter((d) => d.document_type === 'video'),
     };
 
     return sendSuccess(res, 'Documents fetched successfully', {
@@ -231,7 +293,7 @@ const downloadProjectDocument = async (req, res, next) => {
 const downloadAllProjectDocuments = async (req, res, next) => {
   try {
     const { id: projectId } = req.params;
-    const { document_type } = req.query; // Optional: 'unit_plan' or 'creative'
+    const { document_type } = req.query; // Optional: 'unit_plan', 'creative', 'payment_plan', 'video'
 
     // Get project details
     const projectResult = await pool.query('SELECT id, name FROM projects WHERE id = $1', [
@@ -248,7 +310,7 @@ const downloadAllProjectDocuments = async (req, res, next) => {
     let query = 'SELECT * FROM project_documents WHERE project_id = $1';
     const params = [projectId];
 
-    if (document_type && ['unit_plan', 'creative'].includes(document_type)) {
+    if (document_type && ['unit_plan', 'creative', 'payment_plan', 'video'].includes(document_type)) {
       query += ' AND document_type = $2';
       params.push(document_type);
     }
@@ -277,7 +339,10 @@ const downloadAllProjectDocuments = async (req, res, next) => {
     let addedCount = 0;
     for (const doc of docsResult.rows) {
       if (fs.existsSync(doc.file_path)) {
-        const folderName = doc.document_type === 'unit_plan' ? 'Unit Plans' : 'Creatives';
+        const folderName = doc.document_type === 'unit_plan' ? 'Unit Plans' 
+        : doc.document_type === 'creative' ? 'Creatives' 
+        : doc.document_type === 'payment_plan' ? 'Payment Plans' 
+        : 'Videos';
         archive.file(doc.file_path, { name: `${folderName}/${doc.file_name}` });
         addedCount++;
       }
@@ -391,6 +456,58 @@ const uploadStandaloneCreative = async (req, res, next) => {
   }
 };
 
+/**
+ * POST /api/v1/projects/upload-payment-plan
+ * Upload a single payment plan (no project ID required)
+ */
+const uploadStandalonePaymentPlan = async (req, res, next) => {
+  try {
+    const file = req.file || (req.files && req.files[0]);
+    if (!file) {
+      return next(new AppError('No payment plan file uploaded', 400));
+    }
+
+    const fileData = {
+      file_name: file.originalname,
+      file_path: file.path.replace(/\\/g, '/'),
+      file_size: file.size,
+      mime_type: file.mimetype,
+      url: `/uploads/projects/temp/payment_plans/${file.filename}`,
+      document_type: 'payment_plan'
+    };
+
+    return sendSuccess(res, 'Payment plan uploaded successfully', fileData, 201);
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * POST /api/v1/projects/upload-video
+ * Upload a single video (no project ID required)
+ */
+const uploadStandaloneVideo = async (req, res, next) => {
+  try {
+    const file = req.file || (req.files && req.files[0]);
+    if (!file) {
+      return next(new AppError('No video file uploaded', 400));
+    }
+
+    const fileData = {
+      file_name: file.originalname,
+      file_path: file.path.replace(/\\/g, '/'),
+      file_size: file.size,
+      mime_type: file.mimetype,
+      url: `/uploads/projects/temp/videos/${file.filename}`,
+      document_type: 'video'
+    };
+
+    return sendSuccess(res, 'Video uploaded successfully', fileData, 201);
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   uploadProjectDocuments,
   getProjectDocuments,
@@ -399,4 +516,6 @@ module.exports = {
   deleteProjectDocument,
   uploadStandaloneUnitPlan,
   uploadStandaloneCreative,
+  uploadStandalonePaymentPlan,
+  uploadStandaloneVideo,
 };

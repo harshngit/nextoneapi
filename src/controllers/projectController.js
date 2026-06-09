@@ -30,15 +30,15 @@ const getAllProjects = async (req, res, next) => {
 
     const dataResult = await pool.query(
       `SELECT p.*,
-              (SELECT COUNT(*) FROM leads WHERE project_id = p.id AND is_archived = false) AS total_leads,
-              (SELECT json_agg(d.*) FROM (
-                 SELECT id, document_type, file_name, file_size, mime_type, uploaded_at 
-                 FROM project_documents 
-                 WHERE project_id = p.id
-              ) d) AS documents
-       FROM projects p ${where}
-       ORDER BY p.created_at DESC
-       LIMIT $${idx++} OFFSET $${idx++}`,
+        (SELECT COUNT(*) FROM leads WHERE project_id = p.id AND is_archived = false) AS total_leads,
+        (SELECT json_agg(d.*) FROM (
+           SELECT id, document_type, file_name, file_size, mime_type, uploaded_at 
+           FROM project_documents 
+           WHERE project_id = p.id
+        ) d) AS documents
+      FROM projects p ${where}
+      ORDER BY p.created_at DESC
+      LIMIT $${idx++} OFFSET $${idx++}`,
       [...params, parseInt(per_page), offset]
     );
 
@@ -52,10 +52,20 @@ const getAllProjects = async (req, res, next) => {
           ...d,
           url: `/api/v1/projects/${row.id}/documents/${d.id}/download`
         }));
+        row.payment_plans = row.documents.filter(d => d.document_type === 'payment_plan').map(d => ({
+          ...d,
+          url: `/api/v1/projects/${row.id}/documents/${d.id}/download`
+        }));
+        row.videos = row.documents.filter(d => d.document_type === 'video').map(d => ({
+          ...d,
+          url: `/api/v1/projects/${row.id}/documents/${d.id}/download`
+        }));
         delete row.documents;
       } else {
         row.unit_plans = [];
         row.creatives = [];
+        row.payment_plans = [];
+        row.videos = [];
       }
       return row;
     });
@@ -76,7 +86,8 @@ const createProject = async (req, res, next) => {
       name, developer, city, locality, address, configurations,
       price_range, total_units, possession_date, rera_number,
       amenities, status = "active", brochure_url, description,
-      unit_plans, creatives, // Arrays of document objects from JSON body
+      video_url, payment_plan_url, home_loan_info,
+      unit_plans, creatives, payment_plans, videos, // Arrays of document objects from JSON body
     } = req.body;
 
     if (!name || !city) return next(new AppError("name and city are required", 400));
@@ -87,14 +98,17 @@ const createProject = async (req, res, next) => {
     const result = await client.query(
       `INSERT INTO projects
         (name, developer, city, locality, address, configurations, price_range,
-         total_units, possession_date, rera_number, amenities, status, brochure_url, description, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+         total_units, possession_date, rera_number, amenities, status, brochure_url, description, 
+         video_url, payment_plan_url, home_loan_info, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
        RETURNING *`,
       [
         name.trim(), developer || null, city.trim(), locality || null, address || null,
         JSON.stringify(configurations || []), price_range || null, total_units || null,
         possession_date || null, rera_number || null, JSON.stringify(amenities || []),
-        status, brochure_url || null, description || null, req.user.id,
+        status, brochure_url || null, description || null, 
+        video_url || null, payment_plan_url || null, home_loan_info || null,
+        req.user.id,
       ]
     );
 
@@ -133,6 +147,12 @@ const createProject = async (req, res, next) => {
     if (creatives && Array.isArray(creatives)) {
       await processDocuments(creatives, "creative");
     }
+    if (payment_plans && Array.isArray(payment_plans)) {
+      await processDocuments(payment_plans, "payment_plan");
+    }
+    if (videos && Array.isArray(videos)) {
+      await processDocuments(videos, "video");
+    }
 
     await client.query("COMMIT");
 
@@ -142,6 +162,8 @@ const createProject = async (req, res, next) => {
         count:     savedDocs.length,
         unit_plans: savedDocs.filter(d => d.document_type === "unit_plan"),
         creatives:  savedDocs.filter(d => d.document_type === "creative"),
+        payment_plans: savedDocs.filter(d => d.document_type === "payment_plan"),
+        videos: savedDocs.filter(d => d.document_type === "video"),
       } : null,
     }, 201);
   } catch (err) {
@@ -160,13 +182,13 @@ const getProjectById = async (req, res, next) => {
     const { id } = req.params;
     const result = await pool.query(
       `SELECT p.*,
-              (SELECT COUNT(*) FROM leads WHERE project_id = p.id AND is_archived = false) AS total_leads,
-              (SELECT json_agg(d.*) FROM (
-                 SELECT id, document_type, file_name, file_size, mime_type, uploaded_at 
-                 FROM project_documents 
-                 WHERE project_id = p.id
-              ) d) AS documents
-       FROM projects p WHERE p.id = $1`,
+        (SELECT COUNT(*) FROM leads WHERE project_id = p.id AND is_archived = false) AS total_leads,
+        (SELECT json_agg(d.*) FROM (
+           SELECT id, document_type, file_name, file_size, mime_type, uploaded_at 
+           FROM project_documents 
+           WHERE project_id = p.id
+        ) d) AS documents
+      FROM projects p WHERE p.id = $1`,
       [id]
     );
     if (result.rows.length === 0) return next(new AppError("Project not found", 404));
@@ -181,10 +203,20 @@ const getProjectById = async (req, res, next) => {
         ...d,
         url: `/api/v1/projects/${project.id}/documents/${d.id}/download`
       }));
+      project.payment_plans = project.documents.filter(d => d.document_type === 'payment_plan').map(d => ({
+        ...d,
+        url: `/api/v1/projects/${project.id}/documents/${d.id}/download`
+      }));
+      project.videos = project.documents.filter(d => d.document_type === 'video').map(d => ({
+        ...d,
+        url: `/api/v1/projects/${project.id}/documents/${d.id}/download`
+      }));
       delete project.documents;
     } else {
       project.unit_plans = [];
       project.creatives = [];
+      project.payment_plans = [];
+      project.videos = [];
     }
 
     return sendSuccess(res, "Project fetched successfully", project);
@@ -203,7 +235,8 @@ const updateProject = async (req, res, next) => {
     if (existing.rows.length === 0) return next(new AppError("Project not found", 404));
 
     const fields = ["name", "developer", "city", "locality", "address", "price_range",
-                    "total_units", "possession_date", "rera_number", "brochure_url", "description"];
+                    "total_units", "possession_date", "rera_number", "brochure_url", "description",
+                    "video_url", "payment_plan_url", "home_loan_info"];
     const jsonFields = ["configurations", "amenities"];
 
     const updates = []; const params = []; let idx = 1;
