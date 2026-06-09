@@ -12,6 +12,10 @@ const {
   getProjectDocuments,
   downloadProjectDocument,
   downloadAllProjectDocuments,
+  downloadAllUnitPlans,
+  downloadAllCreatives,
+  downloadAllPaymentPlans,
+  downloadAllVideos,
   deleteProjectDocument,
   uploadStandaloneUnitPlan,
   uploadStandaloneCreative,
@@ -248,6 +252,118 @@ router.get('/:id/documents', authenticate, getProjectDocuments);
  *               format: binary
  */
 router.get('/:id/documents/download-all', authenticate, downloadAllProjectDocuments);
+
+/**
+ * @swagger
+ * /api/v1/projects/{id}/documents/unit-plans/download-all:
+ *   get:
+ *     summary: Download all unit plans for a project as ZIP
+ *     description: Compresses all unit plans for the project into a single ZIP file for download.
+ *     tags: [Project Documents]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Project UUID
+ *     responses:
+ *       200:
+ *         description: ZIP file containing all unit plans
+ *         content:
+ *           application/zip:
+ *             schema:
+ *               type: string
+ *               format: binary
+ */
+router.get('/:id/documents/unit-plans/download-all', authenticate, downloadAllUnitPlans);
+
+/**
+ * @swagger
+ * /api/v1/projects/{id}/documents/creatives/download-all:
+ *   get:
+ *     summary: Download all creatives for a project as ZIP
+ *     description: Compresses all creatives for the project into a single ZIP file for download.
+ *     tags: [Project Documents]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Project UUID
+ *     responses:
+ *       200:
+ *         description: ZIP file containing all creatives
+ *         content:
+ *           application/zip:
+ *             schema:
+ *               type: string
+ *               format: binary
+ */
+router.get('/:id/documents/creatives/download-all', authenticate, downloadAllCreatives);
+
+/**
+ * @swagger
+ * /api/v1/projects/{id}/documents/payment-plans/download-all:
+ *   get:
+ *     summary: Download all payment plans for a project as ZIP
+ *     description: Compresses all payment plans for the project into a single ZIP file for download.
+ *     tags: [Project Documents]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Project UUID
+ *     responses:
+ *       200:
+ *         description: ZIP file containing all payment plans
+ *         content:
+ *           application/zip:
+ *             schema:
+ *               type: string
+ *               format: binary
+ */
+router.get('/:id/documents/payment-plans/download-all', authenticate, downloadAllPaymentPlans);
+
+/**
+ * @swagger
+ * /api/v1/projects/{id}/documents/videos/download-all:
+ *   get:
+ *     summary: Download all videos for a project as ZIP
+ *     description: Compresses all videos for the project into a single ZIP file for download.
+ *     tags: [Project Documents]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Project UUID
+ *     responses:
+ *       200:
+ *         description: ZIP file containing all videos
+ *         content:
+ *           application/zip:
+ *             schema:
+ *               type: string
+ *               format: binary
+ */
+router.get('/:id/documents/videos/download-all', authenticate, downloadAllVideos);
 
 /**
  * @swagger

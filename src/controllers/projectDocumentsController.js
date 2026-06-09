@@ -286,6 +286,64 @@ const downloadProjectDocument = async (req, res, next) => {
   }
 };
 
+// Helper function to download documents of a specific type
+const downloadDocumentsByType = async (req, res, next, documentType, folderName) => {
+  try {
+    const { id: projectId } = req.params;
+
+    // Get project details
+    const projectResult = await pool.query('SELECT id, name FROM projects WHERE id = $1', [
+      projectId,
+    ]);
+
+    if (projectResult.rows.length === 0) {
+      return next(new AppError('Project not found', 404));
+    }
+
+    const projectName = projectResult.rows[0].name;
+
+    // Get documents of specific type
+    const docsResult = await pool.query(
+      'SELECT * FROM project_documents WHERE project_id = $1 AND document_type = $2',
+      [projectId, documentType]
+    );
+
+    if (docsResult.rows.length === 0) {
+      return next(new AppError(`No ${folderName.toLowerCase()} found for this project`, 404));
+    }
+
+    // Create ZIP archive — archiver v8 exports ZipArchive directly, not a factory function
+    const archive = new ZipArchive({ zlib: { level: 9 } });
+
+    // Set response headers
+    const zipFileName = `${projectName}_${folderName.toLowerCase().replace(' ', '_')}_${Date.now()}.zip`;
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${zipFileName}"`);
+
+    // Pipe archive to response
+    archive.pipe(res);
+
+    // Add files to archive
+    let addedCount = 0;
+    for (const doc of docsResult.rows) {
+      if (fs.existsSync(doc.file_path)) {
+        archive.file(doc.file_path, { name: `${folderName}/${doc.file_name}` });
+        addedCount++;
+      }
+    }
+
+    if (addedCount === 0) {
+      return next(new AppError('No valid files found to download', 404));
+    }
+
+    // Finalize archive
+    await archive.finalize();
+  } catch (err) {
+    next(err);
+  }
+};
+
 /**
  * GET /api/v1/projects/:id/documents/download-all
  * Download all documents for a project as a ZIP file
@@ -357,6 +415,38 @@ const downloadAllProjectDocuments = async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+};
+
+/**
+ * GET /api/v1/projects/:id/documents/unit-plans/download-all
+ * Download all unit plans for a project as a ZIP file
+ */
+const downloadAllUnitPlans = (req, res, next) => {
+  return downloadDocumentsByType(req, res, next, 'unit_plan', 'Unit Plans');
+};
+
+/**
+ * GET /api/v1/projects/:id/documents/creatives/download-all
+ * Download all creatives for a project as a ZIP file
+ */
+const downloadAllCreatives = (req, res, next) => {
+  return downloadDocumentsByType(req, res, next, 'creative', 'Creatives');
+};
+
+/**
+ * GET /api/v1/projects/:id/documents/payment-plans/download-all
+ * Download all payment plans for a project as a ZIP file
+ */
+const downloadAllPaymentPlans = (req, res, next) => {
+  return downloadDocumentsByType(req, res, next, 'payment_plan', 'Payment Plans');
+};
+
+/**
+ * GET /api/v1/projects/:id/documents/videos/download-all
+ * Download all videos for a project as a ZIP file
+ */
+const downloadAllVideos = (req, res, next) => {
+  return downloadDocumentsByType(req, res, next, 'video', 'Videos');
 };
 
 /**
@@ -513,6 +603,10 @@ module.exports = {
   getProjectDocuments,
   downloadProjectDocument,
   downloadAllProjectDocuments,
+  downloadAllUnitPlans,
+  downloadAllCreatives,
+  downloadAllPaymentPlans,
+  downloadAllVideos,
   deleteProjectDocument,
   uploadStandaloneUnitPlan,
   uploadStandaloneCreative,
