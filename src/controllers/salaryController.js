@@ -719,3 +719,197 @@ module.exports = {
   getSlipById,
   getSalaryHistory,
 }
+
+// ─── ADD INCENTIVE ────────────────────────────────────────────────────────────
+const addIncentive = async (req, res, next) => {
+  try {
+    const { user_id, month, year, amount, reason } = req.body
+    if (!user_id || !month || !year || amount == null)
+      return next(new AppError('user_id, month, year, and amount are required', 400))
+    const m = parseInt(month), y = parseInt(year)
+    if (m < 1 || m > 12) return next(new AppError('month must be between 1 and 12', 400))
+    if (y < 2020)        return next(new AppError('year must be 2020 or later', 400))
+    const parsedAmount = parseFloat(amount)
+    if (isNaN(parsedAmount) || parsedAmount < 0)
+      return next(new AppError('amount must be a non-negative number', 400))
+    const userChk = await pool.query(
+      `SELECT id, CONCAT(first_name,' ',last_name) AS full_name, role
+       FROM users WHERE id = $1 AND is_active = true`, [user_id]
+    )
+    if (!userChk.rows.length) return next(new AppError('Employee not found', 404))
+    const result = await pool.query(
+      `INSERT INTO employee_incentives (user_id, month, year, amount, reason, given_by)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [user_id, m, y, parsedAmount, reason || null, req.user.id]
+    )
+    const monthName = new Date(y, m - 1).toLocaleString('en-IN', { month: 'long' })
+    return sendSuccess(res, `Incentive of ₹${parsedAmount} added for ${monthName} ${y}`, {
+      incentive: result.rows[0],
+      employee:  userChk.rows[0],
+    }, 201)
+  } catch (err) { next(err) }
+}
+
+// ─── GET INCENTIVES ───────────────────────────────────────────────────────────
+const getIncentives = async (req, res, next) => {
+  try {
+    const { user_id, month, year, page = 1, per_page = 20 } = req.query
+    const offset = (parseInt(page) - 1) * parseInt(per_page)
+    const conds = [], params = []
+    let idx = 1
+    if (user_id) { conds.push(`ei.user_id = $${idx++}`); params.push(user_id) }
+    if (month)   { conds.push(`ei.month = $${idx++}`);   params.push(parseInt(month)) }
+    if (year)    { conds.push(`ei.year = $${idx++}`);    params.push(parseInt(year)) }
+    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
+    const [cnt, data] = await Promise.all([
+      pool.query(`SELECT COUNT(*) FROM employee_incentives ei ${where}`, params),
+      pool.query(
+        `SELECT ei.*, CONCAT(u.first_name,' ',u.last_name) AS employee_name,
+                CONCAT(g.first_name,' ',g.last_name) AS given_by_name
+         FROM employee_incentives ei
+         JOIN users u ON u.id = ei.user_id
+         LEFT JOIN users g ON g.id = ei.given_by
+         ${where}
+         ORDER BY ei.year DESC, ei.month DESC, ei.created_at DESC
+         LIMIT $${idx++} OFFSET $${idx++}`,
+        [...params, parseInt(per_page), offset]
+      ),
+    ])
+    const total = parseInt(cnt.rows[0].count)
+    return sendSuccess(res, 'Incentives fetched', {
+      data: data.rows.map(r => ({ ...r, amount: parseFloat(r.amount) })),
+      pagination: { total, page: parseInt(page), per_page: parseInt(per_page), total_pages: Math.ceil(total / parseInt(per_page)) },
+    })
+  } catch (err) { next(err) }
+}
+
+// ─── DELETE INCENTIVE ─────────────────────────────────────────────────────────
+const deleteIncentive = async (req, res, next) => {
+  try {
+    const { id } = req.params
+    const check = await pool.query(
+      `SELECT ei.*, CONCAT(u.first_name,' ',u.last_name) AS employee_name
+       FROM employee_incentives ei JOIN users u ON u.id = ei.user_id WHERE ei.id = $1`, [id]
+    )
+    if (!check.rows.length) return next(new AppError('Incentive record not found', 404))
+    await pool.query('DELETE FROM employee_incentives WHERE id = $1', [id])
+    return sendSuccess(res, 'Incentive deleted successfully', { deleted: check.rows[0] })
+  } catch (err) { next(err) }
+}
+
+// ─── GET APPRAISAL HISTORY ────────────────────────────────────────────────────
+const getAppraisalHistory = async (req, res, next) => {
+  try {
+    const { user_id } = req.params
+    const userChk = await pool.query(
+      `SELECT id, CONCAT(first_name,' ',last_name) AS full_name, role
+       FROM users WHERE id = $1`, [user_id]
+    )
+    if (!userChk.rows.length) return next(new AppError('Employee not found', 404))
+    const history = await pool.query(
+      `SELECT ea.*, CONCAT(u.first_name,' ',u.last_name) AS appraised_by_name
+       FROM employee_appraisals ea
+       LEFT JOIN users u ON u.id = ea.appraised_by
+       WHERE ea.user_id = $1
+       ORDER BY ea.effective_from DESC, ea.created_at DESC`, [user_id]
+    )
+    return sendSuccess(res, 'Appraisal history fetched', {
+      employee: userChk.rows[0],
+      total:    history.rows.length,
+      history:  history.rows.map(r => ({
+        ...r,
+        from_salary:       r.from_salary       ? parseFloat(r.from_salary)       : null,
+        to_salary:         parseFloat(r.to_salary),
+        increment_amount:  r.increment_amount  ? parseFloat(r.increment_amount)  : null,
+        increment_percent: r.increment_percent ? parseFloat(r.increment_percent) : null,
+      })),
+    })
+  } catch (err) { next(err) }
+}
+
+// ─── GET USER SALARY SUMMARY ──────────────────────────────────────────────────
+const getUserSalarySummary = async (req, res, next) => {
+  try {
+    const { user_id }     = req.params
+    const { month, year } = req.query
+    const userChk = await pool.query(
+      `SELECT id, CONCAT(first_name,' ',last_name) AS full_name, role, email, phone_number
+       FROM users WHERE id = $1`, [user_id]
+    )
+    if (!userChk.rows.length) return next(new AppError('Employee not found', 404))
+    const currentSalary = await getActiveSalary(user_id)
+
+    const slipConds = ['ss.user_id = $1'], slipParams = [user_id]
+    let slipIdx = 2
+    if (month) { slipConds.push(`ss.month = $${slipIdx++}`); slipParams.push(parseInt(month)) }
+    if (year)  { slipConds.push(`ss.year = $${slipIdx++}`);  slipParams.push(parseInt(year)) }
+
+    const incConds = ['ei.user_id = $1'], incParams = [user_id]
+    let incIdx = 2
+    if (month) { incConds.push(`ei.month = $${incIdx++}`); incParams.push(parseInt(month)) }
+    if (year)  { incConds.push(`ei.year = $${incIdx++}`);  incParams.push(parseInt(year)) }
+
+    const [slipsRes, incentivesRes, appraisalsRes] = await Promise.all([
+      pool.query(
+        `SELECT ss.*, CONCAT(g.first_name,' ',g.last_name) AS generated_by_name
+         FROM salary_slips ss LEFT JOIN users g ON g.id = ss.generated_by
+         WHERE ${slipConds.join(' AND ')} ORDER BY ss.year DESC, ss.month DESC`, slipParams
+      ),
+      pool.query(
+        `SELECT ei.*, CONCAT(g.first_name,' ',g.last_name) AS given_by_name
+         FROM employee_incentives ei LEFT JOIN users g ON g.id = ei.given_by
+         WHERE ${incConds.join(' AND ')} ORDER BY ei.year DESC, ei.month DESC`, incParams
+      ),
+      pool.query(
+        `SELECT ea.*, CONCAT(u.first_name,' ',u.last_name) AS appraised_by_name
+         FROM employee_appraisals ea LEFT JOIN users u ON u.id = ea.appraised_by
+         WHERE ea.user_id = $1 ORDER BY ea.effective_from DESC`, [user_id]
+      ),
+    ])
+
+    const monthLabel = (m, y) => new Date(y, m - 1).toLocaleString('en-IN', { month: 'long', year: 'numeric' })
+
+    return sendSuccess(res, 'User salary summary fetched', {
+      employee:       userChk.rows[0],
+      current_salary: currentSalary ? {
+        monthly_salary: parseFloat(currentSalary.monthly_salary),
+        per_day_salary: currentSalary.per_day_salary ? parseFloat(currentSalary.per_day_salary) : null,
+        effective_from: currentSalary.effective_from,
+        notes:          currentSalary.notes,
+      } : null,
+      salary_slips: slipsRes.rows.map(r => ({
+        id: r.id, month: r.month, year: r.year,
+        month_label:    monthLabel(r.month, r.year),
+        monthly_salary: parseFloat(r.monthly_salary),
+        working_days:   r.working_days,
+        present_days:   parseFloat(r.present_days),
+        absent_days:    parseFloat(r.absent_days),
+        leave_days:     parseFloat(r.leave_days),
+        per_day_salary: parseFloat(r.per_day_salary),
+        earned_salary:  parseFloat(r.earned_salary),
+        deductions:     parseFloat(r.deductions),
+        final_salary:   parseFloat(r.final_salary),
+        notes:          r.notes,
+        generated_by:   r.generated_by_name,
+        generated_at:   r.created_at,
+      })),
+      incentives: incentivesRes.rows.map(r => ({ ...r, amount: parseFloat(r.amount) })),
+      appraisal_history: appraisalsRes.rows.map(r => ({
+        ...r,
+        from_salary:       r.from_salary       ? parseFloat(r.from_salary)       : null,
+        to_salary:         parseFloat(r.to_salary),
+        increment_amount:  r.increment_amount  ? parseFloat(r.increment_amount)  : null,
+        increment_percent: r.increment_percent ? parseFloat(r.increment_percent) : null,
+      })),
+    })
+  } catch (err) { next(err) }
+}
+
+// Re-export everything including the new functions
+Object.assign(module.exports, {
+  addIncentive,
+  getIncentives,
+  deleteIncentive,
+  getAppraisalHistory,
+  getUserSalarySummary,
+})
