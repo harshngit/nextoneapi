@@ -14,7 +14,6 @@ const MANAGER = ['super_admin', 'admin', 'sales_manager'];
  *     Monthly salary management with incentives and appraisal history.
  *     Admin sets the monthly salary amount from the frontend.
  *     System calculates earned salary based on attendance.
- *     Incentives are added on top of earned salary as total_payout.
  *     Every salary change creates an appraisal record automatically.
  *     Employees can see their own earned salary and slips.
  */
@@ -184,150 +183,11 @@ router.get('/history/:user_id', authenticate, authorize(...ADMIN), ctrl.getSalar
 // [NEW] INCENTIVES
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * @swagger
- * /api/v1/salary/incentive:
- *   post:
- *     summary: Add an incentive for an employee (Admin)
- *     description: >
- *       Adds a performance-based incentive for a specific employee for a given month/year.
- *       Multiple incentives per employee per month are allowed (e.g. different reasons).
- *       When a salary slip is generated/re-generated for that month, all incentives
- *       are summed and included in total_payout automatically.
- *       total_payout = final_salary + sum(incentives for that month)
- *     tags: [Salary]
- *     security:
- *       - BearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [user_id, month, year, amount]
- *             properties:
- *               user_id:
- *                 type: string
- *                 format: uuid
- *                 example: "user-uuid-001"
- *               month:
- *                 type: integer
- *                 example: 6
- *               year:
- *                 type: integer
- *                 example: 2026
- *               amount:
- *                 type: number
- *                 description: Incentive amount in INR (must be >= 0)
- *                 example: 5000
- *               reason:
- *                 type: string
- *                 description: Reason for the incentive
- *                 example: "Closed 5 deals in June — exceeded target by 150%"
- *     responses:
- *       201:
- *         description: Incentive added successfully
- *         content:
- *           application/json:
- *             example:
- *               success: true
- *               message: "Incentive of ₹5000 added for June 2026"
- *               data:
- *                 incentive:
- *                   id: "incentive-uuid"
- *                   user_id: "user-uuid-001"
- *                   month: 6
- *                   year: 2026
- *                   amount: 5000
- *                   reason: "Closed 5 deals in June"
- *                   given_by: "admin-uuid"
- *                   created_at: "2026-06-09T10:00:00Z"
- *                 employee:
- *                   full_name: "Rahul Sharma"
- *                   role: "sales_executive"
- *       400:
- *         description: Missing required fields or invalid amount
- *       404:
- *         description: Employee not found
- */
-router.post('/incentive', authenticate, authorize(...ADMIN), ctrl.addIncentive);
 
-/**
- * @swagger
- * /api/v1/salary/incentives:
- *   get:
- *     summary: Get all incentives — filterable by user, month, year (Admin)
- *     description: >
- *       Returns all incentive records. Filter by user_id, month, or year.
- *       Paginated. Results include employee name and who gave the incentive.
- *     tags: [Salary]
- *     security:
- *       - BearerAuth: []
- *     parameters:
- *       - { in: query, name: user_id,  schema: { type: string, format: uuid }, description: Filter by employee }
- *       - { in: query, name: month,    schema: { type: integer }, example: 6 }
- *       - { in: query, name: year,     schema: { type: integer }, example: 2026 }
- *       - { in: query, name: page,     schema: { type: integer, default: 1 } }
- *       - { in: query, name: per_page, schema: { type: integer, default: 20 } }
- *     responses:
- *       200:
- *         description: Paginated incentive records
- *         content:
- *           application/json:
- *             example:
- *               success: true
- *               data:
- *                 data:
- *                   - id: "incentive-uuid"
- *                     user_id: "user-uuid-001"
- *                     employee_name: "Rahul Sharma"
- *                     month: 6
- *                     year: 2026
- *                     amount: 5000
- *                     reason: "Exceeded targets"
- *                     given_by_name: "Super Admin"
- *                 pagination:
- *                   total: 15
- *                   page: 1
- *                   per_page: 20
- *                   total_pages: 1
- */
-router.get('/incentives', authenticate, authorize(...ADMIN), ctrl.getIncentives);
 
-/**
- * @swagger
- * /api/v1/salary/incentive/{id}:
- *   delete:
- *     summary: Delete an incentive record (Admin)
- *     description: Permanently removes an incentive record. Re-generate the salary slip to reflect the change.
- *     tags: [Salary]
- *     security:
- *       - BearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *         description: Incentive record UUID
- *     responses:
- *       200:
- *         description: Incentive deleted
- *         content:
- *           application/json:
- *             example:
- *               success: true
- *               message: "Incentive deleted successfully"
- *               data:
- *                 deleted:
- *                   id: "incentive-uuid"
- *                   employee_name: "Rahul Sharma"
- *                   amount: 5000
- *       404:
- *         description: Incentive record not found
- */
-router.delete('/incentive/:id', authenticate, authorize(...ADMIN), ctrl.deleteIncentive);
+
+
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // [NEW] APPRAISAL HISTORY
@@ -400,7 +260,6 @@ router.get('/appraisals/:user_id', authenticate, authorize(...ADMIN), ctrl.getAp
  *       Returns everything salary-related for one user in a single API call:
  *       - Current salary (latest set by admin)
  *       - All salary slips (optionally filtered by month/year)
- *       - All incentives given (optionally filtered by month/year)
  *       - Full appraisal history
  *       Ideal for a "View Employee Salary" detail page in the admin panel.
  *     tags: [Salary]
@@ -413,8 +272,8 @@ router.get('/appraisals/:user_id', authenticate, authorize(...ADMIN), ctrl.getAp
  *         schema:
  *           type: string
  *           format: uuid
- *       - { in: query, name: month, schema: { type: integer }, example: 6,    description: Filter slips and incentives by month }
- *       - { in: query, name: year,  schema: { type: integer }, example: 2026, description: Filter slips and incentives by year  }
+ *       - { in: query, name: month, schema: { type: integer }, example: 6 }
+ *       - { in: query, name: year,  schema: { type: integer }, example: 2026 }
  *     responses:
  *       200:
  *         description: Full salary summary for the user
@@ -445,15 +304,7 @@ router.get('/appraisals/:user_id', authenticate, authorize(...ADMIN), ctrl.getAp
  *                     earned_salary: 36363.64
  *                     deductions: 0
  *                     final_salary: 36363.64
- *                     incentive_amount: 5000
- *                     total_payout: 41363.64
- *                 incentives:
- *                   - id: "incentive-uuid"
- *                     month: 6
- *                     year: 2026
- *                     amount: 5000
- *                     reason: "Exceeded targets"
- *                     given_by_name: "Super Admin"
+ *                     total_payout: 36363.64
  *                 appraisal_history:
  *                   - from_salary: 35000
  *                     to_salary: 40000
@@ -479,8 +330,6 @@ router.get('/user/:user_id', authenticate, authorize(...ADMIN), ctrl.getUserSala
  *       Calculates earned salary for a given month/year based on attendance.
  *       Formula: (monthly_salary / working_days) × present_days - deductions
  *       present_days = present + late + (half_day × 0.5)
- *       Incentives for the month are automatically summed and added to total_payout.
- *       total_payout = final_salary + incentive_amount
  *       If a slip already exists for that month, it will be regenerated/overwritten.
  *     tags: [Salary]
  *     security:
@@ -529,8 +378,7 @@ router.get('/user/:user_id', authenticate, authorize(...ADMIN), ctrl.getUserSala
  *                   earned_salary: 36363.64
  *                   deductions: 1000
  *                   final_salary: 35363.64
- *                   incentive_amount: 5000
- *                   total_payout: 40363.64
+ *                   total_payout: 35363.64
  *       400:
  *         description: No salary set for this employee
  */
@@ -543,7 +391,6 @@ router.post('/generate', authenticate, authorize(...ADMIN), ctrl.generateSalaryS
  *     summary: Generate salary slips for ALL employees for a month (Admin)
  *     description: >
  *       Bulk generates salary slips for all employees who have a salary set.
- *       Incentives for the month are automatically included in total_payout.
  *       Existing slips for the month are overwritten.
  *     tags: [Salary]
  *     security:
@@ -602,7 +449,7 @@ router.post('/generate-all', authenticate, authorize(...ADMIN), ctrl.generateAll
  * /api/v1/salary/slips:
  *   get:
  *     summary: Get all salary slips (Admin, filterable)
- *     description: Now includes incentive_amount and total_payout in each slip.
+ *     description: Returns all salary slips.
  *     tags: [Salary]
  *     security:
  *       - BearerAuth: []
@@ -614,7 +461,7 @@ router.post('/generate-all', authenticate, authorize(...ADMIN), ctrl.generateAll
  *       - { in: query, name: per_page, schema: { type: integer, default: 20 } }
  *     responses:
  *       200:
- *         description: Paginated salary slips with incentive_amount and total_payout
+ *         description: Paginated salary slips with total_payout
  */
 router.get('/slips', authenticate, authorize(...ADMIN), ctrl.getSalarySlips);
 
@@ -623,7 +470,7 @@ router.get('/slips', authenticate, authorize(...ADMIN), ctrl.getSalarySlips);
  * /api/v1/salary/slips/{id}:
  *   get:
  *     summary: Get a single salary slip by ID
- *     description: Admin can view any slip. Employee can only view their own. Includes incentive_amount and total_payout.
+ *     description: Admin can view any slip. Employee can only view their own. 
  *     tags: [Salary]
  *     security:
  *       - BearerAuth: []
@@ -636,7 +483,7 @@ router.get('/slips', authenticate, authorize(...ADMIN), ctrl.getSalarySlips);
  *           format: uuid
  *     responses:
  *       200:
- *         description: Salary slip details with incentive and payout info
+ *         description: Salary slip details
  *       403:
  *         description: Access denied
  *       404:
@@ -655,7 +502,7 @@ router.get('/slips/:id', authenticate, ctrl.getSlipById);
  *     summary: Get my salary details (Employee)
  *     description: >
  *       Returns the employee's current monthly salary (set by admin)
- *       and all their generated salary slips including incentive_amount and total_payout.
+ *       and all their generated salary slips .
  *       Optionally filter slips by month/year.
  *     tags: [Salary]
  *     security:
@@ -684,8 +531,7 @@ router.get('/slips/:id', authenticate, ctrl.getSlipById);
  *                     earned_salary: 36363.64
  *                     deductions: 0
  *                     final_salary: 36363.64
- *                     incentive_amount: 5000
- *                     total_payout: 41363.64
+ *                     total_payout: 36363.64
  */
 router.get('/my-salary', authenticate, ctrl.getMySalary);
 
@@ -804,13 +650,13 @@ router.post('/appraisal', authenticate, authorize(...ADMIN), ctrl.createAppraisa
  *             properties:
  *               appraisal_note:
  *                 type: string
- *                 example: "Updated note — also awarded spot bonus"
+ *                 example: "Updated note — exceeded all Q2 targets"
  *               effective_from:
  *                 type: string
  *                 format: date
  *                 example: "2026-07-01"
  *           example:
- *             appraisal_note: "Updated note — also awarded spot bonus"
+ *             appraisal_note: "Updated note — exceeded all Q2 targets"
  *             effective_from: "2026-07-01"
  *     responses:
  *       200:
@@ -873,20 +719,18 @@ router.put('/appraisal/:id', authenticate, authorize(...ADMIN), ctrl.updateAppra
 router.get('/appraisals/:user_id', authenticate, authorize(...ADMIN), ctrl.getAppraisalHistory);
 
 // ─────────────────────────────────────────────────────────────────────────────
-// BONUS APIs
+// INCENTIVE APIs
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * @swagger
- * /api/v1/salary/bonus:
+ * /api/v1/salary/incentive:
  *   post:
- *     summary: Add a bonus for an employee (Admin)
+ *     summary: Add an incentive for an employee (Admin)
  *     description: >
- *       Adds a one-time bonus payout for an employee.
- *       Bonus types: diwali | annual | performance | spot_award | joining | referral | general
- *       Month and year are optional — provide them to link the bonus to a specific pay period.
- *       Sends push notification to the employee when bonus is added.
- *       When paid is set to true, a second notification is sent confirming disbursement.
+ *       Adds a performance-based incentive for an employee for a specific month/year.
+ *       Multiple incentives per employee per month are allowed.
+ *       Sends push notification to the employee when incentive is added.
  *     tags: [Salary]
  *     security:
  *       - BearerAuth: []
@@ -896,66 +740,49 @@ router.get('/appraisals/:user_id', authenticate, authorize(...ADMIN), ctrl.getAp
  *         application/json:
  *           schema:
  *             type: object
- *             required: [user_id, amount]
+ *             required: [user_id, month, year, amount]
  *             properties:
  *               user_id:
  *                 type: string
  *                 format: uuid
  *                 example: "user-uuid-001"
- *               amount:
- *                 type: number
- *                 description: Bonus amount in INR (must be > 0)
- *                 example: 15000
- *               bonus_type:
- *                 type: string
- *                 enum: [diwali, annual, performance, spot_award, joining, referral, general]
- *                 default: general
- *                 example: "performance"
  *               month:
  *                 type: integer
- *                 description: Month this bonus applies to (1-12), optional
  *                 example: 6
  *               year:
  *                 type: integer
  *                 example: 2026
+ *               amount:
+ *                 type: number
+ *                 description: Incentive amount in INR (must be >= 0)
+ *                 example: 5000
  *               reason:
  *                 type: string
- *                 example: "Closed 8 deals in June — highest in team"
- *               paid:
- *                 type: boolean
- *                 default: false
- *                 description: Whether the bonus has already been disbursed
- *               paid_date:
- *                 type: string
- *                 format: date
- *                 example: "2026-06-30"
+ *                 example: "Closed 5 deals in June — exceeded target by 150%"
  *           example:
  *             user_id: "user-uuid-001"
- *             amount: 15000
- *             bonus_type: "performance"
  *             month: 6
  *             year: 2026
- *             reason: "Closed 8 deals in June — highest in team"
- *             paid: false
+ *             amount: 5000
+ *             reason: "Closed 5 deals in June — exceeded target by 150%"
  *     responses:
  *       201:
- *         description: Bonus added and employee notified
+ *         description: Incentive added successfully
  *         content:
  *           application/json:
  *             example:
  *               success: true
- *               message: "Bonus of ₹15000 added for Rahul Sharma"
+ *               message: "Incentive of ₹5000 added for June 2026"
  *               data:
- *                 bonus:
- *                   id: "bonus-uuid"
+ *                 incentive:
+ *                   id: "incentive-uuid"
  *                   user_id: "user-uuid-001"
- *                   amount: 15000
- *                   bonus_type: "performance"
  *                   month: 6
  *                   year: 2026
- *                   reason: "Closed 8 deals in June"
- *                   paid: false
- *                   paid_date: null
+ *                   amount: 5000
+ *                   reason: "Closed 5 deals in June"
+ *                   given_by: "admin-uuid"
+ *                   created_at: "2026-06-30T10:00:00Z"
  *                 employee:
  *                   full_name: "Rahul Sharma"
  *                   role: "sales_executive"
@@ -965,151 +792,177 @@ router.get('/appraisals/:user_id', authenticate, authorize(...ADMIN), ctrl.getAp
  *       404:
  *         description: Employee not found
  */
-router.post('/bonus', authenticate, authorize(...ADMIN), ctrl.addBonus);
+router.post('/incentive', authenticate, authorize(...ADMIN), ctrl.addIncentive);
 
 /**
  * @swagger
- * /api/v1/salary/bonuses:
+ * /api/v1/salary/incentives:
  *   get:
- *     summary: Get all bonuses — filterable (Admin)
- *     description: Filter by user_id, bonus_type, month, year, paid status. Paginated.
+ *     summary: Get all incentives — filterable by user, month, year (Admin)
+ *     description: Returns all incentive records across all employees. Paginated.
  *     tags: [Salary]
  *     security:
  *       - BearerAuth: []
  *     parameters:
- *       - { in: query, name: user_id,    schema: { type: string, format: uuid } }
- *       - { in: query, name: bonus_type, schema: { type: string, enum: [diwali, annual, performance, spot_award, joining, referral, general] } }
- *       - { in: query, name: month,      schema: { type: integer }, example: 6 }
- *       - { in: query, name: year,       schema: { type: integer }, example: 2026 }
- *       - { in: query, name: paid,       schema: { type: boolean }, description: "true = paid only, false = unpaid only" }
- *       - { in: query, name: page,       schema: { type: integer, default: 1 } }
- *       - { in: query, name: per_page,   schema: { type: integer, default: 20 } }
+ *       - { in: query, name: user_id,  schema: { type: string, format: uuid }, description: Filter by employee }
+ *       - { in: query, name: month,    schema: { type: integer }, example: 6 }
+ *       - { in: query, name: year,     schema: { type: integer }, example: 2026 }
+ *       - { in: query, name: page,     schema: { type: integer, default: 1 } }
+ *       - { in: query, name: per_page, schema: { type: integer, default: 20 } }
  *     responses:
  *       200:
- *         description: Paginated bonus records
+ *         description: Paginated incentive records
  *         content:
  *           application/json:
  *             example:
  *               success: true
  *               data:
  *                 data:
- *                   - id: "bonus-uuid"
+ *                   - id: "incentive-uuid"
  *                     employee_name: "Rahul Sharma"
- *                     amount: 15000
- *                     bonus_type: "performance"
  *                     month: 6
  *                     year: 2026
- *                     reason: "Closed 8 deals in June"
- *                     paid: false
+ *                     amount: 5000
+ *                     reason: "Closed 5 deals in June"
  *                     given_by_name: "Super Admin"
  *                 pagination:
- *                   total: 12
+ *                   total: 15
  *                   page: 1
  *                   per_page: 20
  *                   total_pages: 1
  */
-router.get('/bonuses', authenticate, authorize(...ADMIN), ctrl.getBonuses);
+router.get('/incentives', authenticate, authorize(...ADMIN), ctrl.getIncentives);
 
 /**
  * @swagger
- * /api/v1/salary/bonus/{id}:
- *   patch:
- *     summary: Update bonus — mark as paid or edit details (Admin)
- *     description: >
- *       Update any bonus field. Most commonly used to mark a bonus as paid.
- *       When paid flips from false to true, a push notification is sent to the employee.
- *     tags: [Salary]
- *     security:
- *       - BearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: string, format: uuid }
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               paid:       { type: boolean, example: true }
- *               paid_date:  { type: string, format: date, example: "2026-06-30" }
- *               amount:     { type: number, example: 15000 }
- *               bonus_type: { type: string, enum: [diwali, annual, performance, spot_award, joining, referral, general] }
- *               reason:     { type: string, example: "Updated reason" }
- *           example:
- *             paid: true
- *             paid_date: "2026-06-30"
- *     responses:
- *       200:
- *         description: Bonus updated
- *         content:
- *           application/json:
- *             example:
- *               success: true
- *               message: "Bonus updated"
- *               data:
- *                 bonus:
- *                   id: "bonus-uuid"
- *                   paid: true
- *                   paid_date: "2026-06-30"
- *                 employee_name: "Rahul Sharma"
- *       404:
- *         description: Bonus not found
- *   delete:
- *     summary: Delete a bonus record (Admin)
- *     tags: [Salary]
- *     security:
- *       - BearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema: { type: string, format: uuid }
- *     responses:
- *       200:
- *         description: Bonus deleted
- *       404:
- *         description: Bonus not found
- */
-router.patch('/bonus/:id', authenticate, authorize(...ADMIN), ctrl.updateBonus);
-router.delete('/bonus/:id', authenticate, authorize(...ADMIN), ctrl.deleteBonus);
-
-/**
- * @swagger
- * /api/v1/salary/my-bonuses:
+ * /api/v1/salary/incentives/user/{user_id}:
  *   get:
- *     summary: Get my bonuses (Employee)
- *     description: Returns all bonuses for the logged-in employee with total amount.
+ *     summary: Get all incentives for a specific employee (Admin)
+ *     description: >
+ *       Returns every incentive for one employee with a total summary
+ *       and records grouped by month for easy display.
+ *       Optionally filter by month and/or year.
  *     tags: [Salary]
  *     security:
  *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: user_id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - { in: query, name: month, schema: { type: integer }, example: 6 }
+ *       - { in: query, name: year,  schema: { type: integer }, example: 2026 }
  *     responses:
  *       200:
- *         description: Employee's bonus records
+ *         description: All incentives for the employee grouped by month
  *         content:
  *           application/json:
  *             example:
  *               success: true
+ *               message: "Incentives for Rahul Sharma"
  *               data:
- *                 total_bonus_amount: 25000
- *                 total_count: 2
- *                 bonuses:
- *                   - id: "bonus-uuid-001"
- *                     amount: 15000
- *                     bonus_type: "performance"
+ *                 employee:
+ *                   id: "user-uuid-001"
+ *                   full_name: "Rahul Sharma"
+ *                   role: "sales_executive"
+ *                 summary:
+ *                   total_amount: 12000
+ *                   total_count: 3
+ *                 by_month:
+ *                   - month: 6
+ *                     year: 2026
+ *                     month_label: "June 2026"
+ *                     total: 7000
+ *                     records:
+ *                       - id: "incentive-uuid-001"
+ *                         amount: 5000
+ *                         reason: "Closed 5 deals in June"
+ *                         given_by_name: "Super Admin"
+ *                       - id: "incentive-uuid-002"
+ *                         amount: 2000
+ *                         reason: "Best attendance award"
+ *                         given_by_name: "Super Admin"
+ *                   - month: 5
+ *                     year: 2026
+ *                     month_label: "May 2026"
+ *                     total: 5000
+ *                     records:
+ *                       - id: "incentive-uuid-003"
+ *                         amount: 5000
+ *                         reason: "Highest closures in team"
+ *                         given_by_name: "Super Admin"
+ *                 incentives:
+ *                   - id: "incentive-uuid-001"
  *                     month: 6
  *                     year: 2026
- *                     reason: "Closed 8 deals in June"
- *                     paid: true
- *                     paid_date: "2026-06-30"
- *                   - id: "bonus-uuid-002"
- *                     amount: 10000
- *                     bonus_type: "diwali"
- *                     reason: "Diwali 2026 bonus"
- *                     paid: false
+ *                     amount: 5000
+ *                     reason: "Closed 5 deals in June"
+ *       404:
+ *         description: Employee not found
  */
-router.get('/my-bonuses', authenticate, ctrl.getMyBonuses);
+router.get('/incentives/user/:user_id', authenticate, authorize(...ADMIN), ctrl.getUserIncentives);
+
+/**
+ * @swagger
+ * /api/v1/salary/my-incentives:
+ *   get:
+ *     summary: Get my incentives (Employee)
+ *     description: Returns all incentives for the logged-in employee. Optionally filter by month/year.
+ *     tags: [Salary]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - { in: query, name: month, schema: { type: integer }, example: 6 }
+ *       - { in: query, name: year,  schema: { type: integer }, example: 2026 }
+ *     responses:
+ *       200:
+ *         description: Employee incentive records with total
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 total_incentive_amount: 12000
+ *                 total_count: 3
+ *                 incentives:
+ *                   - id: "incentive-uuid-001"
+ *                     month: 6
+ *                     year: 2026
+ *                     amount: 5000
+ *                     reason: "Closed 5 deals in June"
+ *                     given_by_name: "Super Admin"
+ */
+router.get('/my-incentives', authenticate, ctrl.getMyIncentives);
+
+/**
+ * @swagger
+ * /api/v1/salary/incentive/{id}:
+ *   delete:
+ *     summary: Delete an incentive record (Admin)
+ *     tags: [Salary]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Incentive deleted
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Incentive deleted successfully"
+ *               data:
+ *                 deleted:
+ *                   id: "incentive-uuid"
+ *                   employee_name: "Rahul Sharma"
+ *                   amount: 5000
+ *       404:
+ *         description: Incentive record not found
+ */
+router.delete('/incentive/:id', authenticate, authorize(...ADMIN), ctrl.deleteIncentive);
 
 module.exports = router;

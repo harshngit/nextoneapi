@@ -720,83 +720,6 @@ module.exports = {
   getSalaryHistory,
 }
 
-// ─── ADD INCENTIVE ────────────────────────────────────────────────────────────
-const addIncentive = async (req, res, next) => {
-  try {
-    const { user_id, month, year, amount, reason } = req.body
-    if (!user_id || !month || !year || amount == null)
-      return next(new AppError('user_id, month, year, and amount are required', 400))
-    const m = parseInt(month), y = parseInt(year)
-    if (m < 1 || m > 12) return next(new AppError('month must be between 1 and 12', 400))
-    if (y < 2020)        return next(new AppError('year must be 2020 or later', 400))
-    const parsedAmount = parseFloat(amount)
-    if (isNaN(parsedAmount) || parsedAmount < 0)
-      return next(new AppError('amount must be a non-negative number', 400))
-    const userChk = await pool.query(
-      `SELECT id, CONCAT(first_name,' ',last_name) AS full_name, role
-       FROM users WHERE id = $1 AND is_active = true`, [user_id]
-    )
-    if (!userChk.rows.length) return next(new AppError('Employee not found', 404))
-    const result = await pool.query(
-      `INSERT INTO employee_incentives (user_id, month, year, amount, reason, given_by)
-       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
-      [user_id, m, y, parsedAmount, reason || null, req.user.id]
-    )
-    const monthName = new Date(y, m - 1).toLocaleString('en-IN', { month: 'long' })
-    return sendSuccess(res, `Incentive of ₹${parsedAmount} added for ${monthName} ${y}`, {
-      incentive: result.rows[0],
-      employee:  userChk.rows[0],
-    }, 201)
-  } catch (err) { next(err) }
-}
-
-// ─── GET INCENTIVES ───────────────────────────────────────────────────────────
-const getIncentives = async (req, res, next) => {
-  try {
-    const { user_id, month, year, page = 1, per_page = 20 } = req.query
-    const offset = (parseInt(page) - 1) * parseInt(per_page)
-    const conds = [], params = []
-    let idx = 1
-    if (user_id) { conds.push(`ei.user_id = $${idx++}`); params.push(user_id) }
-    if (month)   { conds.push(`ei.month = $${idx++}`);   params.push(parseInt(month)) }
-    if (year)    { conds.push(`ei.year = $${idx++}`);    params.push(parseInt(year)) }
-    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
-    const [cnt, data] = await Promise.all([
-      pool.query(`SELECT COUNT(*) FROM employee_incentives ei ${where}`, params),
-      pool.query(
-        `SELECT ei.*, CONCAT(u.first_name,' ',u.last_name) AS employee_name,
-                CONCAT(g.first_name,' ',g.last_name) AS given_by_name
-         FROM employee_incentives ei
-         JOIN users u ON u.id = ei.user_id
-         LEFT JOIN users g ON g.id = ei.given_by
-         ${where}
-         ORDER BY ei.year DESC, ei.month DESC, ei.created_at DESC
-         LIMIT $${idx++} OFFSET $${idx++}`,
-        [...params, parseInt(per_page), offset]
-      ),
-    ])
-    const total = parseInt(cnt.rows[0].count)
-    return sendSuccess(res, 'Incentives fetched', {
-      data: data.rows.map(r => ({ ...r, amount: parseFloat(r.amount) })),
-      pagination: { total, page: parseInt(page), per_page: parseInt(per_page), total_pages: Math.ceil(total / parseInt(per_page)) },
-    })
-  } catch (err) { next(err) }
-}
-
-// ─── DELETE INCENTIVE ─────────────────────────────────────────────────────────
-const deleteIncentive = async (req, res, next) => {
-  try {
-    const { id } = req.params
-    const check = await pool.query(
-      `SELECT ei.*, CONCAT(u.first_name,' ',u.last_name) AS employee_name
-       FROM employee_incentives ei JOIN users u ON u.id = ei.user_id WHERE ei.id = $1`, [id]
-    )
-    if (!check.rows.length) return next(new AppError('Incentive record not found', 404))
-    await pool.query('DELETE FROM employee_incentives WHERE id = $1', [id])
-    return sendSuccess(res, 'Incentive deleted successfully', { deleted: check.rows[0] })
-  } catch (err) { next(err) }
-}
-
 // ─── GET APPRAISAL HISTORY ────────────────────────────────────────────────────
 const getAppraisalHistory = async (req, res, next) => {
   try {
@@ -858,7 +781,7 @@ const getUserSalarySummary = async (req, res, next) => {
       pool.query(
         `SELECT ei.*, CONCAT(g.first_name,' ',g.last_name) AS given_by_name
          FROM employee_incentives ei LEFT JOIN users g ON g.id = ei.given_by
-         WHERE ${incConds.join(' AND ')} ORDER BY ei.year DESC, ei.month DESC`, incParams
+         WHERE ei.user_id = $1 ORDER BY ei.created_at DESC`, [user_id]
       ),
       pool.query(
         `SELECT ea.*, CONCAT(u.first_name,' ',u.last_name) AS appraised_by_name
@@ -893,7 +816,9 @@ const getUserSalarySummary = async (req, res, next) => {
         generated_by:   r.generated_by_name,
         generated_at:   r.created_at,
       })),
+
       incentives: incentivesRes.rows.map(r => ({ ...r, amount: parseFloat(r.amount) })),
+
       appraisal_history: appraisalsRes.rows.map(r => ({
         ...r,
         from_salary:       r.from_salary       ? parseFloat(r.from_salary)       : null,
@@ -904,12 +829,8 @@ const getUserSalarySummary = async (req, res, next) => {
     })
   } catch (err) { next(err) }
 }
-
 // Re-export everything including the new functions
 Object.assign(module.exports, {
-  addIncentive,
-  getIncentives,
-  deleteIncentive,
   getAppraisalHistory,
   getUserSalarySummary,
 })
@@ -1094,121 +1015,92 @@ const updateAppraisal = async (req, res, next) => {
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
-// BONUS APIs
+// INCENTIVE APIs
 // ═════════════════════════════════════════════════════════════════════════════
 
-// ─── ADD BONUS (Admin) ────────────────────────────────────────────────────────
-/**
- * POST /api/v1/salary/bonus
- * Body: { user_id, amount, bonus_type?, month?, year?, reason?, paid? }
- */
-const addBonus = async (req, res, next) => {
+// ─── ADD INCENTIVE (Admin) ────────────────────────────────────────────────────
+const addIncentive = async (req, res, next) => {
   try {
-    const { user_id, amount, bonus_type, month, year, reason, paid, paid_date } = req.body
-
-    if (!user_id || amount == null)
-      return next(new AppError('user_id and amount are required', 400))
-
+    const { user_id, month, year, amount, reason } = req.body
+    if (!user_id || !month || !year || amount == null)
+      return next(new AppError('user_id, month, year, and amount are required', 400))
+    const m = parseInt(month), y = parseInt(year)
+    if (m < 1 || m > 12) return next(new AppError('month must be between 1 and 12', 400))
+    if (y < 2020)        return next(new AppError('year must be 2020 or later', 400))
     const parsedAmount = parseFloat(amount)
-    if (isNaN(parsedAmount) || parsedAmount <= 0)
-      return next(new AppError('amount must be a positive number', 400))
+    if (isNaN(parsedAmount) || parsedAmount < 0)
+      return next(new AppError('amount must be a non-negative number', 400))
 
     const userChk = await pool.query(
       `SELECT id, CONCAT(first_name,' ',last_name) AS full_name, role
-       FROM users WHERE id = $1 AND is_active = true`,
-      [user_id]
+       FROM users WHERE id = $1 AND is_active = true`, [user_id]
     )
     if (!userChk.rows.length) return next(new AppError('Employee not found', 404))
 
-    const VALID_TYPES = ['diwali', 'annual', 'performance', 'spot_award', 'joining', 'referral', 'general']
-    const finalType   = bonus_type && VALID_TYPES.includes(bonus_type) ? bonus_type : 'general'
-
-    const m = month ? parseInt(month) : null
-    const y = year  ? parseInt(year)  : null
-    if (m && (m < 1 || m > 12)) return next(new AppError('month must be between 1 and 12', 400))
-
     const result = await pool.query(
-      `INSERT INTO employee_bonus
-         (user_id, amount, bonus_type, month, year, reason, paid, paid_date, given_by)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING *`,
-      [user_id, parsedAmount, finalType, m, y, reason || null, paid || false, paid_date || null, req.user.id]
+      `INSERT INTO employee_incentives (user_id, month, year, amount, reason, given_by)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [user_id, m, y, parsedAmount, reason || null, req.user.id]
     )
+    const monthName = new Date(y, m - 1).toLocaleString('en-IN', { month: 'long' })
 
-    // Push notification to employee
     setImmediate(async () => {
       try {
-        const amtStr    = `₹${Number(parsedAmount).toLocaleString('en-IN')}`
-        const typeLabel = finalType.charAt(0).toUpperCase() + finalType.slice(1).replace('_', ' ')
+        const amtStr = `₹${Number(parsedAmount).toLocaleString('en-IN')}`
         await createNotification(user_id, {
           type:           'general',
-          title:          `${typeLabel} Bonus Added`,
-          message:        `A ${typeLabel.toLowerCase()} bonus of ${amtStr} has been added to your account${reason ? ` — ${reason}` : ''}`,
+          title:          'Incentive Added',
+          message:        `An incentive of ${amtStr} has been added for ${monthName} ${y}${reason ? ` — ${reason}` : ''}`,
           reference_id:   result.rows[0].id,
-          reference_type: 'bonus',
-          metadata:       { amount: parsedAmount, bonus_type: finalType, paid: paid || false },
+          reference_type: 'incentive',
+          metadata:       { amount: parsedAmount, month: m, year: y },
         })
         await notifyAdmins({
           type:           'general',
-          title:          `Bonus Added — ${userChk.rows[0].full_name}`,
-          message:        `${typeLabel} bonus of ${amtStr} added for ${userChk.rows[0].full_name}`,
+          title:          `Incentive Added — ${userChk.rows[0].full_name}`,
+          message:        `Incentive of ${amtStr} added for ${userChk.rows[0].full_name} (${monthName} ${y})`,
           reference_id:   result.rows[0].id,
-          reference_type: 'bonus',
-          metadata:       { user_id, amount: parsedAmount, bonus_type: finalType },
+          reference_type: 'incentive',
+          metadata:       { user_id, amount: parsedAmount, month: m, year: y },
         })
-      } catch (e) { console.error('[Notification] addBonus failed:', e.message) }
+      } catch (e) { console.error('[Notification] addIncentive failed:', e.message) }
     })
 
-    const monthName = m && y
-      ? new Date(y, m - 1).toLocaleString('en-IN', { month: 'long', year: 'numeric' })
-      : null
-
-    return sendSuccess(res, `Bonus of ₹${parsedAmount} added for ${userChk.rows[0].full_name}`, {
-      bonus:      result.rows[0],
-      employee:   userChk.rows[0],
-      month_label: monthName,
+    return sendSuccess(res, `Incentive of ₹${parsedAmount} added for ${monthName} ${y}`, {
+      incentive:   result.rows[0],
+      employee:    userChk.rows[0],
+      month_label: `${monthName} ${y}`,
     }, 201)
   } catch (err) { next(err) }
 }
 
-// ─── GET BONUSES (Admin, filterable) ─────────────────────────────────────────
-/**
- * GET /api/v1/salary/bonuses
- * Query: { user_id?, bonus_type?, month?, year?, paid?, page?, per_page? }
- */
-const getBonuses = async (req, res, next) => {
+// ─── GET ALL INCENTIVES (Admin, filterable) ───────────────────────────────────
+const getIncentives = async (req, res, next) => {
   try {
-    const { user_id, bonus_type, month, year, paid, page = 1, per_page = 20 } = req.query
+    const { user_id, month, year, page = 1, per_page = 20 } = req.query
     const offset = (parseInt(page) - 1) * parseInt(per_page)
     const conds = []; const params = []; let idx = 1
-
-    if (user_id)    { conds.push(`eb.user_id = $${idx++}`);     params.push(user_id) }
-    if (bonus_type) { conds.push(`eb.bonus_type = $${idx++}`);  params.push(bonus_type) }
-    if (month)      { conds.push(`eb.month = $${idx++}`);       params.push(parseInt(month)) }
-    if (year)       { conds.push(`eb.year = $${idx++}`);        params.push(parseInt(year)) }
-    if (paid !== undefined && paid !== '') {
-      conds.push(`eb.paid = $${idx++}`); params.push(paid === 'true')
-    }
-
+    if (user_id) { conds.push(`ei.user_id = $${idx++}`); params.push(user_id) }
+    if (month)   { conds.push(`ei.month = $${idx++}`);   params.push(parseInt(month)) }
+    if (year)    { conds.push(`ei.year = $${idx++}`);    params.push(parseInt(year)) }
     const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
     const [cnt, data] = await Promise.all([
-      pool.query(`SELECT COUNT(*) FROM employee_bonus eb ${where}`, params),
+      pool.query(`SELECT COUNT(*) FROM employee_incentives ei ${where}`, params),
       pool.query(
-        `SELECT eb.*,
-                CONCAT(u.first_name,' ',u.last_name)  AS employee_name, u.role AS employee_role,
-                CONCAT(g.first_name,' ',g.last_name)  AS given_by_name
-         FROM employee_bonus eb
-         JOIN users u  ON u.id = eb.user_id
-         LEFT JOIN users g ON g.id = eb.given_by
+        `SELECT ei.*,
+                CONCAT(u.first_name,' ',u.last_name) AS employee_name, u.role AS employee_role,
+                CONCAT(g.first_name,' ',g.last_name) AS given_by_name
+         FROM employee_incentives ei
+         JOIN  users u ON u.id = ei.user_id
+         LEFT JOIN users g ON g.id = ei.given_by
          ${where}
-         ORDER BY eb.created_at DESC
+         ORDER BY ei.year DESC, ei.month DESC, ei.created_at DESC
          LIMIT $${idx++} OFFSET $${idx++}`,
         [...params, parseInt(per_page), offset]
       ),
     ])
-
     const total = parseInt(cnt.rows[0].count)
-    return sendSuccess(res, 'Bonuses fetched', {
+    return sendSuccess(res, 'Incentives fetched', {
       data: data.rows.map(r => ({ ...r, amount: parseFloat(r.amount) })),
       pagination: {
         total, page: parseInt(page), per_page: parseInt(per_page),
@@ -1218,105 +1110,104 @@ const getBonuses = async (req, res, next) => {
   } catch (err) { next(err) }
 }
 
-// ─── GET MY BONUSES (Employee) ────────────────────────────────────────────────
-const getMyBonuses = async (req, res, next) => {
+// ─── GET INCENTIVES FOR ONE EMPLOYEE (Admin) ──────────────────────────────────
+const getUserIncentives = async (req, res, next) => {
   try {
-    const userId = req.user.id
-    const result = await pool.query(
-      `SELECT eb.*, CONCAT(g.first_name,' ',g.last_name) AS given_by_name
-       FROM employee_bonus eb
-       LEFT JOIN users g ON g.id = eb.given_by
-       WHERE eb.user_id = $1
-       ORDER BY eb.created_at DESC`,
-      [userId]
+    const { user_id } = req.params
+    const { month, year } = req.query
+
+    const userChk = await pool.query(
+      `SELECT id, CONCAT(first_name,' ',last_name) AS full_name, role, email
+       FROM users WHERE id = $1`,
+      [user_id]
     )
-    const total = result.rows.reduce((sum, r) => sum + parseFloat(r.amount), 0)
-    return sendSuccess(res, 'Your bonuses fetched', {
-      total_bonus_amount: parseFloat(total.toFixed(2)),
-      total_count:        result.rows.length,
-      bonuses:            result.rows.map(r => ({ ...r, amount: parseFloat(r.amount) })),
-    })
-  } catch (err) { next(err) }
-}
+    if (!userChk.rows.length) return next(new AppError('Employee not found', 404))
 
-// ─── UPDATE BONUS — mark as paid (Admin) ─────────────────────────────────────
-/**
- * PATCH /api/v1/salary/bonus/:id
- * Body: { paid, paid_date?, reason? }
- */
-const updateBonus = async (req, res, next) => {
-  try {
-    const { id } = req.params
-    const { paid, paid_date, reason, amount, bonus_type } = req.body
-
-    const existing = await pool.query(
-      `SELECT eb.*, CONCAT(u.first_name,' ',u.last_name) AS employee_name
-       FROM employee_bonus eb JOIN users u ON u.id = eb.user_id WHERE eb.id = $1`,
-      [id]
-    )
-    if (!existing.rows.length) return next(new AppError('Bonus record not found', 404))
-
-    const updates = []; const params = []; let idx = 1
-    if (paid      !== undefined) { updates.push(`paid = $${idx++}`);       params.push(paid) }
-    if (paid_date !== undefined) { updates.push(`paid_date = $${idx++}`);  params.push(paid_date) }
-    if (reason    !== undefined) { updates.push(`reason = $${idx++}`);     params.push(reason) }
-    if (amount    !== undefined) { updates.push(`amount = $${idx++}`);     params.push(parseFloat(amount)) }
-    if (bonus_type!== undefined) { updates.push(`bonus_type = $${idx++}`); params.push(bonus_type) }
-
-    if (!updates.length) return next(new AppError('Nothing to update', 400))
-    updates.push(`updated_at = NOW()`)
-    params.push(id)
+    const conds = ['ei.user_id = $1']; const params = [user_id]; let idx = 2
+    if (month) { conds.push(`ei.month = $${idx++}`); params.push(parseInt(month)) }
+    if (year)  { conds.push(`ei.year = $${idx++}`);  params.push(parseInt(year)) }
 
     const result = await pool.query(
-      `UPDATE employee_bonus SET ${updates.join(', ')} WHERE id = $${idx} RETURNING *`,
+      `SELECT ei.*, CONCAT(g.first_name,' ',g.last_name) AS given_by_name
+       FROM employee_incentives ei
+       LEFT JOIN users g ON g.id = ei.given_by
+       WHERE ${conds.join(' AND ')}
+       ORDER BY ei.year DESC, ei.month DESC, ei.created_at DESC`,
       params
     )
 
-    // Notify employee if bonus marked as paid
-    if (paid === true && !existing.rows[0].paid) {
-      setImmediate(async () => {
-        try {
-          const amtStr = `₹${Number(parseFloat(existing.rows[0].amount)).toLocaleString('en-IN')}`
-          await createNotification(existing.rows[0].user_id, {
-            type:           'general',
-            title:          'Bonus Disbursed',
-            message:        `Your bonus of ${amtStr} has been disbursed`,
-            reference_id:   id,
-            reference_type: 'bonus',
-            metadata:       { amount: existing.rows[0].amount, paid: true },
-          })
-        } catch (e) { console.error('[Notification] updateBonus failed:', e.message) }
-      })
-    }
+    const rows     = result.rows.map(r => ({ ...r, amount: parseFloat(r.amount) }))
+    const totalAmt = rows.reduce((s, r) => s + r.amount, 0)
 
-    return sendSuccess(res, 'Bonus updated', {
-      bonus:         result.rows[0],
-      employee_name: existing.rows[0].employee_name,
+    // Group by month-year for easy display
+    const byMonth = {}
+    rows.forEach(r => {
+      const key = `${r.year}-${String(r.month).padStart(2,'0')}`
+      const label = new Date(r.year, r.month - 1).toLocaleString('en-IN', { month: 'long', year: 'numeric' })
+      if (!byMonth[key]) byMonth[key] = { month: r.month, year: r.year, month_label: label, total: 0, records: [] }
+      byMonth[key].total  = parseFloat((byMonth[key].total + r.amount).toFixed(2))
+      byMonth[key].records.push(r)
+    })
+
+    return sendSuccess(res, `Incentives for ${userChk.rows[0].full_name}`, {
+      employee: userChk.rows[0],
+      summary: {
+        total_amount: parseFloat(totalAmt.toFixed(2)),
+        total_count:  rows.length,
+      },
+      by_month:   Object.values(byMonth).sort((a, b) => b.year - a.year || b.month - a.month),
+      incentives: rows,
     })
   } catch (err) { next(err) }
 }
 
-// ─── DELETE BONUS (Admin) ─────────────────────────────────────────────────────
-const deleteBonus = async (req, res, next) => {
+// ─── GET MY INCENTIVES (Employee) ────────────────────────────────────────────
+const getMyIncentives = async (req, res, next) => {
+  try {
+    const userId = req.user.id
+    const { month, year } = req.query
+    const conds = ['ei.user_id = $1']; const params = [userId]; let idx = 2
+    if (month) { conds.push(`ei.month = $${idx++}`); params.push(parseInt(month)) }
+    if (year)  { conds.push(`ei.year = $${idx++}`);  params.push(parseInt(year)) }
+
+    const result = await pool.query(
+      `SELECT ei.*, CONCAT(g.first_name,' ',g.last_name) AS given_by_name
+       FROM employee_incentives ei
+       LEFT JOIN users g ON g.id = ei.given_by
+       WHERE ${conds.join(' AND ')}
+       ORDER BY ei.year DESC, ei.month DESC, ei.created_at DESC`,
+      params
+    )
+    const rows  = result.rows.map(r => ({ ...r, amount: parseFloat(r.amount) }))
+    const total = rows.reduce((s, r) => s + r.amount, 0)
+    return sendSuccess(res, 'Your incentives', {
+      total_incentive_amount: parseFloat(total.toFixed(2)),
+      total_count:            rows.length,
+      incentives:             rows,
+    })
+  } catch (err) { next(err) }
+}
+
+// ─── DELETE INCENTIVE (Admin) ─────────────────────────────────────────────────
+const deleteIncentive = async (req, res, next) => {
   try {
     const { id } = req.params
     const check = await pool.query(
-      `SELECT eb.*, CONCAT(u.first_name,' ',u.last_name) AS employee_name
-       FROM employee_bonus eb JOIN users u ON u.id = eb.user_id WHERE eb.id = $1`,
-      [id]
+      `SELECT ei.*, CONCAT(u.first_name,' ',u.last_name) AS employee_name
+       FROM employee_incentives ei JOIN users u ON u.id = ei.user_id WHERE ei.id = $1`, [id]
     )
-    if (!check.rows.length) return next(new AppError('Bonus record not found', 404))
-    await pool.query('DELETE FROM employee_bonus WHERE id = $1', [id])
-    return sendSuccess(res, 'Bonus deleted', { deleted: check.rows[0] })
+    if (!check.rows.length) return next(new AppError('Incentive record not found', 404))
+    await pool.query('DELETE FROM employee_incentives WHERE id = $1', [id])
+    return sendSuccess(res, 'Incentive deleted successfully', { deleted: check.rows[0] })
   } catch (err) { next(err) }
 }
 
 Object.assign(module.exports, {
   createAppraisal,
   updateAppraisal,
-  addBonus,
-  getBonuses,
-  getMyBonuses,
-  updateBonus,
-  deleteBonus,
+  addIncentive,
+  getIncentives,
+  getUserIncentives,
+  getMyIncentives,
+  deleteIncentive,
 })
