@@ -78,6 +78,7 @@ const fetchLeadWithProject = async (leadId) => {
        l.converted_at,
        l.created_at,
        l.updated_at,
+       l.configuration,
        p.name             AS project_name,
        CONCAT(u.first_name,' ',u.last_name) AS assigned_name,
        u.email            AS assigned_email
@@ -135,7 +136,7 @@ const getAllLeads = async (req, res, next) => {
     const dataResult = await pool.query(
       `SELECT l.id, l.name, l.phone, l.alternate_phone_number, l.email, l.status,
               l.source, l.budget, l.location_preference, l.project_id, l.assigned_to,
-              l.callback_time, l.next_followup_time,
+              l.callback_time, l.next_followup_time, l.configuration,
               l.is_converted, l.created_at,
               p.name AS project_name,
               CONCAT(u.first_name, ' ', u.last_name) AS assigned_name
@@ -184,7 +185,7 @@ const createLead = async (req, res, next) => {
   const client = await pool.connect();
   try {
     const { name, phone, alternate_phone_number, email, source, project_id,
-            assigned_to, budget, location_preference, notes,
+            assigned_to, budget, location_preference, configuration, notes,
             callback_time, next_followup_time,
             call_recordings } = req.body;
 
@@ -203,14 +204,14 @@ const createLead = async (req, res, next) => {
 
     const result = await client.query(
       `INSERT INTO leads (name, phone, alternate_phone_number, email, source,
-                          project_id, assigned_to, budget, location_preference,
+                          project_id, assigned_to, budget, location_preference, configuration,
                           callback_time, next_followup_time,
                           status, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'new',$12)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'new',$13)
        RETURNING *`,
       [name.trim(), phone, alternate_phone_number || null, email || null, source || null,
        project_id || null, assigned_to || null, budget || null, location_preference || null,
-       callback_time || null, next_followup_time || null,
+       configuration || null, callback_time || null, next_followup_time || null,
        req.user.id]
     );
 
@@ -343,7 +344,7 @@ const getLeadById = async (req, res, next) => {
       `SELECT
          l.id, l.name, l.phone, l.alternate_phone_number, l.email,
          l.status, l.source, l.budget, l.location_preference,
-         l.callback_time, l.next_followup_time,
+         l.callback_time, l.next_followup_time, l.configuration,
          l.project_id, l.assigned_to, l.is_converted, l.converted_at, l.created_at,
          p.name AS project_name, p.city AS project_city, p.locality AS project_locality,
          CONCAT(u.first_name, ' ', u.last_name) AS assigned_name,
@@ -382,7 +383,7 @@ const getLeadById = async (req, res, next) => {
 const updateLead = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { name, phone, alternate_phone_number, email, source, project_id, budget, location_preference,
+    const { name, phone, alternate_phone_number, email, source, project_id, budget, location_preference, configuration,
             callback_time, next_followup_time } = req.body;
 
     const existing = await pool.query(
@@ -404,6 +405,7 @@ const updateLead = async (req, res, next) => {
     if (project_id !== undefined)     { updates.push(`project_id = $${idx++}`);          params.push(project_id); }
     if (budget)                       { updates.push(`budget = $${idx++}`);              params.push(budget); }
     if (location_preference)          { updates.push(`location_preference = $${idx++}`); params.push(location_preference); }
+    if (configuration !== undefined)  { updates.push(`configuration = $${idx++}`);       params.push(configuration || null); }
     if (callback_time !== undefined)  { updates.push(`callback_time = $${idx++}`);       params.push(callback_time || null); }
     if (next_followup_time !== undefined) { updates.push(`next_followup_time = $${idx++}`); params.push(next_followup_time || null); }
 
