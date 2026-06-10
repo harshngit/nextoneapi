@@ -11,7 +11,6 @@ const { pool }     = require('../config/db');
 const { sendSuccess, paginate } = require('../utils/response');
 const AppError     = require('../utils/AppError');
 const emailService = require('../utils/emailService');
-const { createNotification, notifyAdmins } = require('./notificationController');
 
 const VALID_STATUSES = ['confirmed', 'cancelled', 'on_hold'];
 
@@ -31,7 +30,8 @@ const getAllClosures = async (req, res, next) => {
     if (role === 'sales_executive') {
       conditions.push(`lc.closed_by = $${idx++}`); params.push(callerId);
     } else if (role === 'sales_manager') {
-      conditions.push(`lc.closed_by_manager = $${idx++}`); params.push(callerId);
+      // closed_by_manager is now UUID[] — check if callerId is in the array
+      conditions.push(`$${idx++} = ANY(lc.closed_by_manager)`); params.push(callerId);
     }
 
     if (status)          { conditions.push(`lc.status = $${idx++}`);            params.push(status); }
@@ -113,6 +113,15 @@ const createClosure = async (req, res, next) => {
     const closedBy   = req.user.id;
     const projId     = project_id || lead.project_id;
 
+    // Normalize closed_by_manager to array (accept single UUID or array)
+    let managerIds = null;
+    if (closed_by_manager) {
+      managerIds = Array.isArray(closed_by_manager)
+        ? closed_by_manager.filter(Boolean)
+        : [closed_by_manager];
+      if (managerIds.length === 0) managerIds = null;
+    }
+
     // Auto-calculate commission if percent given but amount not
     let finalCommAmt = commission_amount || null;
     if (!finalCommAmt && commission_percent && agreed_price) {
@@ -146,7 +155,7 @@ const createClosure = async (req, res, next) => {
         loan_required || false, loan_bank || null,
         finalCommAmt, commission_percent || null,
         commission_paid || false, commission_paid_date || null,
-        closedBy, closed_by_manager || null, closure_notes || null,
+        closedBy, managerIds, closure_notes || null,
       ]
     );
 
@@ -166,49 +175,7 @@ const createClosure = async (req, res, next) => {
 
     await client.query('COMMIT');
 
-    // ── Push + in-app notifications ───────────────────────────────────────────
-    setImmediate(async () => {
-      try {
-        const dealValue = agreed_price ? `₹${Number(agreed_price).toLocaleString('en-IN')}` : null;
-
-        // Notify exec who owns the lead
-        if (lead.assigned_to) {
-          await createNotification(lead.assigned_to, {
-            type:           'booking_new',
-            title:          '🎉 Lead Booked!',
-            message:        `Lead "${lead.name}" has been booked${dealValue ? ` — ${dealValue}` : ''}`,
-            reference_id:   result.rows[0].id,
-            reference_type: 'closure',
-            metadata:       { lead_id, agreed_price: agreed_price || null },
-          });
-          // Notify their manager
-          const mgrRow = await pool.query(
-            `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [lead.assigned_to]
-          );
-          if (mgrRow.rows.length) {
-            await createNotification(mgrRow.rows[0].manager_id, {
-              type:           'booking_new',
-              title:          'New Booking by Your Team',
-              message:        `Lead "${lead.name}" was booked${dealValue ? ` — ${dealValue}` : ''}`,
-              reference_id:   result.rows[0].id,
-              reference_type: 'closure',
-              metadata:       { lead_id, agreed_price: agreed_price || null },
-            });
-          }
-        }
-        // Notify all admins
-        await notifyAdmins({
-          type:           'booking_new',
-          title:          'New Booking Confirmed',
-          message:        `Lead "${lead.name}" booked${dealValue ? ` — ${dealValue}` : ''}`,
-          reference_id:   result.rows[0].id,
-          reference_type: 'closure',
-          metadata:       { lead_id, agreed_price: agreed_price || null },
-        });
-      } catch (notifErr) {
-        console.error('[Notification] createClosure failed:', notifErr.message);
-      }
-    });
+    // ── Email ──────────────────────────────────────────────────────────────────
     setImmediate(async () => {
       try {
         const closedByRow = await pool.query(
@@ -234,13 +201,22 @@ const createClosure = async (req, res, next) => {
       } catch (e) { console.error('[Email] createClosure notification failed:', e.message); }
     });
 
-    return sendSuccess(res, 'Lead closed/booked successfully', result.rows[0], 201);
+    // Fetch managers for frontend Reporting Manager dropdown
+    const managersRes = await pool.query(
+      `SELECT id, CONCAT(first_name,' ',last_name) AS name, role
+       FROM users
+       WHERE role IN ('sales_manager','admin','super_admin') AND is_active = true
+       ORDER BY first_name ASC`
+    );
+
+    return sendSuccess(res, 'Lead closed/booked successfully', {
+      closure:  result.rows[0],
+      managers: managersRes.rows.map(m => ({ id: m.id, name: m.name, role: m.role })),
+    }, 201);
   } catch (err) {
     await client.query('ROLLBACK'); next(err);
   } finally { client.release(); }
 };
-
-// ── GET /api/v1/closures/:id ──────────────────────────────────────────────────
 const getClosureById = async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -252,13 +228,11 @@ const getClosureById = async (req, res, next) => {
               p.developer AS project_developer, p.price_range,
               CONCAT(cb.first_name,' ',cb.last_name) AS closed_by_name,
               cb.email AS closed_by_email,
-              CONCAT(cm.first_name,' ',cm.last_name) AS closed_by_manager_name,
               sv.visit_date AS site_visit_date, sv.visit_time AS site_visit_time
        FROM lead_closures lc
        LEFT JOIN leads        l  ON l.id  = lc.lead_id
        LEFT JOIN projects     p  ON p.id  = lc.project_id
        LEFT JOIN users        cb ON cb.id = lc.closed_by
-       LEFT JOIN users        cm ON cm.id = lc.closed_by_manager
        LEFT JOIN site_visits  sv ON sv.id = lc.site_visit_id
        WHERE lc.id = $1`,
       [id]
@@ -266,6 +240,27 @@ const getClosureById = async (req, res, next) => {
     if (!result.rows.length) return next(new AppError('Closure not found', 404));
 
     const c = result.rows[0];
+
+    // Resolve closed_by_manager array → [{id, name, role}]
+    let closedByManagers = [];
+    if (c.closed_by_manager && Array.isArray(c.closed_by_manager) && c.closed_by_manager.length) {
+      const mgrDetails = await pool.query(
+        `SELECT id, CONCAT(first_name,' ',last_name) AS name, role
+         FROM users WHERE id = ANY($1::uuid[])
+         ORDER BY first_name ASC`,
+        [c.closed_by_manager]
+      );
+      closedByManagers = mgrDetails.rows.map(m => ({ id: m.id, name: m.name, role: m.role }));
+    }
+
+    // Full managers dropdown list for edit form
+    const managersRes = await pool.query(
+      `SELECT id, CONCAT(first_name,' ',last_name) AS name, role
+       FROM users
+       WHERE role IN ('sales_manager','admin','super_admin') AND is_active = true
+       ORDER BY first_name ASC`
+    );
+
     return sendSuccess(res, 'Closure fetched', {
       id: c.id, booking_date: c.booking_date, status: c.status,
       unit: {
@@ -284,9 +279,10 @@ const getClosureById = async (req, res, next) => {
       lead:    { id: c.lead_id,    name: c.lead_name,    phone: c.lead_phone, email: c.lead_email, budget: c.lead_budget, source: c.lead_source },
       project: { id: c.project_id, name: c.project_name, city: c.project_city, developer: c.project_developer, price_range: c.price_range },
       closed_by: { id: c.closed_by, name: c.closed_by_name, email: c.closed_by_email },
-      closed_by_manager: { id: c.closed_by_manager, name: c.closed_by_manager_name },
+      closed_by_manager: closedByManagers,   // ← now an array of {id, name, role}
       site_visit: c.site_visit_id ? { id: c.site_visit_id, visit_date: c.site_visit_date, visit_time: c.site_visit_time } : null,
       closure_notes: c.closure_notes, created_at: c.created_at, updated_at: c.updated_at,
+      managers: managersRes.rows.map(m => ({ id: m.id, name: m.name, role: m.role })),
     });
   } catch (err) { next(err); }
 };
@@ -297,6 +293,7 @@ const updateClosure = async (req, res, next) => {
   try {
     const { id } = req.params;
     const {
+      project_id, site_visit_id,
       booking_date, unit_number, tower_block, floor_number, unit_type,
       carpet_area_sqft, super_area_sqft,
       agreed_price, booking_amount, payment_plan,
@@ -309,14 +306,35 @@ const updateClosure = async (req, res, next) => {
     const existing = await pool.query('SELECT * FROM lead_closures WHERE id = $1', [id]);
     if (!existing.rows.length) return next(new AppError('Closure not found', 404));
 
+    // Normalize closed_by_manager to array
+    let managerIds = undefined;
+    if (closed_by_manager !== undefined) {
+      if (closed_by_manager === null || (Array.isArray(closed_by_manager) && closed_by_manager.length === 0)) {
+        managerIds = null;
+      } else {
+        managerIds = Array.isArray(closed_by_manager)
+          ? closed_by_manager.filter(Boolean)
+          : [closed_by_manager];
+      }
+    }
+
+    // Auto-calculate commission amount if percent provided but amount not
+    let finalCommAmt = commission_amount;
+    if (finalCommAmt === undefined && commission_percent !== undefined && agreed_price !== undefined) {
+      finalCommAmt = (parseFloat(agreed_price) * parseFloat(commission_percent) / 100).toFixed(2);
+    }
+
     const fields = {
+      project_id, site_visit_id,
       booking_date, unit_number, tower_block, floor_number, unit_type,
       carpet_area_sqft, super_area_sqft,
       agreed_price, booking_amount, payment_plan,
       loan_required, loan_bank,
-      commission_amount, commission_percent,
+      commission_amount: finalCommAmt,
+      commission_percent,
       commission_paid, commission_paid_date,
-      closed_by_manager, closure_notes,
+      closed_by_manager: managerIds,
+      closure_notes,
     };
 
     const updates = []; const params = []; let idx = 1;
@@ -337,48 +355,18 @@ const updateClosure = async (req, res, next) => {
     );
     await client.query('COMMIT');
 
-    // ── Push: commission credited notification ────────────────────────────────
-    const wasUnpaid     = existing.rows[0].commission_paid === false;
-    const nowPaid       = commission_paid === true;
-    const commAmt       = result.rows[0].commission_amount;
-    if (wasUnpaid && nowPaid && existing.rows[0].lead_id) {
-      setImmediate(async () => {
-        try {
-          // Find exec assigned to this lead
-          const leadRow = await pool.query(
-            `SELECT l.assigned_to, l.name AS lead_name FROM leads l WHERE l.id = $1`,
-            [existing.rows[0].lead_id]
-          );
-          const execId   = leadRow.rows[0]?.assigned_to;
-          const leadName = leadRow.rows[0]?.lead_name || 'a lead';
-          const commStr  = commAmt ? `₹${Number(commAmt).toLocaleString('en-IN')}` : '';
+    // Fetch managers list for the response (all sales_manager + admin users)
+    const managersRes = await pool.query(
+      `SELECT id, CONCAT(first_name,' ',last_name) AS name, role
+       FROM users
+       WHERE role IN ('sales_manager','admin','super_admin') AND is_active = true
+       ORDER BY first_name ASC`
+    );
 
-          if (execId) {
-            await createNotification(execId, {
-              type:           'commission_credited',
-              title:          '💰 Commission Credited',
-              message:        `Your commission${commStr ? ` of ${commStr}` : ''} for "${leadName}" has been credited`,
-              reference_id:   id,
-              reference_type: 'closure',
-              metadata:       { commission_amount: commAmt, lead_id: existing.rows[0].lead_id },
-            });
-          }
-          // Notify admins too
-          await notifyAdmins({
-            type:           'commission_credited',
-            title:          'Commission Marked as Paid',
-            message:        `Commission${commStr ? ` of ${commStr}` : ''} for "${leadName}" has been marked as paid`,
-            reference_id:   id,
-            reference_type: 'closure',
-            metadata:       { commission_amount: commAmt, lead_id: existing.rows[0].lead_id },
-          });
-        } catch (notifErr) {
-          console.error('[Notification] commission_credited failed:', notifErr.message);
-        }
-      });
-    }
-
-    return sendSuccess(res, 'Closure updated', result.rows[0]);
+    return sendSuccess(res, 'Closure updated', {
+      closure:  result.rows[0],
+      managers: managersRes.rows.map(m => ({ id: m.id, name: m.name, role: m.role })),
+    });
   } catch (err) {
     await client.query('ROLLBACK'); next(err);
   } finally { client.release(); }
@@ -503,7 +491,32 @@ const getClosureSummary = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+// ── GET /api/v1/closures/managers ─────────────────────────────────────────────
+/**
+ * Returns all active sales_manager / admin / super_admin users
+ * for the Reporting Manager dropdown on Create and Edit Closure forms.
+ */
+const getManagers = async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      `SELECT id,
+              CONCAT(first_name,' ',last_name) AS name,
+              role
+       FROM users
+       WHERE role IN ('sales_manager','admin','super_admin')
+         AND is_active = true
+       ORDER BY first_name ASC`
+    );
+    return sendSuccess(res, 'Managers fetched', result.rows.map(r => ({
+      id:   r.id,
+      name: r.name,
+      role: r.role,
+    })));
+  } catch (err) { next(err); }
+};
+
 module.exports = {
   getAllClosures, createClosure, getClosureById, updateClosure,
   updateClosureStatus, getClosureByLead, getClosureSummary,
+  getManagers,
 };

@@ -150,7 +150,8 @@ router.get("/", authenticate, taskController.getAllTasks);
  *           example:
  *             title: "Follow up call with Suresh Patel"
  *             lead_id: "lead-uuid-001"
- *             due_date: "2025-04-22T10:00:00Z"
+ *             due_date: "2026-06-22T10:00:00Z"
+ *             assigned_to: "user-uuid-001"
  *             priority: "high"
  *             notes: "Client asked to call after 10am. Discuss pricing."
  *     responses:
@@ -244,8 +245,10 @@ router.get("/:id", authenticate, taskController.getTaskById);
  *   put:
  *     summary: Update task details
  *     description: >
- *       Updates task title, due date, priority, or notes.
+ *       Same fields as Create Task — all optional on update (send only what changed).
  *       Emits `task:updated` WebSocket event to the assigned user.
+ *       If due_date changes, the reminder_sent and overdue_sent sentinel columns
+ *       are reset so the cron will fire reminders again for the new date.
  *
  *       **WebSocket Event — `task:updated`**
  *       ```json
@@ -270,20 +273,49 @@ router.get("/:id", authenticate, taskController.getTaskById);
  *             properties:
  *               title:
  *                 type: string
+ *                 example: "Follow up call with Suresh Patel"
+ *               lead_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: Reassign task to a different lead
  *               due_date:
  *                 type: string
  *                 format: date-time
+ *                 example: "2026-06-22T10:00:00Z"
+ *               assigned_to:
+ *                 type: string
+ *                 format: uuid
+ *                 description: Reassign task to a different executive
  *               priority:
  *                 type: string
  *                 enum: [low, medium, high]
+ *                 example: "high"
  *               notes:
  *                 type: string
+ *                 example: "Client asked to call after 10am. Discuss pricing."
  *           example:
- *             due_date: "2025-04-23T11:00:00Z"
- *             priority: "medium"
+ *             title: "Follow up call with Suresh Patel"
+ *             lead_id: "lead-uuid-001"
+ *             due_date: "2026-06-22T10:00:00Z"
+ *             assigned_to: "user-uuid-001"
+ *             priority: "high"
+ *             notes: "Client rescheduled. Call after 10am."
  *     responses:
  *       200:
  *         description: Task updated and WebSocket event emitted
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Task updated successfully"
+ *               data:
+ *                 id: "task-uuid-001"
+ *                 title: "Follow up call with Suresh Patel"
+ *                 due_date: "2026-06-22T10:00:00Z"
+ *                 priority: "high"
+ *                 assigned_to: "user-uuid-001"
+ *       404:
+ *         description: Task not found
  */
 router.put("/:id", authenticate, taskController.updateTask);
 

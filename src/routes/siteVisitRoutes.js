@@ -68,13 +68,53 @@ router.get('/', authenticate, ctrl.getAllSiteVisits);
  *             type: object
  *             required: [lead_id, project_id, visit_date, visit_time]
  *             properties:
- *               lead_id: { type: string, format: uuid }
- *               project_id: { type: string, format: uuid }
- *               visit_date: { type: string, format: date }
- *               visit_time: { type: string }
+ *               lead_id:
+ *                 type: string
+ *                 format: uuid
+ *               project_id:
+ *                 type: string
+ *                 format: uuid
+ *               visit_date:
+ *                 type: string
+ *                 format: date
+ *                 example: "2026-06-15"
+ *               visit_time:
+ *                 type: string
+ *                 example: "11:00"
+ *               assigned_to:
+ *                 type: string
+ *                 format: uuid
+ *                 description: Defaults to lead's assigned executive if not provided
+ *               notes:
+ *                 type: string
+ *                 example: "Bring updated brochure and price list"
+ *               transport_arranged:
+ *                 type: boolean
+ *                 default: false
+ *           example:
+ *             lead_id: "lead-uuid-001"
+ *             project_id: "proj-uuid-001"
+ *             visit_date: "2026-06-15"
+ *             visit_time: "11:00"
+ *             assigned_to: "user-uuid-001"
+ *             notes: "Bring updated brochure and price list"
+ *             transport_arranged: false
  *     responses:
  *       201:
  *         description: Site visit scheduled
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Site visit scheduled"
+ *               data:
+ *                 id: "sv-uuid-001"
+ *                 lead_id: "lead-uuid-001"
+ *                 project_id: "proj-uuid-001"
+ *                 visit_date: "2026-06-15"
+ *                 visit_time: "11:00:00"
+ *                 status: "scheduled"
+ *                 transport_arranged: false
  */
 router.post('/', authenticate, ctrl.createSiteVisit);
 
@@ -102,6 +142,9 @@ router.get('/:id', authenticate, ctrl.getSiteVisitById);
  * /api/v1/site-visits/{id}:
  *   put:
  *     summary: Update site visit
+ *     description: >
+ *       Same fields as Create Site Visit — all optional on update.
+ *       If visit_date or visit_time changes, a reschedule activity is logged automatically.
  *     tags: [Site Visits]
  *     security:
  *       - BearerAuth: []
@@ -110,9 +153,57 @@ router.get('/:id', authenticate, ctrl.getSiteVisitById);
  *         name: id
  *         required: true
  *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               lead_id:
+ *                 type: string
+ *                 format: uuid
+ *               project_id:
+ *                 type: string
+ *                 format: uuid
+ *               visit_date:
+ *                 type: string
+ *                 format: date
+ *                 example: "2026-06-15"
+ *               visit_time:
+ *                 type: string
+ *                 example: "11:00"
+ *               assigned_to:
+ *                 type: string
+ *                 format: uuid
+ *               notes:
+ *                 type: string
+ *                 example: "Bring updated brochure and price list"
+ *               transport_arranged:
+ *                 type: boolean
+ *           example:
+ *             lead_id: "lead-uuid-001"
+ *             project_id: "proj-uuid-001"
+ *             visit_date: "2026-06-15"
+ *             visit_time: "11:00"
+ *             assigned_to: "user-uuid-001"
+ *             notes: "Client rescheduled to afternoon"
+ *             transport_arranged: true
  *     responses:
  *       200:
  *         description: Site visit updated
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Site visit updated"
+ *               data:
+ *                 id: "sv-uuid-001"
+ *                 visit_date: "2026-06-15"
+ *                 visit_time: "11:00:00"
+ *                 status: "scheduled"
+ *       404:
+ *         description: Site visit not found
  */
 router.put('/:id', authenticate, ctrl.updateSiteVisit);
 

@@ -210,6 +210,10 @@ router.post(
  *               location_preference:
  *                 type: string
  *                 example: "Andheri West"
+ *               configuration:
+ *                 type: string
+ *                 example: "2BHK"
+ *                 description: Unit type the lead is interested in (e.g. 1BHK, 2BHK, 3BHK)
  *               notes:
  *                 type: string
  *               callback_time:
@@ -251,6 +255,7 @@ router.post(
  *             assigned_to: "user-uuid-001"
  *             budget: "80-100L"
  *             location_preference: "Andheri West"
+ *             configuration: "2BHK"
  *             notes: "Interested in 2BHK"
  *             callback_time: "2026-06-01T10:30:00Z"
  *             next_followup_time: "2026-06-03T11:00:00Z"
@@ -360,40 +365,73 @@ router.get("/:id", authenticate, leadController.getLeadById);
  *         application/json:
  *           schema:
  *             type: object
+ *             description: Same fields as Create Lead — all optional on update (send only what changed)
  *             properties:
  *               name:
  *                 type: string
+ *                 example: "Suresh Patel"
  *               phone:
  *                 type: string
+ *                 example: "+919876543210"
  *               alternate_phone_number:
  *                 type: string
+ *                 example: "+919876543211"
  *               email:
  *                 type: string
+ *                 format: email
+ *                 example: "suresh.patel@gmail.com"
  *               source:
  *                 type: string
+ *                 example: "Facebook"
  *               project_id:
  *                 type: string
  *                 format: uuid
+ *               assigned_to:
+ *                 type: string
+ *                 format: uuid
+ *                 description: Reassign lead to a different user
  *               budget:
  *                 type: string
+ *                 example: "80-100L"
  *               location_preference:
  *                 type: string
+ *                 example: "Andheri West"
+ *               configuration:
+ *                 type: string
+ *                 example: "2BHK"
+ *                 description: Unit type the lead is interested in
+ *               notes:
+ *                 type: string
+ *                 description: Saved as a lead_activity note entry
+ *                 example: "Client now interested in 3BHK"
  *               callback_time:
  *                 type: string
  *                 format: date-time
- *                 description: Scheduled callback time (ISO 8601). Pass null to clear.
+ *                 description: Pass null to clear
  *                 example: "2026-06-01T10:30:00Z"
  *               next_followup_time:
  *                 type: string
  *                 format: date-time
- *                 description: Scheduled next follow-up time (ISO 8601). Pass null to clear.
+ *                 description: Pass null to clear
  *                 example: "2026-06-03T11:00:00Z"
  *           example:
+ *             name: "Suresh Patel"
  *             phone: "+919876543999"
+ *             alternate_phone_number: "+919876543211"
+ *             email: "suresh.patel@gmail.com"
+ *             source: "Facebook"
+ *             project_id: "proj-uuid-001"
+ *             assigned_to: "user-uuid-001"
  *             budget: "1Cr+"
  *             location_preference: "Bandra"
+ *             configuration: "3BHK"
+ *             notes: "Client upgraded interest to 3BHK"
  *             callback_time: "2026-06-01T10:30:00Z"
  *             next_followup_time: "2026-06-03T11:00:00Z"
+ *             call_recordings:
+ *               - url: "/uploads/leads/voice/voice_abc123.webm"
+ *                 phone_number: "+919876543210"
+ *                 name: "First call - Suresh"
  *     responses:
  *       200:
  *         description: Lead updated successfully
@@ -401,9 +439,12 @@ router.get("/:id", authenticate, leadController.getLeadById);
  *           application/json:
  *             example:
  *               success: true
- *               message: "Lead updated"
+ *               message: "Lead updated successfully"
  *               data:
  *                 id: "lead-uuid-001"
+ *                 name: "Suresh Patel"
+ *                 phone: "+919876543999"
+ *                 configuration: "3BHK"
  *                 callback_time: "2026-06-01T10:30:00Z"
  *                 next_followup_time: "2026-06-03T11:00:00Z"
  *       404:

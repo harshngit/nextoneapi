@@ -169,23 +169,17 @@ router.get('/', authenticate, ctrl.getAllClosures);
  *               lead_id:
  *                 type: string
  *                 format: uuid
- *                 description: The lead being closed/booked
+ *                 description: The lead being booked (required)
  *               project_id:
  *                 type: string
  *                 format: uuid
  *                 description: Override project. Defaults to lead's assigned project
- *               site_visit_id:
- *                 type: string
- *                 format: uuid
- *                 description: Optional — link to the site visit that led to this booking
  *               booking_date:
  *                 type: string
  *                 format: date
- *                 description: Date of booking confirmation
  *                 example: "2026-05-20"
  *               unit_number:
  *                 type: string
- *                 description: Flat or unit number
  *                 example: "B-1204"
  *               tower_block:
  *                 type: string
@@ -195,25 +189,24 @@ router.get('/', authenticate, ctrl.getAllClosures);
  *                 example: 12
  *               unit_type:
  *                 type: string
- *                 description: Configuration type
  *                 example: "3BHK"
  *               carpet_area_sqft:
  *                 type: number
- *                 example: 1250.00
+ *                 example: 1250
  *               super_area_sqft:
  *                 type: number
- *                 example: 1650.00
+ *                 example: 1650
+ *               closure_notes:
+ *                 type: string
+ *                 example: "Client opted for construction linked plan. Home loan through HDFC."
  *               agreed_price:
  *                 type: number
- *                 description: Final negotiated sale price in INR
  *                 example: 9500000
  *               booking_amount:
  *                 type: number
- *                 description: Initial token/booking amount paid by client
  *                 example: 500000
  *               payment_plan:
  *                 type: string
- *                 description: Payment structure
  *                 example: "Construction Linked Plan"
  *               loan_required:
  *                 type: boolean
@@ -221,28 +214,30 @@ router.get('/', authenticate, ctrl.getAllClosures);
  *               loan_bank:
  *                 type: string
  *                 example: "HDFC Bank"
- *               commission_amount:
- *                 type: number
- *                 description: Commission in INR. Auto-calculated if commission_percent given
- *                 example: 190000
  *               commission_percent:
  *                 type: number
- *                 description: Commission as % of agreed_price. Used to auto-calculate amount
+ *                 description: Auto-calculates commission_amount = agreed_price × percent / 100
  *                 example: 2
+ *               commission_amount:
+ *                 type: number
+ *                 description: Manual override. Leave blank if using commission_percent
+ *               closed_by_manager:
+ *                 type: array
+ *                 description: Array of manager UUIDs who supervised this closure. Use GET /api/v1/closures/managers to get valid UUIDs.
+ *                 items:
+ *                   type: string
+ *                   format: uuid
+ *                 example: ["manager-uuid-001", "manager-uuid-002"]
  *               commission_paid:
  *                 type: boolean
  *                 default: false
  *               commission_paid_date:
  *                 type: string
  *                 format: date
- *                 example: "2026-06-01"
- *               closed_by_manager:
+ *               site_visit_id:
  *                 type: string
  *                 format: uuid
- *                 description: Manager who supervised this closure
- *               closure_notes:
- *                 type: string
- *                 example: "Client opted for construction linked plan. Home loan through HDFC."
+ *                 description: Optional link to site visit that led to this booking
  *           example:
  *             lead_id: "lead-uuid-001"
  *             project_id: "proj-uuid-001"
@@ -252,8 +247,9 @@ router.get('/', authenticate, ctrl.getAllClosures);
  *             tower_block: "Tower B"
  *             floor_number: 12
  *             unit_type: "3BHK"
- *             carpet_area_sqft: 1250.00
- *             super_area_sqft: 1650.00
+ *             carpet_area_sqft: 1250
+ *             super_area_sqft: 1650
+ *             closure_notes: "Client opted for construction linked plan. Home loan through HDFC."
  *             agreed_price: 9500000
  *             booking_amount: 500000
  *             payment_plan: "Construction Linked Plan"
@@ -261,37 +257,108 @@ router.get('/', authenticate, ctrl.getAllClosures);
  *             loan_bank: "HDFC Bank"
  *             commission_percent: 2
  *             commission_paid: false
- *             closed_by_manager: "manager-uuid-001"
- *             closure_notes: "Client opted for construction linked plan. Home loan through HDFC."
+ *             closed_by_manager:
+ *               - "manager-uuid-001"
+ *               - "manager-uuid-002"
  *     responses:
  *       201:
- *         description: Lead closed/booked successfully
+ *         description: Lead closed/booked successfully. Response includes managers array for Reporting Manager dropdown.
  *         content:
  *           application/json:
  *             example:
  *               success: true
  *               message: "Lead closed/booked successfully"
  *               data:
- *                 id: "closure-uuid-001"
- *                 lead_id: "lead-uuid-001"
- *                 booking_date: "2026-05-20"
- *                 unit_number: "B-1204"
- *                 unit_type: "3BHK"
- *                 agreed_price: "9500000.00"
- *                 commission_amount: "190000.00"
- *                 status: "confirmed"
+ *                 closure:
+ *                   id: "closure-uuid-001"
+ *                   lead_id: "lead-uuid-001"
+ *                   project_id: "proj-uuid-001"
+ *                   site_visit_id: "sv-uuid-001"
+ *                   booking_date: "2026-05-20"
+ *                   unit_number: "B-1204"
+ *                   tower_block: "Tower B"
+ *                   floor_number: 12
+ *                   unit_type: "3BHK"
+ *                   carpet_area_sqft: "1250.00"
+ *                   super_area_sqft: "1650.00"
+ *                   agreed_price: "9500000.00"
+ *                   booking_amount: "500000.00"
+ *                   payment_plan: "Construction Linked Plan"
+ *                   loan_required: true
+ *                   loan_bank: "HDFC Bank"
+ *                   commission_percent: "2.00"
+ *                   commission_amount: "190000.00"
+ *                   commission_paid: false
+ *                   commission_paid_date: null
+ *                   closed_by: "user-uuid-001"
+ *                   closed_by_manager:
+ *                     - id: "manager-uuid-001"
+ *                       name: "Rahul Sharma"
+ *                       role: "sales_manager"
+ *                     - id: "manager-uuid-002"
+ *                       name: "Priya Mehta"
+ *                       role: "sales_manager"
+ *                   closure_notes: "Client opted for construction linked plan. Home loan through HDFC."
+ *                   status: "confirmed"
+ *                   created_at: "2026-05-20T10:00:00Z"
+ *                 managers:
+ *                   - id: "manager-uuid-001"
+ *                     name: "Rahul Sharma"
+ *                     role: "sales_manager"
+ *                   - id: "manager-uuid-002"
+ *                     name: "Priya Mehta"
+ *                     role: "sales_manager"
+ *                   - id: "admin-uuid-001"
+ *                     name: "Super Admin"
+ *                     role: "super_admin"
  *       400:
  *         description: Missing required fields or closure already exists for this lead
  *       404:
  *         description: Lead not found
  */
+/**
+ * @swagger
+ * /api/v1/closures/managers:
+ *   get:
+ *     summary: Get list of managers for Reporting Manager dropdown
+ *     description: >
+ *       Returns all active users with role sales_manager, admin, or super_admin.
+ *       Use this to populate the Reporting Manager dropdown on the Create/Edit Closure form.
+ *       Ordered by first name A–Z.
+ *     tags: [Lead Closures]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of managers
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 - id: "manager-uuid-001"
+ *                   name: "Priya Mehta"
+ *                   role: "sales_manager"
+ *                 - id: "manager-uuid-002"
+ *                   name: "Rahul Sharma"
+ *                   role: "sales_manager"
+ *                 - id: "admin-uuid-001"
+ *                   name: "Super Admin"
+ *                   role: "super_admin"
+ */
+router.get('/managers', authenticate, ctrl.getManagers);
+
 router.post('/', authenticate, ctrl.createClosure);
 
 /**
  * @swagger
  * /api/v1/closures/{id}:
  *   get:
- *     summary: Get a closure by ID (full details)
+ *     summary: Get a closure by ID (full details + managers for edit form)
+ *     description: >
+ *       Returns full closure details with lead, project, unit and commission breakdown.
+ *       Also returns a managers array containing all active sales_manager/admin/super_admin
+ *       users — used to populate the Reporting Manager dropdown on the Edit Closure form.
  *     tags: [Lead Closures]
  *     security:
  *       - BearerAuth: []
@@ -302,7 +369,54 @@ router.post('/', authenticate, ctrl.createClosure);
  *         schema: { type: string, format: uuid }
  *     responses:
  *       200:
- *         description: Full closure details with lead, project, unit and commission breakdown
+ *         description: Full closure details with managers list
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 id: "closure-uuid"
+ *                 booking_date: "2026-06-10"
+ *                 status: "confirmed"
+ *                 unit:
+ *                   unit_number: "B-1204"
+ *                   tower_block: "Tower B"
+ *                   floor_number: 12
+ *                   unit_type: "3BHK"
+ *                   carpet_area_sqft: "1250.00"
+ *                   super_area_sqft: "1650.00"
+ *                 financials:
+ *                   agreed_price: "9500000.00"
+ *                   booking_amount: "500000.00"
+ *                   payment_plan: "Construction Linked Plan"
+ *                   loan_required: true
+ *                   loan_bank: "HDFC Bank"
+ *                 commission:
+ *                   amount: "190000.00"
+ *                   percent: "2.00"
+ *                   paid: false
+ *                   paid_date: null
+ *                 lead:
+ *                   id: "lead-uuid"
+ *                   name: "Rahul Patel"
+ *                   phone: "9876543210"
+ *                 project:
+ *                   id: "proj-uuid"
+ *                   name: "Skyline Heights"
+ *                 closed_by:
+ *                   id: "user-uuid"
+ *                   name: "Suresh Shah"
+ *                 closed_by_manager:
+ *                   id: "manager-uuid"
+ *                   name: "Priya Mehta"
+ *                 closure_notes: "Client opted for CLP. Loan via HDFC."
+ *                 managers:
+ *                   - id: "manager-uuid-001"
+ *                     name: "Priya Mehta"
+ *                     role: "sales_manager"
+ *                   - id: "admin-uuid-001"
+ *                     name: "Super Admin"
+ *                     role: "super_admin"
  *       404:
  *         description: Closure not found
  */
@@ -314,8 +428,11 @@ router.get('/:id', authenticate, ctrl.getClosureById);
  *   put:
  *     summary: Update closure details
  *     description: >
- *       Update any field — unit details, financials, commission, payment plan, notes.
- *       Does not change lead status (use PATCH /status for that).
+ *       Same fields as Create Closure — all optional on update (send only what changed).
+ *       Matches the Edit Closure form exactly.
+ *       commission_amount is auto-calculated from commission_percent × agreed_price
+ *       if percent is sent but amount is not.
+ *       Response includes managers array for the Reporting Manager dropdown.
  *     tags: [Lead Closures]
  *     security:
  *       - BearerAuth: []
@@ -325,54 +442,126 @@ router.get('/:id', authenticate, ctrl.getClosureById);
  *         required: true
  *         schema: { type: string, format: uuid }
  *     requestBody:
+ *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
  *             properties:
+ *               project_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: Override the project linked to this closure
+ *               site_visit_id:
+ *                 type: string
+ *                 format: uuid
  *               booking_date:
  *                 type: string
  *                 format: date
+ *                 example: "2026-06-10"
  *               unit_number:
  *                 type: string
+ *                 example: "B-1204"
  *               tower_block:
  *                 type: string
+ *                 example: "Tower B"
  *               floor_number:
  *                 type: integer
+ *                 example: 12
  *               unit_type:
  *                 type: string
+ *                 example: "3BHK"
  *               carpet_area_sqft:
  *                 type: number
+ *                 example: 1250
  *               super_area_sqft:
  *                 type: number
+ *                 example: 1650
  *               agreed_price:
  *                 type: number
+ *                 example: 9500000
  *               booking_amount:
  *                 type: number
+ *                 example: 500000
  *               payment_plan:
  *                 type: string
+ *                 example: "Construction Linked Plan"
  *               loan_required:
  *                 type: boolean
+ *                 example: true
  *               loan_bank:
  *                 type: string
- *               commission_amount:
- *                 type: number
+ *                 example: "HDFC Bank"
  *               commission_percent:
  *                 type: number
+ *                 description: Auto-calculates commission_amount from agreed_price
+ *                 example: 2
+ *               commission_amount:
+ *                 type: number
+ *                 description: Manual override. If omitted and commission_percent given, auto-calculated
  *               commission_paid:
  *                 type: boolean
+ *                 example: false
  *               commission_paid_date:
  *                 type: string
  *                 format: date
+ *                 example: "2026-06-01"
+ *               closed_by_manager:
+ *                 type: array
+ *                 description: Array of manager UUIDs. Pass empty array [] to clear.
+ *                 items:
+ *                   type: string
+ *                   format: uuid
+ *                 example: ["manager-uuid-001", "manager-uuid-002"]
  *               closure_notes:
  *                 type: string
+ *                 example: "Client opted for construction linked plan. Home loan through HDFC."
  *           example:
- *             commission_paid: true
- *             commission_paid_date: "2026-06-01"
- *             closure_notes: "Commission transferred to exec on June 1"
+ *             project_id: "proj-uuid-001"
+ *             site_visit_id: "sv-uuid-001"
+ *             booking_date: "2026-05-20"
+ *             unit_number: "B-1204"
+ *             tower_block: "Tower B"
+ *             floor_number: 12
+ *             unit_type: "3BHK"
+ *             carpet_area_sqft: 1250
+ *             super_area_sqft: 1650
+ *             closure_notes: "Client opted for construction linked plan. Home loan through HDFC."
+ *             agreed_price: 9500000
+ *             booking_amount: 500000
+ *             payment_plan: "Construction Linked Plan"
+ *             loan_required: true
+ *             loan_bank: "HDFC Bank"
+ *             commission_percent: 2
+ *             commission_paid: false
+ *             closed_by_manager:
+ *               - "manager-uuid-001"
+ *               - "manager-uuid-002"
  *     responses:
  *       200:
- *         description: Closure updated
+ *         description: Closure updated with managers list for dropdown
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Closure updated"
+ *               data:
+ *                 closure:
+ *                   id: "closure-uuid"
+ *                   booking_date: "2026-06-10"
+ *                   unit_number: "B-1204"
+ *                   unit_type: "3BHK"
+ *                   agreed_price: "9500000.00"
+ *                   commission_amount: "190000.00"
+ *                   commission_paid: false
+ *                   closure_notes: "Client opted for construction linked plan."
+ *                 managers:
+ *                   - id: "manager-uuid-001"
+ *                     name: "Rahul Sharma"
+ *                     role: "sales_manager"
+ *                   - id: "admin-uuid-001"
+ *                     name: "Super Admin"
+ *                     role: "super_admin"
  *       404:
  *         description: Closure not found
  */

@@ -126,6 +126,7 @@ router.get('/', authenticate, ctrl.getAllRevisits);
  *             original_visit_id: "sv-uuid-001"
  *             visit_date: "2026-06-10"
  *             visit_time: "11:00"
+ *             assigned_to: "user-uuid-001"
  *             reason: "Client wanted to see 3BHK units again"
  *             notes: "Bring updated price list and floor plans"
  *             transport_arranged: true
@@ -216,8 +217,10 @@ router.get('/:id', authenticate, ctrl.getRevisitById);
  *   put:
  *     summary: Update a re-visit
  *     description: >
- *       Update date/time/notes/assignee. If visit_date or visit_time changes
- *       the status is automatically set to rescheduled.
+ *       Same fields as Create Re-visit (except original_visit_id which cannot change).
+ *       All fields optional — send only what changed.
+ *       If visit_date or visit_time changes, status is automatically set to rescheduled
+ *       and a reschedule activity is logged.
  *     tags: [Site Revisits]
  *     security:
  *       - BearerAuth: []
@@ -227,6 +230,7 @@ router.get('/:id', authenticate, ctrl.getRevisitById);
  *         required: true
  *         schema: { type: string, format: uuid }
  *     requestBody:
+ *       required: true
  *       content:
  *         application/json:
  *           schema:
@@ -235,28 +239,48 @@ router.get('/:id', authenticate, ctrl.getRevisitById);
  *               visit_date:
  *                 type: string
  *                 format: date
+ *                 example: "2026-06-15"
  *               visit_time:
  *                 type: string
- *                 example: "14:00"
+ *                 example: "11:00"
  *               assigned_to:
  *                 type: string
  *                 format: uuid
+ *                 description: Override assigned exec. Defaults to original visit's assignee
  *               reason:
  *                 type: string
+ *                 description: Why a re-visit was needed
+ *                 example: "Client wanted to see 3BHK units again and check parking space"
  *               notes:
  *                 type: string
+ *                 example: "Bring updated price list"
  *               transport_arranged:
  *                 type: boolean
  *               reschedule_reason:
  *                 type: string
- *                 description: Logged to lead activity if date/time changes
+ *                 description: Logged as lead activity if date/time changes
+ *                 example: "Client requested morning slot"
  *           example:
- *             visit_date: "2026-06-12"
- *             visit_time: "10:00"
+ *             visit_date: "2026-06-15"
+ *             visit_time: "11:00"
+ *             assigned_to: "user-uuid-001"
+ *             reason: "Client wanted to see 3BHK units again"
+ *             notes: "Bring updated price list and floor plans"
+ *             transport_arranged: true
  *             reschedule_reason: "Client requested morning slot"
  *     responses:
  *       200:
- *         description: Re-visit updated
+ *         description: Re-visit updated or rescheduled
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Re-visit rescheduled"
+ *               data:
+ *                 id: "rv-uuid-001"
+ *                 visit_date: "2026-06-15"
+ *                 visit_time: "11:00"
+ *                 status: "rescheduled"
  *       400:
  *         description: Cannot update a completed re-visit
  *       404:

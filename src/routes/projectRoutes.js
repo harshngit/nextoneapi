@@ -104,51 +104,105 @@ router.get("/", authenticate, projectController.getAllProjects);
  *               developer:       { type: string, example: "Lodha Group" }
  *               city:            { type: string, example: "Mumbai" }
  *               locality:        { type: string }
+ *               address:         { type: string }
+ *               configurations:
+ *                 type: array
+ *                 items: { type: string }
+ *                 example: ["1BHK", "2BHK", "3BHK"]
  *               price_range:     { type: string, example: "80L - 1.5Cr" }
  *               total_units:     { type: integer }
+ *               possession_date: { type: string, format: date }
  *               rera_number:     { type: string }
+ *               amenities:
+ *                 type: array
+ *                 items: { type: string }
+ *                 example: ["Swimming Pool", "Gym", "Clubhouse"]
  *               status:          { type: string, enum: [active, upcoming, completed, inactive] }
  *               description:     { type: string }
  *               brochure_url:    { type: string }
  *               video_url:       { type: string }
- *               payment_plan: { type: string }
+ *               payment_plan_url: { type: string }
  *               home_loan_info:  { type: string }
  *               unit_plans:
  *                 type: array
  *                 items:
  *                   type: object
  *                   properties:
- *                     file_name: { type: string }
- *                     file_path: { type: string }
- *                     file_size: { type: integer }
- *                     mime_type: { type: string }
+ *                     file_name: { type: string, example: "floorplan_2bhk.pdf" }
+ *                     file_path: { type: string, example: "/uploads/projects/floorplan_2bhk.pdf" }
+ *                     file_size: { type: integer, example: 204800 }
+ *                     mime_type: { type: string, example: "application/pdf" }
  *               creatives:
  *                 type: array
  *                 items:
  *                   type: object
  *                   properties:
- *                     file_name: { type: string }
- *                     file_path: { type: string }
- *                     file_size: { type: integer }
- *                     mime_type: { type: string }
+ *                     file_name: { type: string, example: "floorplan_2bhk.pdf" }
+ *                     file_path: { type: string, example: "/uploads/projects/floorplan_2bhk.pdf" }
+ *                     file_size: { type: integer, example: 204800 }
+ *                     mime_type: { type: string, example: "application/pdf" }
  *               payment_plans:
  *                 type: array
  *                 items:
  *                   type: object
  *                   properties:
- *                     file_name: { type: string }
- *                     file_path: { type: string }
- *                     file_size: { type: integer }
- *                     mime_type: { type: string }
+ *                     file_name: { type: string, example: "floorplan_2bhk.pdf" }
+ *                     file_path: { type: string, example: "/uploads/projects/floorplan_2bhk.pdf" }
+ *                     file_size: { type: integer, example: 204800 }
+ *                     mime_type: { type: string, example: "application/pdf" }
  *               videos:
  *                 type: array
  *                 items:
  *                   type: object
  *                   properties:
- *                     file_name: { type: string }
- *                     file_path: { type: string }
- *                     file_size: { type: integer }
- *                     mime_type: { type: string }
+ *                     file_name: { type: string, example: "floorplan_2bhk.pdf" }
+ *                     file_path: { type: string, example: "/uploads/projects/floorplan_2bhk.pdf" }
+ *                     file_size: { type: integer, example: 204800 }
+ *                     mime_type: { type: string, example: "application/pdf" }
+ *           example:
+ *             name: "Skyline Heights"
+ *             developer: "Lodha Group"
+ *             city: "Mumbai"
+ *             locality: "Andheri West"
+ *             address: "Plot 14, Veera Desai Road"
+ *             configurations:
+ *               - "1BHK"
+ *               - "2BHK"
+ *               - "3BHK"
+ *             price_range: "80L - 1.5Cr"
+ *             total_units: 240
+ *             possession_date: "2027-12-01"
+ *             rera_number: "P51800045678"
+ *             amenities:
+ *               - "Swimming Pool"
+ *               - "Gym"
+ *               - "Clubhouse"
+ *             status: "active"
+ *             description: "Premium residential project in the heart of Andheri West"
+ *             brochure_url: "/uploads/projects/brochure.pdf"
+ *             video_url: "https://youtube.com/watch?v=abc"
+ *             payment_plan_url: "/uploads/projects/payment_plan.pdf"
+ *             home_loan_info: "Available through HDFC, SBI, ICICI"
+ *             unit_plans:
+ *               - file_name: "2bhk_floorplan.pdf"
+ *                 file_path: "/uploads/projects/2bhk_floorplan.pdf"
+ *                 file_size: 204800
+ *                 mime_type: "application/pdf"
+ *             creatives:
+ *               - file_name: "project_banner.jpg"
+ *                 file_path: "/uploads/projects/project_banner.jpg"
+ *                 file_size: 512000
+ *                 mime_type: "image/jpeg"
+ *             payment_plans:
+ *               - file_name: "payment_plan_clp.pdf"
+ *                 file_path: "/uploads/projects/payment_plan_clp.pdf"
+ *                 file_size: 102400
+ *                 mime_type: "application/pdf"
+ *             videos:
+ *               - file_name: "project_walkthrough.mp4"
+ *                 file_path: "/uploads/projects/project_walkthrough.mp4"
+ *                 file_size: 10485760
+ *                 mime_type: "video/mp4"
  *     responses:
  *       201:
  *         description: Project created successfully
@@ -243,41 +297,135 @@ router.get("/:id", authenticate, projectController.getProjectById);
  *         application/json:
  *           schema:
  *             type: object
+ *             description: Same fields as Create Project — all optional on update (send only what changed)
  *             properties:
- *               name:
- *                 type: string
- *               developer:
- *                 type: string
- *               price_range:
- *                 type: string
+ *               name:            { type: string, example: "Skyline Heights Phase 2" }
+ *               developer:       { type: string, example: "Lodha Group" }
+ *               city:            { type: string, example: "Mumbai" }
+ *               locality:        { type: string }
+ *               address:         { type: string }
  *               configurations:
  *                 type: array
- *                 items:
- *                   type: string
+ *                 items: { type: string }
+ *                 example: ["1BHK", "2BHK", "3BHK"]
+ *               price_range:     { type: string, example: "90L - 2.2Cr" }
+ *               total_units:     { type: integer }
+ *               possession_date: { type: string, format: date }
+ *               rera_number:     { type: string }
  *               amenities:
  *                 type: array
+ *                 items: { type: string }
+ *                 example: ["Swimming Pool", "Gym", "Clubhouse"]
+ *               status:
+ *                 type: string
+ *                 enum: [active, upcoming, completed, inactive]
+ *               description:     { type: string }
+ *               brochure_url:    { type: string }
+ *               video_url:       { type: string }
+ *               payment_plan_url: { type: string }
+ *               home_loan_info:  { type: string }
+ *               unit_plans:
+ *                 type: array
+ *                 description: New unit plan documents to add
  *                 items:
- *                   type: string
- *               possession_date:
- *                 type: string
- *                 format: date
- *               brochure_url:
- *                 type: string
- *               video_url:
- *                 type: string
- *               payment_plan:
- *                 type: string
- *               home_loan_info:
- *                 type: string
- *               description:
- *                 type: string
+ *                   type: object
+ *                   properties:
+ *                     file_name: { type: string, example: "floorplan_2bhk.pdf" }
+ *                     file_path: { type: string, example: "/uploads/projects/floorplan_2bhk.pdf" }
+ *                     file_size: { type: integer, example: 204800 }
+ *                     mime_type: { type: string, example: "application/pdf" }
+ *               creatives:
+ *                 type: array
+ *                 description: New creative documents to add
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     file_name: { type: string, example: "floorplan_2bhk.pdf" }
+ *                     file_path: { type: string, example: "/uploads/projects/floorplan_2bhk.pdf" }
+ *                     file_size: { type: integer, example: 204800 }
+ *                     mime_type: { type: string, example: "application/pdf" }
+ *               payment_plans:
+ *                 type: array
+ *                 description: New payment plan documents to add
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     file_name: { type: string, example: "floorplan_2bhk.pdf" }
+ *                     file_path: { type: string, example: "/uploads/projects/floorplan_2bhk.pdf" }
+ *                     file_size: { type: integer, example: 204800 }
+ *                     mime_type: { type: string, example: "application/pdf" }
+ *               videos:
+ *                 type: array
+ *                 description: New video documents to add
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     file_name: { type: string, example: "floorplan_2bhk.pdf" }
+ *                     file_path: { type: string, example: "/uploads/projects/floorplan_2bhk.pdf" }
+ *                     file_size: { type: integer, example: 204800 }
+ *                     mime_type: { type: string, example: "application/pdf" }
  *           example:
+ *             name: "Skyline Heights"
+ *             developer: "Lodha Group"
+ *             city: "Mumbai"
+ *             locality: "Andheri West"
+ *             address: "Plot 14, Veera Desai Road"
+ *             configurations:
+ *               - "1BHK"
+ *               - "2BHK"
+ *               - "3BHK"
  *             price_range: "90L - 2.2Cr"
- *             configurations: ["2BHK", "3BHK", "4BHK"]
- *             amenities: ["Swimming Pool", "Gym", "Clubhouse", "Rooftop Garden"]
+ *             total_units: 240
+ *             possession_date: "2027-12-01"
+ *             rera_number: "P51800045678"
+ *             amenities:
+ *               - "Swimming Pool"
+ *               - "Gym"
+ *               - "Clubhouse"
+ *               - "Rooftop Garden"
+ *             status: "active"
+ *             description: "Premium residential project in the heart of Andheri West"
+ *             brochure_url: "/uploads/projects/brochure.pdf"
+ *             video_url: "https://youtube.com/watch?v=abc"
+ *             payment_plan_url: "/uploads/projects/payment_plan.pdf"
+ *             home_loan_info: "Available through HDFC, SBI, ICICI"
+ *             unit_plans:
+ *               - file_name: "3bhk_floorplan.pdf"
+ *                 file_path: "/uploads/projects/3bhk_floorplan.pdf"
+ *                 file_size: 204800
+ *                 mime_type: "application/pdf"
+ *             creatives:
+ *               - file_name: "project_banner.jpg"
+ *                 file_path: "/uploads/projects/project_banner.jpg"
+ *                 file_size: 512000
+ *                 mime_type: "image/jpeg"
+ *             payment_plans:
+ *               - file_name: "payment_plan_clp.pdf"
+ *                 file_path: "/uploads/projects/payment_plan_clp.pdf"
+ *                 file_size: 102400
+ *                 mime_type: "application/pdf"
+ *             videos:
+ *               - file_name: "project_walkthrough.mp4"
+ *                 file_path: "/uploads/projects/project_walkthrough.mp4"
+ *                 file_size: 10485760
+ *                 mime_type: "video/mp4"
  *     responses:
  *       200:
  *         description: Project updated successfully
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Project updated successfully"
+ *               data:
+ *                 project:
+ *                   id: "proj-uuid-001"
+ *                   name: "Skyline Heights"
+ *                   status: "active"
+ *                 documents:
+ *                   - id: "doc-uuid-001"
+ *                     document_type: "unit_plan"
+ *                     file_name: "3bhk_floorplan.pdf"
  *       403:
  *         description: Insufficient permissions
  *       404:
@@ -424,7 +572,7 @@ router.get("/:id/leads", authenticate, authorize("super_admin", "admin", "sales_
  *     description: >
  *       Sends a branded HTML email to one or more email addresses with:
  *         - Full project details (name, location, price, configs, RERA, possession, amenities)
- *         - Selected documents (or all if not specified) as a ZIP attachment
+ *         - All unit plans and creatives as a ZIP attachment (organised into Unit Plans / Creatives folders)
  *         - Optional personalised message from the sender
  *       The ZIP is built on-the-fly — no temp files stored.
  *     tags: [Projects]
@@ -461,25 +609,9 @@ router.get("/:id/leads", authenticate, authorize("super_admin", "admin", "sales_
  *                 type: string
  *                 description: Optional personalised note shown at top of the email
  *                 example: "Hi Suresh, please find the Skyline Heights project details as discussed."
- *               document_ids:
- *                 type: array
- *                 items:
- *                   type: string
- *                   format: uuid
- *                 description: Optional list of document IDs to include (single or multiple). If not provided, all documents are included.
- *                 example: ["doc-uuid-001", "doc-uuid-002"]
- *               fields:
- *                 type: array
- *                 items:
- *                   type: string
- *                   enum: [name, developer, location, address, price_range, configurations, total_units, possession_date, rera_number, status, description, amenities, video_url, payment_plan, home_loan_info]
- *                 description: Optional list of project fields to include in email. If not provided, all fields are included.
- *                 example: ["name", "price_range", "configurations"]
  *           example:
  *             emails: ["client@example.com", "partner@example.com"]
  *             message: "Hi, please find the project details as discussed."
- *             document_ids: ["doc-uuid-001", "doc-uuid-002"]
- *             fields: ["name", "price_range", "configurations"]
  *     responses:
  *       200:
  *         description: Project shared — email sent successfully
@@ -495,12 +627,10 @@ router.get("/:id/leads", authenticate, authorize("super_admin", "admin", "sales_
  *                 total_sent: 2
  *                 attached:
  *                   zip_name: "Skyline Heights_Documents.zip"
- *                   files: 2
- *                   document_ids: ["doc-uuid-001", "doc-uuid-002"]
- *                 fields: ["name", "price_range", "configurations"]
+ *                   files: 5
  *                 shared_by: "Rahul Sharma"
  *       400:
- *         description: Missing emails, invalid email format, or no valid documents found for provided IDs
+ *         description: Missing emails, invalid email format
  *       404:
  *         description: Project not found
  */
