@@ -913,3 +913,410 @@ Object.assign(module.exports, {
   getAppraisalHistory,
   getUserSalarySummary,
 })
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+// APPRAISAL APIs
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ─── CREATE APPRAISAL (Admin) ─────────────────────────────────────────────────
+/**
+ * POST /api/v1/salary/appraisal
+ * Creates a formal appraisal record AND updates the employee's salary.
+ *
+ * Body: { user_id, new_salary, effective_from?, appraisal_note?, working_days_in_month? }
+ *
+ * Flow:
+ *  1. Fetch employee's current salary
+ *  2. Save new salary in employee_salaries
+ *  3. Save appraisal record in employee_appraisals with delta calculations
+ *  4. Push notification to employee + admins
+ */
+const createAppraisal = async (req, res, next) => {
+  try {
+    const {
+      user_id,
+      new_salary,
+      working_days_in_month,
+      effective_from,
+      appraisal_note,
+    } = req.body
+
+    if (!user_id)    return next(new AppError('user_id is required', 400))
+    if (!new_salary) return next(new AppError('new_salary is required', 400))
+
+    const newSalary = parseFloat(new_salary)
+    if (isNaN(newSalary) || newSalary < 0)
+      return next(new AppError('new_salary must be a non-negative number', 400))
+
+    const userChk = await pool.query(
+      `SELECT id, CONCAT(first_name,' ',last_name) AS full_name, role, email
+       FROM users WHERE id = $1 AND is_active = true`,
+      [user_id]
+    )
+    if (!userChk.rows.length) return next(new AppError('Employee not found', 404))
+
+    const wdMonth   = parseInt(working_days_in_month) || 26
+    const perDay    = parseFloat((newSalary / wdMonth).toFixed(2))
+    const fromDate  = effective_from || new Date().toISOString().split('T')[0]
+
+    // Fetch current/previous salary
+    const prevSalaryRow = await getActiveSalary(user_id)
+    const prevAmount    = prevSalaryRow ? parseFloat(prevSalaryRow.monthly_salary) : null
+
+    // Insert new salary record
+    const salaryResult = await pool.query(
+      `INSERT INTO employee_salaries (user_id, monthly_salary, per_day_salary, effective_from, set_by, notes)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [user_id, newSalary, perDay, fromDate, req.user.id, appraisal_note || null]
+    )
+
+    // Calculate delta
+    const incrementAmount  = prevAmount != null ? parseFloat((newSalary - prevAmount).toFixed(2)) : null
+    const incrementPercent = prevAmount != null && prevAmount > 0
+      ? parseFloat(((incrementAmount / prevAmount) * 100).toFixed(2))
+      : null
+
+    // Save appraisal record
+    const appraisalResult = await pool.query(
+      `INSERT INTO employee_appraisals
+         (user_id, from_salary, to_salary, increment_amount, increment_percent,
+          effective_from, appraisal_note, appraised_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [
+        user_id,
+        prevAmount,
+        newSalary,
+        incrementAmount,
+        incrementPercent,
+        fromDate,
+        appraisal_note || null,
+        req.user.id,
+      ]
+    )
+
+    // Push notifications
+    setImmediate(async () => {
+      try {
+        const newSalStr  = `₹${Number(newSalary).toLocaleString('en-IN')}/month`
+        const hikeStr    = incrementPercent != null
+          ? ` (${incrementPercent > 0 ? '+' : ''}${incrementPercent}% hike)`
+          : ''
+
+        await createNotification(user_id, {
+          type:           'general',
+          title:          'Your Appraisal Has Been Processed',
+          message:        `Your new salary is ${newSalStr}${hikeStr}, effective ${fromDate}`,
+          reference_id:   appraisalResult.rows[0].id,
+          reference_type: 'appraisal',
+          metadata:       { new_salary: newSalary, from_salary: prevAmount, increment_percent: incrementPercent },
+        })
+
+        await notifyAdmins({
+          type:           'general',
+          title:          'Employee Appraisal Processed',
+          message:        `${userChk.rows[0].full_name} appraised to ${newSalStr}${hikeStr}`,
+          reference_id:   appraisalResult.rows[0].id,
+          reference_type: 'appraisal',
+          metadata:       { user_id, new_salary: newSalary, from_salary: prevAmount },
+        })
+      } catch (e) {
+        console.error('[Notification] createAppraisal failed:', e.message)
+      }
+    })
+
+    const monthName = new Date(fromDate).toLocaleString('en-IN', { month: 'long', year: 'numeric' })
+
+    return sendSuccess(res, `Appraisal processed for ${userChk.rows[0].full_name}`, {
+      appraisal: {
+        ...appraisalResult.rows[0],
+        from_salary:       prevAmount,
+        to_salary:         newSalary,
+        increment_amount:  incrementAmount,
+        increment_percent: incrementPercent,
+      },
+      salary: {
+        ...salaryResult.rows[0],
+        monthly_salary: newSalary,
+        per_day_salary: perDay,
+        effective_from: fromDate,
+      },
+      employee: userChk.rows[0],
+      summary: {
+        previous_salary:   prevAmount ? `₹${Number(prevAmount).toLocaleString('en-IN')}` : 'Not set',
+        new_salary:        `₹${Number(newSalary).toLocaleString('en-IN')}`,
+        increment_amount:  incrementAmount  != null ? `₹${Number(incrementAmount).toLocaleString('en-IN')}` : null,
+        increment_percent: incrementPercent != null ? `${incrementPercent}%` : null,
+        effective_from:    fromDate,
+        month_label:       monthName,
+      },
+    }, 201)
+  } catch (err) { next(err) }
+}
+
+// ─── UPDATE APPRAISAL (Admin) ─────────────────────────────────────────────────
+/**
+ * PUT /api/v1/salary/appraisal/:id
+ * Update appraisal note or effective_from on an existing appraisal.
+ * Does NOT change salary values — those are immutable once set.
+ */
+const updateAppraisal = async (req, res, next) => {
+  try {
+    const { id } = req.params
+    const { appraisal_note, effective_from } = req.body
+
+    const existing = await pool.query(
+      `SELECT ea.*, CONCAT(u.first_name,' ',u.last_name) AS employee_name
+       FROM employee_appraisals ea JOIN users u ON u.id = ea.user_id WHERE ea.id = $1`,
+      [id]
+    )
+    if (!existing.rows.length) return next(new AppError('Appraisal record not found', 404))
+
+    const updates = []; const params = []; let idx = 1
+    if (appraisal_note !== undefined) { updates.push(`appraisal_note = $${idx++}`); params.push(appraisal_note) }
+    if (effective_from !== undefined) { updates.push(`effective_from = $${idx++}`); params.push(effective_from) }
+    if (!updates.length) return next(new AppError('Nothing to update. Provide appraisal_note or effective_from', 400))
+
+    updates.push(`updated_at = NOW()`)
+    params.push(id)
+
+    const result = await pool.query(
+      `UPDATE employee_appraisals SET ${updates.join(', ')} WHERE id = $${idx} RETURNING *`,
+      params
+    )
+
+    return sendSuccess(res, 'Appraisal updated', {
+      appraisal:     result.rows[0],
+      employee_name: existing.rows[0].employee_name,
+    })
+  } catch (err) { next(err) }
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// BONUS APIs
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ─── ADD BONUS (Admin) ────────────────────────────────────────────────────────
+/**
+ * POST /api/v1/salary/bonus
+ * Body: { user_id, amount, bonus_type?, month?, year?, reason?, paid? }
+ */
+const addBonus = async (req, res, next) => {
+  try {
+    const { user_id, amount, bonus_type, month, year, reason, paid, paid_date } = req.body
+
+    if (!user_id || amount == null)
+      return next(new AppError('user_id and amount are required', 400))
+
+    const parsedAmount = parseFloat(amount)
+    if (isNaN(parsedAmount) || parsedAmount <= 0)
+      return next(new AppError('amount must be a positive number', 400))
+
+    const userChk = await pool.query(
+      `SELECT id, CONCAT(first_name,' ',last_name) AS full_name, role
+       FROM users WHERE id = $1 AND is_active = true`,
+      [user_id]
+    )
+    if (!userChk.rows.length) return next(new AppError('Employee not found', 404))
+
+    const VALID_TYPES = ['diwali', 'annual', 'performance', 'spot_award', 'joining', 'referral', 'general']
+    const finalType   = bonus_type && VALID_TYPES.includes(bonus_type) ? bonus_type : 'general'
+
+    const m = month ? parseInt(month) : null
+    const y = year  ? parseInt(year)  : null
+    if (m && (m < 1 || m > 12)) return next(new AppError('month must be between 1 and 12', 400))
+
+    const result = await pool.query(
+      `INSERT INTO employee_bonus
+         (user_id, amount, bonus_type, month, year, reason, paid, paid_date, given_by)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING *`,
+      [user_id, parsedAmount, finalType, m, y, reason || null, paid || false, paid_date || null, req.user.id]
+    )
+
+    // Push notification to employee
+    setImmediate(async () => {
+      try {
+        const amtStr    = `₹${Number(parsedAmount).toLocaleString('en-IN')}`
+        const typeLabel = finalType.charAt(0).toUpperCase() + finalType.slice(1).replace('_', ' ')
+        await createNotification(user_id, {
+          type:           'general',
+          title:          `${typeLabel} Bonus Added`,
+          message:        `A ${typeLabel.toLowerCase()} bonus of ${amtStr} has been added to your account${reason ? ` — ${reason}` : ''}`,
+          reference_id:   result.rows[0].id,
+          reference_type: 'bonus',
+          metadata:       { amount: parsedAmount, bonus_type: finalType, paid: paid || false },
+        })
+        await notifyAdmins({
+          type:           'general',
+          title:          `Bonus Added — ${userChk.rows[0].full_name}`,
+          message:        `${typeLabel} bonus of ${amtStr} added for ${userChk.rows[0].full_name}`,
+          reference_id:   result.rows[0].id,
+          reference_type: 'bonus',
+          metadata:       { user_id, amount: parsedAmount, bonus_type: finalType },
+        })
+      } catch (e) { console.error('[Notification] addBonus failed:', e.message) }
+    })
+
+    const monthName = m && y
+      ? new Date(y, m - 1).toLocaleString('en-IN', { month: 'long', year: 'numeric' })
+      : null
+
+    return sendSuccess(res, `Bonus of ₹${parsedAmount} added for ${userChk.rows[0].full_name}`, {
+      bonus:      result.rows[0],
+      employee:   userChk.rows[0],
+      month_label: monthName,
+    }, 201)
+  } catch (err) { next(err) }
+}
+
+// ─── GET BONUSES (Admin, filterable) ─────────────────────────────────────────
+/**
+ * GET /api/v1/salary/bonuses
+ * Query: { user_id?, bonus_type?, month?, year?, paid?, page?, per_page? }
+ */
+const getBonuses = async (req, res, next) => {
+  try {
+    const { user_id, bonus_type, month, year, paid, page = 1, per_page = 20 } = req.query
+    const offset = (parseInt(page) - 1) * parseInt(per_page)
+    const conds = []; const params = []; let idx = 1
+
+    if (user_id)    { conds.push(`eb.user_id = $${idx++}`);     params.push(user_id) }
+    if (bonus_type) { conds.push(`eb.bonus_type = $${idx++}`);  params.push(bonus_type) }
+    if (month)      { conds.push(`eb.month = $${idx++}`);       params.push(parseInt(month)) }
+    if (year)       { conds.push(`eb.year = $${idx++}`);        params.push(parseInt(year)) }
+    if (paid !== undefined && paid !== '') {
+      conds.push(`eb.paid = $${idx++}`); params.push(paid === 'true')
+    }
+
+    const where = conds.length ? `WHERE ${conds.join(' AND ')}` : ''
+    const [cnt, data] = await Promise.all([
+      pool.query(`SELECT COUNT(*) FROM employee_bonus eb ${where}`, params),
+      pool.query(
+        `SELECT eb.*,
+                CONCAT(u.first_name,' ',u.last_name)  AS employee_name, u.role AS employee_role,
+                CONCAT(g.first_name,' ',g.last_name)  AS given_by_name
+         FROM employee_bonus eb
+         JOIN users u  ON u.id = eb.user_id
+         LEFT JOIN users g ON g.id = eb.given_by
+         ${where}
+         ORDER BY eb.created_at DESC
+         LIMIT $${idx++} OFFSET $${idx++}`,
+        [...params, parseInt(per_page), offset]
+      ),
+    ])
+
+    const total = parseInt(cnt.rows[0].count)
+    return sendSuccess(res, 'Bonuses fetched', {
+      data: data.rows.map(r => ({ ...r, amount: parseFloat(r.amount) })),
+      pagination: {
+        total, page: parseInt(page), per_page: parseInt(per_page),
+        total_pages: Math.ceil(total / parseInt(per_page)),
+      },
+    })
+  } catch (err) { next(err) }
+}
+
+// ─── GET MY BONUSES (Employee) ────────────────────────────────────────────────
+const getMyBonuses = async (req, res, next) => {
+  try {
+    const userId = req.user.id
+    const result = await pool.query(
+      `SELECT eb.*, CONCAT(g.first_name,' ',g.last_name) AS given_by_name
+       FROM employee_bonus eb
+       LEFT JOIN users g ON g.id = eb.given_by
+       WHERE eb.user_id = $1
+       ORDER BY eb.created_at DESC`,
+      [userId]
+    )
+    const total = result.rows.reduce((sum, r) => sum + parseFloat(r.amount), 0)
+    return sendSuccess(res, 'Your bonuses fetched', {
+      total_bonus_amount: parseFloat(total.toFixed(2)),
+      total_count:        result.rows.length,
+      bonuses:            result.rows.map(r => ({ ...r, amount: parseFloat(r.amount) })),
+    })
+  } catch (err) { next(err) }
+}
+
+// ─── UPDATE BONUS — mark as paid (Admin) ─────────────────────────────────────
+/**
+ * PATCH /api/v1/salary/bonus/:id
+ * Body: { paid, paid_date?, reason? }
+ */
+const updateBonus = async (req, res, next) => {
+  try {
+    const { id } = req.params
+    const { paid, paid_date, reason, amount, bonus_type } = req.body
+
+    const existing = await pool.query(
+      `SELECT eb.*, CONCAT(u.first_name,' ',u.last_name) AS employee_name
+       FROM employee_bonus eb JOIN users u ON u.id = eb.user_id WHERE eb.id = $1`,
+      [id]
+    )
+    if (!existing.rows.length) return next(new AppError('Bonus record not found', 404))
+
+    const updates = []; const params = []; let idx = 1
+    if (paid      !== undefined) { updates.push(`paid = $${idx++}`);       params.push(paid) }
+    if (paid_date !== undefined) { updates.push(`paid_date = $${idx++}`);  params.push(paid_date) }
+    if (reason    !== undefined) { updates.push(`reason = $${idx++}`);     params.push(reason) }
+    if (amount    !== undefined) { updates.push(`amount = $${idx++}`);     params.push(parseFloat(amount)) }
+    if (bonus_type!== undefined) { updates.push(`bonus_type = $${idx++}`); params.push(bonus_type) }
+
+    if (!updates.length) return next(new AppError('Nothing to update', 400))
+    updates.push(`updated_at = NOW()`)
+    params.push(id)
+
+    const result = await pool.query(
+      `UPDATE employee_bonus SET ${updates.join(', ')} WHERE id = $${idx} RETURNING *`,
+      params
+    )
+
+    // Notify employee if bonus marked as paid
+    if (paid === true && !existing.rows[0].paid) {
+      setImmediate(async () => {
+        try {
+          const amtStr = `₹${Number(parseFloat(existing.rows[0].amount)).toLocaleString('en-IN')}`
+          await createNotification(existing.rows[0].user_id, {
+            type:           'general',
+            title:          'Bonus Disbursed',
+            message:        `Your bonus of ${amtStr} has been disbursed`,
+            reference_id:   id,
+            reference_type: 'bonus',
+            metadata:       { amount: existing.rows[0].amount, paid: true },
+          })
+        } catch (e) { console.error('[Notification] updateBonus failed:', e.message) }
+      })
+    }
+
+    return sendSuccess(res, 'Bonus updated', {
+      bonus:         result.rows[0],
+      employee_name: existing.rows[0].employee_name,
+    })
+  } catch (err) { next(err) }
+}
+
+// ─── DELETE BONUS (Admin) ─────────────────────────────────────────────────────
+const deleteBonus = async (req, res, next) => {
+  try {
+    const { id } = req.params
+    const check = await pool.query(
+      `SELECT eb.*, CONCAT(u.first_name,' ',u.last_name) AS employee_name
+       FROM employee_bonus eb JOIN users u ON u.id = eb.user_id WHERE eb.id = $1`,
+      [id]
+    )
+    if (!check.rows.length) return next(new AppError('Bonus record not found', 404))
+    await pool.query('DELETE FROM employee_bonus WHERE id = $1', [id])
+    return sendSuccess(res, 'Bonus deleted', { deleted: check.rows[0] })
+  } catch (err) { next(err) }
+}
+
+Object.assign(module.exports, {
+  createAppraisal,
+  updateAppraisal,
+  addBonus,
+  getBonuses,
+  getMyBonuses,
+  updateBonus,
+  deleteBonus,
+})
