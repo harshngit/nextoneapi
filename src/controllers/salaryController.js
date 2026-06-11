@@ -573,6 +573,34 @@ const getSalaryHistory = async (req, res, next) => {
   } catch (err) { next(err) }
 }
 
+// ─── 8. MY SALARY HISTORY (Employee) ──────────────────────────────────────────
+/**
+ * GET /api/v1/salary/my-salary-history
+ * Returns the salary history for the logged-in employee
+ */
+const getMySalaryHistory = async (req, res, next) => {
+  try {
+    const userId = req.user.id
+
+    const history = await pool.query(
+      `SELECT es.*, CONCAT(u.first_name,' ',u.last_name) AS set_by_name
+       FROM employee_salaries es
+       LEFT JOIN users u ON u.id = es.set_by
+       WHERE es.user_id = $1
+       ORDER BY es.effective_from DESC, es.created_at DESC`,
+      [userId]
+    )
+
+    return sendSuccess(res, 'Your salary history fetched', {
+      history: history.rows.map(r => ({
+        ...r,
+        monthly_salary: parseFloat(r.monthly_salary),
+        per_day_salary: r.per_day_salary ? parseFloat(r.per_day_salary) : null,
+      })),
+    })
+  } catch (err) { next(err) }
+}
+
 // ─── 8. BULK GENERATE — Generate slips for ALL employees for a month ─────────
 /**
  * POST /api/v1/salary/generate-all
@@ -718,6 +746,7 @@ module.exports = {
   getMySalary,
   getSlipById,
   getSalaryHistory,
+  getMySalaryHistory,
 }
 
 // ─── GET APPRAISAL HISTORY ────────────────────────────────────────────────────

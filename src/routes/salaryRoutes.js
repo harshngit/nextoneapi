@@ -535,6 +535,40 @@ router.get('/slips/:id', authenticate, ctrl.getSlipById);
  */
 router.get('/my-salary', authenticate, ctrl.getMySalary);
 
+/**
+ * @swagger
+ * /api/v1/salary/my-salary-history:
+ *   get:
+ *     summary: Get my salary history (Employee)
+ *     description: Returns all salary records for the logged-in employee, ordered by effective date (newest first)
+ *     tags: [Salary]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Employee's salary history
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Your salary history fetched"
+ *               data:
+ *                 history:
+ *                   - id: "salary-uuid-001"
+ *                     monthly_salary: 40000
+ *                     per_day_salary: 1538.46
+ *                     effective_from: "2026-06-01"
+ *                     set_by_name: "Admin"
+ *                     created_at: "2026-06-01T10:00:00Z"
+ *                   - id: "salary-uuid-002"
+ *                     monthly_salary: 35000
+ *                     per_day_salary: 1346.15
+ *                     effective_from: "2026-01-01"
+ *                     set_by_name: "Admin"
+ *                     created_at: "2026-01-01T10:00:00Z"
+ */
+router.get('/my-salary-history', authenticate, ctrl.getMySalaryHistory);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // APPRAISAL APIs
 // ─────────────────────────────────────────────────────────────────────────────
