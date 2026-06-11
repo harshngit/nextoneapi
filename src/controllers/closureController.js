@@ -50,13 +50,11 @@ const getAllClosures = async (req, res, next) => {
       `SELECT lc.*,
               l.name  AS lead_name,  l.phone AS lead_phone,  l.email AS lead_email,
               p.name  AS project_name, p.city AS project_city,
-              CONCAT(cb.first_name,' ',cb.last_name) AS closed_by_name,
-              CONCAT(cm.first_name,' ',cm.last_name) AS closed_by_manager_name
+              CONCAT(cb.first_name,' ',cb.last_name) AS closed_by_name
        FROM lead_closures lc
        LEFT JOIN leads    l  ON l.id  = lc.lead_id
        LEFT JOIN projects p  ON p.id  = lc.project_id
        LEFT JOIN users    cb ON cb.id = lc.closed_by
-       LEFT JOIN users    cm ON cm.id = lc.closed_by_manager
        ${where}
        ORDER BY lc.booking_date DESC
        LIMIT $${idx++} OFFSET $${idx++}`,
@@ -448,7 +446,7 @@ const getClosureSummary = async (req, res, next) => {
     if (role === 'sales_executive') {
       conditions.push(`lc.closed_by = $${idx++}`); params.push(callerId);
     } else if (role === 'sales_manager') {
-      conditions.push(`lc.closed_by_manager = $${idx++}`); params.push(callerId);
+      conditions.push(`$${idx++} = ANY(lc.closed_by_manager)`); params.push(callerId);
     }
     if (from)       { conditions.push(`lc.booking_date >= $${idx++}`); params.push(from); }
     if (to)         { conditions.push(`lc.booking_date <= $${idx++}`); params.push(to); }
