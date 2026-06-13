@@ -485,11 +485,21 @@ const getMyPermissions = async (req, res, next) => {
     }
 
     // 2. Apply per-user overrides on top
-    const overrides = await pool.query(
-      "SELECT module, permission_key, value FROM user_permission_overrides WHERE user_id = $1",
-      [userId]
-    );
-    for (const o of overrides.rows) {
+    // Wrapped in try/catch so a missing table (migration not run yet)
+    // doesn't crash the login flow — just skips overrides gracefully.
+    let overrideRows = [];
+    try {
+      const overrides = await pool.query(
+        "SELECT module, permission_key, value FROM user_permission_overrides WHERE user_id = $1",
+        [userId]
+      );
+      overrideRows = overrides.rows;
+    } catch (overrideErr) {
+      // Table doesn't exist yet — proceed without overrides
+      console.warn("[Permissions] user_permission_overrides table not found — run migration 033. Continuing without overrides.");
+    }
+
+    for (const o of overrideRows) {
       if (effective[o.module]) {
         effective[o.module][o.permission_key] = o.value;
       }
@@ -500,7 +510,7 @@ const getMyPermissions = async (req, res, next) => {
       permissions: effective,
       modules: MODULES,
       permission_keys: PERMISSION_KEYS,
-      has_overrides: overrides.rows.length > 0,
+      has_overrides: overrideRows.length > 0,
     });
   } catch (err) {
     next(err);
@@ -909,18 +919,24 @@ const getUserOverrides = async (req, res, next) => {
     );
     if (!userChk.rows.length) return next(new AppError("User not found", 404));
 
-    const result = await pool.query(
-      `SELECT upo.*, CONCAT(s.first_name,' ',s.last_name) AS set_by_name
-       FROM user_permission_overrides upo
-       LEFT JOIN users s ON s.id = upo.set_by
-       WHERE upo.user_id = $1
-       ORDER BY upo.module, upo.permission_key`,
-      [id]
-    );
+    let overrideRows = [];
+    try {
+      const result = await pool.query(
+        `SELECT upo.*, CONCAT(s.first_name,' ',s.last_name) AS set_by_name
+         FROM user_permission_overrides upo
+         LEFT JOIN users s ON s.id = upo.set_by
+         WHERE upo.user_id = $1
+         ORDER BY upo.module, upo.permission_key`,
+        [id]
+      );
+      overrideRows = result.rows;
+    } catch (tableErr) {
+      console.warn("[Permissions] user_permission_overrides table not found — run migration 033.");
+    }
 
     return sendSuccess(res, "Permission overrides fetched", {
-      user: userChk.rows[0],
-      overrides: result.rows,
+      user:      userChk.rows[0],
+      overrides: overrideRows,
     });
   } catch (err) {
     next(err);
