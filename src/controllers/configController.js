@@ -65,9 +65,28 @@ const getRoles = async (req, res, next) => {
        ORDER BY array_position($1::varchar[], role)`,
       [CONFIGURABLE_ROLES]
     );
+
+    // Build full-access matrix for super_admin — it is never stored in DB,
+    // always has full access to everything, and cannot be edited.
+    const superAdminPerms = {};
+    for (const m of MODULES) {
+      superAdminPerms[m] = Object.fromEntries(PERMISSION_KEYS.map(k => [k, true]));
+    }
+    const superAdminRow = {
+      role:         "super_admin",
+      display_name: "Super Admin",
+      permissions:  superAdminPerms,
+      updated_at:   null,
+      editable:     false,
+    };
+
+    // All configurable roles from DB get editable: true
+    const configurableRows = result.rows.map(r => ({ ...r, editable: true }));
+
     return sendSuccess(res, "Roles and permissions fetched", {
-      roles:   result.rows,
-      modules: MODULES,
+      // super_admin always first, then configurable roles in order
+      roles:           [superAdminRow, ...configurableRows],
+      modules:         MODULES,
       permission_keys: PERMISSION_KEYS,
     });
   } catch (err) {
@@ -135,29 +154,33 @@ const updateRolePermissions = async (req, res, next) => {
       return next(new AppError("permissions object is required", 400));
     }
 
-    // Validate permission structure
+    // Strip unknown modules (e.g. old "tasks", "reports") and unknown keys silently.
+    // This prevents errors when the DB row still contains legacy module names from
+    // older migrations — we simply ignore them and save only valid entries.
+    const cleanPermissions = {};
     for (const [module, perms] of Object.entries(permissions)) {
-      if (!MODULES.includes(module)) {
-        return next(new AppError(`Invalid module: ${module}. Valid: ${MODULES.join(", ")}`, 400));
-      }
-      for (const key of Object.keys(perms)) {
-        if (!PERMISSION_KEYS.includes(key)) {
-          return next(new AppError(`Invalid permission key: ${key}. Valid: ${PERMISSION_KEYS.join(", ")}`, 400));
+      if (!MODULES.includes(module)) continue;            // skip old modules silently
+      cleanPermissions[module] = {};
+      for (const [key, val] of Object.entries(perms)) {
+        if (!PERMISSION_KEYS.includes(key)) continue;     // skip old keys silently
+        if (typeof val !== "boolean") {
+          return next(new AppError(`Permission value for ${module}.${key} must be boolean`, 400));
         }
-        if (typeof perms[key] !== "boolean") {
-          return next(new AppError(`Permission values must be boolean`, 400));
-        }
+        cleanPermissions[module][key] = val;
       }
     }
 
-    // Fetch existing to preserve unmodified modules AND unmodified keys within a module
+    // Fetch existing row and strip any legacy module keys from the stored JSONB
     const existing = await pool.query("SELECT permissions FROM role_permissions WHERE role = $1", [role]);
-    const currentPerms = existing.rows.length > 0 ? existing.rows[0].permissions : {};
+    const rawPerms  = existing.rows.length > 0 ? existing.rows[0].permissions : {};
+    const currentPerms = {};
+    for (const [m, v] of Object.entries(rawPerms)) {
+      if (MODULES.includes(m)) currentPerms[m] = v;       // drop legacy modules
+    }
 
-    // Deep merge: only the modules/keys present in the request body are overwritten;
-    // everything else in the existing matrix is preserved untouched.
+    // Deep merge — only the valid modules/keys sent in the request are overwritten
     const mergedPerms = { ...currentPerms };
-    for (const [module, perms] of Object.entries(permissions)) {
+    for (const [module, perms] of Object.entries(cleanPermissions)) {
       mergedPerms[module] = { ...(mergedPerms[module] || {}), ...perms };
     }
 
@@ -856,9 +879,7 @@ const setUserOverrides = async (req, res, next) => {
     }
 
     for (const o of overrides) {
-      if (!MODULES.includes(o.module)) {
-        return next(new AppError(`Invalid module: ${o.module}`, 400));
-      }
+      if (!MODULES.includes(o.module)) continue; // skip legacy modules silently
       if (!PERMISSION_KEYS.includes(o.permission_key)) {
         return next(new AppError(`Invalid permission key: ${o.permission_key}`, 400));
       }
@@ -869,6 +890,8 @@ const setUserOverrides = async (req, res, next) => {
 
     await client.query("BEGIN");
     for (const o of overrides) {
+      if (!MODULES.includes(o.module)) continue;       // skip legacy modules
+      if (!PERMISSION_KEYS.includes(o.permission_key)) continue; // skip legacy keys
       if (o.value === null) {
         await client.query(
           `DELETE FROM user_permission_overrides
