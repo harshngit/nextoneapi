@@ -80,8 +80,43 @@ const getRoles = async (req, res, next) => {
       editable:     false,
     };
 
-    // All configurable roles from DB get editable: true
-    const configurableRows = result.rows.map(r => ({ ...r, editable: true }));
+    // All configurable roles from DB — clean each row
+    const configurableRows = result.rows.map(r => {
+      const cleanPerms = {};
+      for (const [m, v] of Object.entries(r.permissions || {})) {
+        if (MODULES.includes(m)) cleanPerms[m] = v;  // strip legacy modules
+      }
+      for (const m of MODULES) {
+        if (!cleanPerms[m]) {
+          cleanPerms[m] = Object.fromEntries(PERMISSION_KEYS.map(k => [k, false]));
+        }
+      }
+      return { ...r, permissions: cleanPerms, editable: true };
+    });
+
+    // For roles that have NO row in DB yet, add an all-false placeholder
+    const rolesInDb = new Set(result.rows.map(r => r.role));
+    for (const role of CONFIGURABLE_ROLES) {
+      if (!rolesInDb.has(role)) {
+        const defaultPerms = {};
+        for (const m of MODULES) {
+          defaultPerms[m] = Object.fromEntries(PERMISSION_KEYS.map(k => [k, false]));
+        }
+        const displayName = role.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+        configurableRows.push({
+          role,
+          display_name: displayName,
+          permissions:  defaultPerms,
+          updated_at:   null,
+          editable:     true,
+        });
+      }
+    }
+
+    // Sort to match CONFIGURABLE_ROLES order
+    configurableRows.sort((a, b) =>
+      CONFIGURABLE_ROLES.indexOf(a.role) - CONFIGURABLE_ROLES.indexOf(b.role)
+    );
 
     return sendSuccess(res, "Roles and permissions fetched", {
       // super_admin always first, then configurable roles in order
@@ -124,10 +159,47 @@ const getRolePermissions = async (req, res, next) => {
       "SELECT role, display_name, permissions, updated_at FROM role_permissions WHERE role = $1",
       [role]
     );
+
+    // If no row exists yet for this role, auto-create an all-false default matrix
+    // and insert it so subsequent calls have a row to update
     if (!result.rows.length) {
-      return next(new AppError(`No permissions configured yet for role: ${role}`, 404));
+      const defaultPerms = {};
+      for (const m of MODULES) {
+        defaultPerms[m] = Object.fromEntries(PERMISSION_KEYS.map(k => [k, false]));
+      }
+      const displayName = role.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+      await pool.query(
+        `INSERT INTO role_permissions (role, display_name, permissions)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (role) DO NOTHING`,
+        [role, displayName, JSON.stringify(defaultPerms)]
+      );
+      return sendSuccess(res, `Permissions for ${role}`, {
+        role,
+        display_name: displayName,
+        permissions:  defaultPerms,
+        updated_at:   null,
+        editable:     true,
+      });
     }
-    return sendSuccess(res, `Permissions for ${role}`, { ...result.rows[0], editable: true });
+
+    // Strip legacy modules (tasks, reports) from stored permissions before returning
+    const cleanPerms = {};
+    for (const [m, v] of Object.entries(result.rows[0].permissions)) {
+      if (MODULES.includes(m)) cleanPerms[m] = v;
+    }
+    // Fill in any missing modules with all-false defaults
+    for (const m of MODULES) {
+      if (!cleanPerms[m]) {
+        cleanPerms[m] = Object.fromEntries(PERMISSION_KEYS.map(k => [k, false]));
+      }
+    }
+
+    return sendSuccess(res, `Permissions for ${role}`, {
+      ...result.rows[0],
+      permissions: cleanPerms,
+      editable: true,
+    });
   } catch (err) {
     next(err);
   }
