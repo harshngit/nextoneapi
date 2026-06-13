@@ -410,16 +410,233 @@ router.delete("/lead-statuses/:id", authenticate, authorize(...ADMIN), ctrl.dele
 router.patch("/lead-statuses/reorder", authenticate, authorize(...ADMIN), ctrl.reorderLeadStatuses);
 
 // ═════════════════════════════════════════════════════════════════════════════
-// ROLES & PERMISSIONS
+// ROLES & PERMISSIONS — Access Control
 // ═════════════════════════════════════════════════════════════════════════════
 
-router.get("/roles",        authenticate, authorize(...ADMIN), ctrl.getRoles);
+/**
+ * @swagger
+ * /api/v1/config/roles:
+ *   get:
+ *     summary: Get permission matrix for all configurable roles (Admin)
+ *     description: >
+ *       Returns the full permissions JSONB for all 12 configurable roles
+ *       (everything except super_admin, which always has full access and
+ *       is never stored here). Use this to render the Access Control grid:
+ *       12 roles x 13 modules x 6 permission keys.
+ *     tags: [Access Control]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Permission matrix for all roles
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Roles and permissions fetched"
+ *               data:
+ *                 modules: ["dashboard","leads","projects","site_visits","revisits","closures","follow_ups","attendance","salary","team","users","phone_requests","notifications"]
+ *                 permission_keys: ["view","create","edit","delete","approve","export"]
+ *                 roles:
+ *                   - role: "admin"
+ *                     display_name: "Admin"
+ *                     permissions:
+ *                       leads: { view: true, create: true, edit: true, delete: true, approve: false, export: true }
+ *                       salary: { view: true, create: true, edit: true, delete: true, approve: true, export: true }
+ *                     updated_at: "2026-06-14T10:00:00Z"
+ *                   - role: "sales_manager"
+ *                     display_name: "Sales Manager"
+ *                     permissions:
+ *                       leads: { view: true, create: true, edit: true, delete: false, approve: false, export: true }
+ */
+router.get("/roles", authenticate, authorize(...ADMIN), ctrl.getRoles);
+
+/**
+ * @swagger
+ * /api/v1/config/roles/{role}:
+ *   get:
+ *     summary: Get permission matrix for a single role (Admin)
+ *     description: >
+ *       Returns the permission matrix for one role — used to populate the
+ *       single-role edit panel. Pass role=super_admin to get a read-only
+ *       synthetic full-access matrix (editable: false).
+ *     tags: [Access Control]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: role
+ *         required: true
+ *         schema:
+ *           type: string
+ *           enum: [admin, sales_manager, sales_executive, external_caller, associate, associate_partner, partner, team_leader, cluster, cluster_head, digital_marketing, hr_admin, super_admin]
+ *         example: sales_manager
+ *     responses:
+ *       200:
+ *         description: Permission matrix for the role
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Permissions for sales_manager"
+ *               data:
+ *                 role: "sales_manager"
+ *                 display_name: "Sales Manager"
+ *                 editable: true
+ *                 permissions:
+ *                   dashboard:  { view: true,  create: false, edit: false, delete: false, approve: false, export: true }
+ *                   leads:      { view: true,  create: true,  edit: true,  delete: false, approve: false, export: true }
+ *                   salary:     { view: false, create: false, edit: false, delete: false, approve: false, export: false }
+ *                 updated_at: "2026-06-14T10:00:00Z"
+ *       400:
+ *         description: Invalid role
+ *       404:
+ *         description: Role not yet configured
+ *   put:
+ *     summary: Update permission matrix for a role (Admin)
+ *     description: >
+ *       Updates one or more modules' permissions for a role. Only the
+ *       modules/keys included in the request body are changed — everything
+ *       else in the existing matrix is preserved (deep merge per module).
+ *
+ *       Only Super Admin can update the 'admin' role's permissions.
+ *       Changes take effect immediately on the next request — the
+ *       permission cache is refreshed automatically, no restart needed.
+ *     tags: [Access Control]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: role
+ *         required: true
+ *         schema:
+ *           type: string
+ *           enum: [admin, sales_manager, sales_executive, external_caller, associate, associate_partner, partner, team_leader, cluster, cluster_head, digital_marketing, hr_admin]
+ *         example: sales_manager
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [permissions]
+ *             properties:
+ *               permissions:
+ *                 type: object
+ *                 description: Keyed by module. Only included modules/keys are changed.
+ *                 additionalProperties:
+ *                   type: object
+ *                   properties:
+ *                     view:    { type: boolean }
+ *                     create:  { type: boolean }
+ *                     edit:    { type: boolean }
+ *                     delete:  { type: boolean }
+ *                     approve: { type: boolean }
+ *                     export:  { type: boolean }
+ *           example:
+ *             permissions:
+ *               leads:
+ *                 view: true
+ *                 create: true
+ *                 edit: true
+ *                 delete: false
+ *               salary:
+ *                 view: true
+ *                 export: true
+ *     responses:
+ *       200:
+ *         description: Permissions updated and cache refreshed
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Permissions updated for sales_manager"
+ *               data:
+ *                 role: "sales_manager"
+ *                 display_name: "Sales Manager"
+ *                 permissions:
+ *                   leads: { view: true, create: true, edit: true, delete: false, approve: false, export: true }
+ *                   salary: { view: true, create: false, edit: false, delete: false, approve: false, export: true }
+ *                 updated_at: "2026-06-14T10:05:00Z"
+ *       400:
+ *         description: Invalid role, module, permission key, or non-boolean value
+ *       403:
+ *         description: Only Super Admin can update admin role permissions
+ */
+router.get("/roles/:role",  authenticate, authorize(...ADMIN), ctrl.getRolePermissions);
 router.put("/roles/:role",  authenticate, authorize(...ADMIN), ctrl.updateRolePermissions);
+
+/**
+ * @swagger
+ * /api/v1/config/roles/{role}/reset:
+ *   post:
+ *     summary: Reset a role's permissions to all-false (Admin)
+ *     description: >
+ *       Sets every module/key for this role to false — full lockout.
+ *       Use this as a clean slate before reconfiguring a role from scratch.
+ *       Cannot be used on super_admin.
+ *     tags: [Access Control]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: role
+ *         required: true
+ *         schema:
+ *           type: string
+ *           enum: [admin, sales_manager, sales_executive, external_caller, associate, associate_partner, partner, team_leader, cluster, cluster_head, digital_marketing, hr_admin]
+ *     responses:
+ *       200:
+ *         description: Role permissions reset to all-false
+ *       400:
+ *         description: Invalid role
+ *       404:
+ *         description: Role not found in role_permissions
+ */
+router.post("/roles/:role/reset", authenticate, authorize(...ADMIN), ctrl.resetRolePermissions);
 
 // ═════════════════════════════════════════════════════════════════════════════
 // GENERAL SETTINGS
 // ═════════════════════════════════════════════════════════════════════════════
 
+/**
+ * @swagger
+ * /api/v1/config/modules:
+ *   get:
+ *     summary: Get all access-control modules and permission keys (Admin)
+ *     description: >
+ *       Returns metadata for all 13 modules (display name, description, which
+ *       of the 6 permission keys each module supports), the full list of
+ *       permission keys, and the list of configurable roles.
+ *       Use this to render the Access Control grid headers/columns.
+ *     tags: [Access Control]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Module metadata
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Modules fetched"
+ *               data:
+ *                 permission_keys: ["view","create","edit","delete","approve","export"]
+ *                 configurable_roles: ["admin","sales_manager","sales_executive","external_caller","associate","associate_partner","partner","team_leader","cluster","cluster_head","digital_marketing","hr_admin"]
+ *                 modules:
+ *                   - key: "leads"
+ *                     display_name: "Lead Management"
+ *                     description: "Create, assign, and track leads through the sales lifecycle"
+ *                     supports: ["view","create","edit","delete","export"]
+ *                   - key: "salary"
+ *                     display_name: "Salary & Incentives"
+ *                     description: "Salary slips, incentives, appraisals"
+ *                     supports: ["view","create","edit","delete","approve","export"]
+ *                   - key: "team"
+ *                     display_name: "Team"
+ *                     description: "View team hierarchy and member performance"
+ *                     supports: ["view"]
+ */
 router.get("/modules",  authenticate, authorize(...ADMIN), ctrl.getModules);
 router.get("/general",  authenticate, authorize(...ADMIN), ctrl.getGeneralSettings);
 router.put("/general",  authenticate, authorize("super_admin"), ctrl.updateGeneralSettings);

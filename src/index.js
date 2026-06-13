@@ -10,6 +10,7 @@ const { initSocket }    = require("./config/socket");
 const whatsappCron      = require("./config/whatsappCron");
 const attendanceCron    = require("./config/attendanceCron");
 const reminderCron      = require("./config/reminderCron");
+const { startCacheRefreshInterval } = require("./middleware/permissions");
 const { sendError }  = require("./utils/response");
 const AppError       = require("./utils/AppError");
 const bulkLeadsRoutes = require('./routes/bulkLeadsRoutes');
@@ -100,6 +101,7 @@ initSocket(server);
 whatsappCron.start();
 attendanceCron.start();
 reminderCron.start();
+startCacheRefreshInterval(); // loads role_permissions into memory for checkPermission middleware
 
 // ─── Start Server ─────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;

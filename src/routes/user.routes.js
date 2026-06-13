@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const userController = require("../controllers/user.controller");
+const configController = require("../controllers/configController");
 const { authenticate, authorize } = require("../middleware/auth");
 
 /**
@@ -115,6 +116,151 @@ router.get(
  *                   label: "HR Admin"
  */
 router.get("/roles", authenticate, userController.getRoles);
+
+/**
+ * @swagger
+ * /api/v1/users/me/permissions:
+ *   get:
+ *     summary: Get my effective permissions (any authenticated user)
+ *     description: >
+ *       Returns the logged-in user's effective permissions — their role's
+ *       default permission matrix, with any per-user overrides applied on top.
+ *       The frontend calls this once after login (and after any permission
+ *       change notification) and caches the result to drive:
+ *         - Sidebar visibility (show module if permissions[module].view)
+ *         - Route guards (PermissionProtectedRoute)
+ *         - Action buttons (show Create/Edit/Delete based on permissions)
+ *
+ *       super_admin always receives a full-access matrix (all true).
+ *     tags: [Access Control]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Effective permissions for the logged-in user
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Effective permissions fetched"
+ *               data:
+ *                 role: "sales_executive"
+ *                 has_overrides: true
+ *                 modules: ["dashboard","leads","projects","site_visits","revisits","closures","follow_ups","attendance","salary","team","users","phone_requests","notifications"]
+ *                 permission_keys: ["view","create","edit","delete","approve","export"]
+ *                 permissions:
+ *                   dashboard:  { view: true,  create: false, edit: false, delete: false, approve: false, export: false }
+ *                   leads:      { view: true,  create: true,  edit: true,  delete: false, approve: false, export: false }
+ *                   projects:   { view: true,  create: false, edit: false, delete: false, approve: false, export: false }
+ *                   site_visits: { view: true, create: true,  edit: true,  delete: false, approve: false, export: false }
+ *                   salary:     { view: true,  create: false, edit: false, delete: false, approve: false, export: false }
+ *                   team:       { view: false, create: false, edit: false, delete: false, approve: false, export: false }
+ *                   users:      { view: false, create: false, edit: false, delete: false, approve: false, export: false }
+ *                   reports:    { view: true,  create: false, edit: false, delete: false, approve: false, export: false }
+ */
+router.get("/me/permissions", authenticate, configController.getMyPermissions);
+
+/**
+ * @swagger
+ * /api/v1/users/{id}/permission-overrides:
+ *   get:
+ *     summary: Get per-user permission overrides (Admin)
+ *     description: >
+ *       Lists every permission override set for this specific user —
+ *       exceptions to their role's default permissions.
+ *     tags: [Access Control]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: List of overrides for this user
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Permission overrides fetched"
+ *               data:
+ *                 user:
+ *                   id: "user-uuid-001"
+ *                   full_name: "Rahul Sharma"
+ *                   role: "sales_executive"
+ *                 overrides:
+ *                   - module: "salary"
+ *                     permission_key: "view"
+ *                     value: true
+ *                     set_by_name: "Super Admin"
+ *                     updated_at: "2026-06-14T10:00:00Z"
+ *       404:
+ *         description: User not found
+ *   put:
+ *     summary: Set or clear per-user permission overrides (Admin)
+ *     description: >
+ *       Grants or revokes specific permissions for ONE user, overriding
+ *       their role's defaults. Pass value: null to remove an override and
+ *       revert that permission back to the role default.
+ *       Cannot be used on super_admin (always full access).
+ *     tags: [Access Control]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [overrides]
+ *             properties:
+ *               overrides:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   required: [module, permission_key, value]
+ *                   properties:
+ *                     module:         { type: string, example: "salary" }
+ *                     permission_key: { type: string, example: "view" }
+ *                     value:
+ *                       description: true = grant, false = explicitly deny, null = remove override (use role default)
+ *                       nullable: true
+ *                       type: boolean
+ *           example:
+ *             overrides:
+ *               - module: "salary"
+ *                 permission_key: "view"
+ *                 value: true
+ *               - module: "team"
+ *                 permission_key: "view"
+ *                 value: null
+ *     responses:
+ *       200:
+ *         description: Overrides updated
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Permission overrides updated"
+ *               data:
+ *                 user_id: "user-uuid-001"
+ *                 overrides:
+ *                   - module: "salary"
+ *                     permission_key: "view"
+ *                     value: true
+ *       400:
+ *         description: Invalid module, permission key, value, or target is super_admin
+ *       404:
+ *         description: User not found
+ */
+router.get("/:id/permission-overrides", authenticate, authorize(...["super_admin","admin"]), configController.getUserOverrides);
+router.put("/:id/permission-overrides", authenticate, authorize(...["super_admin","admin"]), configController.setUserOverrides);
 
 /**
  * @swagger

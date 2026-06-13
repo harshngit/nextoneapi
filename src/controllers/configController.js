@@ -1,19 +1,43 @@
 const { pool } = require("../config/db");
 const { sendSuccess, sendError, paginate } = require("../utils/response");
 const AppError = require("../utils/AppError");
+const { refreshPermissionCache, getUserOverride } = require("../middleware/permissions");
 
 // ─── Constants ────────────────────────────────────────────────
-const CONFIGURABLE_ROLES = ["admin", "sales_manager", "sales_executive", "external_caller"];
-const MODULES = ["leads", "projects", "site_visits", "tasks", "users", "reports"];
-const PERMISSION_KEYS = ["view", "create", "edit", "delete"];
+// All roles except super_admin are configurable. super_admin always has
+// full access to everything and is never stored in role_permissions —
+// this is the platform's safety net (can never be locked out).
+const CONFIGURABLE_ROLES = [
+  "admin", "sales_manager", "sales_executive", "external_caller",
+  "associate", "associate_partner", "partner", "team_leader",
+  "cluster", "cluster_head", "digital_marketing", "hr_admin",
+];
+
+// 13 modules — one per frontend page/sidebar item
+const MODULES = [
+  "dashboard", "leads", "projects", "site_visits", "revisits",
+  "closures", "follow_ups", "attendance", "salary", "team",
+  "users", "phone_requests", "notifications",
+];
+
+// 6 permission keys. Not every module uses approve/export —
+// the frontend hides those columns where MODULE_META marks them unsupported.
+const PERMISSION_KEYS = ["view", "create", "edit", "delete", "approve", "export"];
 
 const MODULE_META = [
-  { key: "leads",       display_name: "Lead Management",         description: "Create, assign, and track leads through the sales lifecycle" },
-  { key: "projects",    display_name: "Project Management",       description: "Manage real estate projects and map leads to them" },
-  { key: "site_visits", display_name: "Site Visit Management",    description: "Schedule, track, and capture feedback for site visits" },
-  { key: "tasks",       display_name: "Follow-Up & Tasks",        description: "Create and manage follow-up tasks with reminders" },
-  { key: "users",       display_name: "User & Team Management",   description: "Manage users, roles, and team hierarchy" },
-  { key: "reports",     display_name: "Dashboard & Reports",      description: "View analytics, conversion reports, and team performance" },
+  { key: "dashboard",      display_name: "Dashboard",               description: "Overview, KPIs, and team performance widgets",            supports: ["view", "export"] },
+  { key: "leads",          display_name: "Lead Management",         description: "Create, assign, and track leads through the sales lifecycle", supports: ["view","create","edit","delete","export"] },
+  { key: "projects",       display_name: "Project Management",      description: "Manage real estate projects and map leads to them",       supports: ["view","create","edit","delete","export"] },
+  { key: "site_visits",    display_name: "Site Visit Management",    description: "Schedule, track, and capture feedback for site visits",  supports: ["view","create","edit","delete","export"] },
+  { key: "revisits",       display_name: "Re-visit Management",      description: "Schedule and track follow-up site re-visits",            supports: ["view","create","edit","delete","export"] },
+  { key: "closures",       display_name: "Closures & Bookings",      description: "Record bookings, unit details, and commission",          supports: ["view","create","edit","delete","approve","export"] },
+  { key: "follow_ups",     display_name: "Follow-Up & Tasks",        description: "Create and manage follow-up tasks with reminders",       supports: ["view","create","edit","delete","export"] },
+  { key: "attendance",     display_name: "Attendance",               description: "Check-in/out, manual entries, attendance approvals",     supports: ["view","create","edit","delete","approve","export"] },
+  { key: "salary",         display_name: "Salary & Incentives",      description: "Salary slips, incentives, appraisals",                   supports: ["view","create","edit","delete","approve","export"] },
+  { key: "team",           display_name: "Team",                     description: "View team hierarchy and member performance",             supports: ["view"] },
+  { key: "users",          display_name: "User & Role Management",   description: "Manage users, roles, and access control",                supports: ["view","create","edit","delete"] },
+  { key: "phone_requests", display_name: "Phone Number Requests",    description: "Request and approve access to lead phone numbers",       supports: ["view","create","edit","approve"] },
+  { key: "notifications",  display_name: "Notifications",            description: "In-app notification center",                             supports: ["view"] },
 ];
 
 // Helper — write to audit log
@@ -29,19 +53,62 @@ const writeAudit = async (client, { action, description, performed_by, target_us
 
 /**
  * GET /api/v1/config/roles
+ * Returns the full permission matrix for all 12 configurable roles.
+ * super_admin is never included — it always has full access.
  */
 const getRoles = async (req, res, next) => {
   try {
     const result = await pool.query(
-      `SELECT role, display_name, permissions FROM role_permissions ORDER BY
-       CASE role
-         WHEN 'admin'            THEN 1
-         WHEN 'sales_manager'    THEN 2
-         WHEN 'sales_executive'  THEN 3
-         WHEN 'external_caller'  THEN 4
-       END`
+      `SELECT role, display_name, permissions, updated_at
+       FROM role_permissions
+       WHERE role = ANY($1::varchar[])
+       ORDER BY array_position($1::varchar[], role)`,
+      [CONFIGURABLE_ROLES]
     );
-    return sendSuccess(res, "Roles and permissions fetched", result.rows);
+    return sendSuccess(res, "Roles and permissions fetched", {
+      roles:   result.rows,
+      modules: MODULES,
+      permission_keys: PERMISSION_KEYS,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * GET /api/v1/config/roles/:role
+ * Returns the permission matrix for a single role — used to populate
+ * the Access Control edit panel for one role at a time.
+ */
+const getRolePermissions = async (req, res, next) => {
+  try {
+    const { role } = req.params;
+    if (role === "super_admin") {
+      // super_admin always has everything — return a synthetic full-access matrix
+      const fullAccess = {};
+      for (const m of MODULES) {
+        fullAccess[m] = Object.fromEntries(PERMISSION_KEYS.map(k => [k, true]));
+      }
+      return sendSuccess(res, "Super Admin has full access to all modules", {
+        role: "super_admin",
+        display_name: "Super Admin",
+        permissions: fullAccess,
+        editable: false,
+      });
+    }
+
+    if (!CONFIGURABLE_ROLES.includes(role)) {
+      return next(new AppError(`Invalid role. Configurable roles: ${CONFIGURABLE_ROLES.join(", ")}`, 400));
+    }
+
+    const result = await pool.query(
+      "SELECT role, display_name, permissions, updated_at FROM role_permissions WHERE role = $1",
+      [role]
+    );
+    if (!result.rows.length) {
+      return next(new AppError(`No permissions configured yet for role: ${role}`, 404));
+    }
+    return sendSuccess(res, `Permissions for ${role}`, { ...result.rows[0], editable: true });
   } catch (err) {
     next(err);
   }
@@ -83,17 +150,23 @@ const updateRolePermissions = async (req, res, next) => {
       }
     }
 
-    // Fetch existing to preserve unmodified modules
+    // Fetch existing to preserve unmodified modules AND unmodified keys within a module
     const existing = await pool.query("SELECT permissions FROM role_permissions WHERE role = $1", [role]);
     const currentPerms = existing.rows.length > 0 ? existing.rows[0].permissions : {};
-    const mergedPerms = { ...currentPerms, ...permissions };
+
+    // Deep merge: only the modules/keys present in the request body are overwritten;
+    // everything else in the existing matrix is preserved untouched.
+    const mergedPerms = { ...currentPerms };
+    for (const [module, perms] of Object.entries(permissions)) {
+      mergedPerms[module] = { ...(mergedPerms[module] || {}), ...perms };
+    }
 
     await client.query("BEGIN");
-    const result = await pool.query(
+    const result = await client.query(
       `INSERT INTO role_permissions (role, permissions)
        VALUES ($1, $2)
        ON CONFLICT (role) DO UPDATE SET permissions = $2, updated_at = NOW()
-       RETURNING role, permissions, updated_at`,
+       RETURNING role, display_name, permissions, updated_at`,
       [role, JSON.stringify(mergedPerms)]
     );
 
@@ -101,10 +174,15 @@ const updateRolePermissions = async (req, res, next) => {
       action: "permission_update",
       description: `Permissions updated for role: ${role}`,
       performed_by: callerId,
-      metadata: { role, permissions: mergedPerms },
+      metadata: { role, permissions },  // log only what changed, not the full matrix
     });
 
     await client.query("COMMIT");
+
+    // Refresh the in-memory permission cache so the new rules apply immediately —
+    // no server restart needed, takes effect on the very next request.
+    await refreshPermissionCache();
+
     return sendSuccess(res, `Permissions updated for ${role}`, result.rows[0]);
   } catch (err) {
     await client.query("ROLLBACK");
@@ -263,7 +341,128 @@ const deleteLeadSource = async (req, res, next) => {
  * GET /api/v1/config/modules
  */
 const getModules = async (req, res, next) => {
-  return sendSuccess(res, "Modules fetched", MODULE_META);
+  return sendSuccess(res, "Modules fetched", {
+    modules: MODULE_META,
+    permission_keys: PERMISSION_KEYS,
+    configurable_roles: CONFIGURABLE_ROLES,
+  });
+};
+
+/**
+ * GET /api/v1/users/me/permissions
+ * Returns the EFFECTIVE permissions for the logged-in user:
+ *   role default permissions, with any per-user overrides applied on top.
+ * Frontend calls this once after login and caches the result —
+ * used to drive the sidebar, route guards, and action buttons.
+ */
+const getMyPermissions = async (req, res, next) => {
+  try {
+    const { id: userId, role } = req.user;
+
+    // super_admin → synthetic full-access matrix, no DB lookups needed
+    if (role === "super_admin") {
+      const fullAccess = {};
+      for (const m of MODULES) {
+        fullAccess[m] = Object.fromEntries(PERMISSION_KEYS.map(k => [k, true]));
+      }
+      return sendSuccess(res, "Effective permissions fetched", {
+        role: "super_admin",
+        permissions: fullAccess,
+        modules: MODULES,
+        permission_keys: PERMISSION_KEYS,
+      });
+    }
+
+    // 1. Role defaults
+    const roleResult = await pool.query(
+      "SELECT permissions FROM role_permissions WHERE role = $1", [role]
+    );
+    const rolePerms = roleResult.rows.length ? roleResult.rows[0].permissions : {};
+
+    // Ensure every module/key exists even if the role row is missing some
+    // (e.g. a module added after this role was last saved)
+    const effective = {};
+    for (const m of MODULES) {
+      effective[m] = {};
+      for (const k of PERMISSION_KEYS) {
+        effective[m][k] = rolePerms?.[m]?.[k] === true;
+      }
+    }
+
+    // 2. Apply per-user overrides on top
+    const overrides = await pool.query(
+      "SELECT module, permission_key, value FROM user_permission_overrides WHERE user_id = $1",
+      [userId]
+    );
+    for (const o of overrides.rows) {
+      if (effective[o.module]) {
+        effective[o.module][o.permission_key] = o.value;
+      }
+    }
+
+    return sendSuccess(res, "Effective permissions fetched", {
+      role,
+      permissions: effective,
+      modules: MODULES,
+      permission_keys: PERMISSION_KEYS,
+      has_overrides: overrides.rows.length > 0,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * POST /api/v1/config/roles/:role/reset
+ * Resets a role's permissions back to {} (all false).
+ * Re-run migration 031, or manually re-configure via PUT, to restore defaults.
+ * super_admin cannot be reset (not stored / always full access).
+ */
+const resetRolePermissions = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const { role } = req.params;
+    const { id: callerId } = req.user;
+
+    if (!CONFIGURABLE_ROLES.includes(role)) {
+      return next(new AppError(`Invalid role. Configurable roles: ${CONFIGURABLE_ROLES.join(", ")}`, 400));
+    }
+
+    // Build an all-false matrix for every module/key
+    const blank = {};
+    for (const m of MODULES) {
+      blank[m] = Object.fromEntries(PERMISSION_KEYS.map(k => [k, false]));
+    }
+
+    await client.query("BEGIN");
+    const result = await client.query(
+      `UPDATE role_permissions SET permissions = $2, updated_at = NOW()
+       WHERE role = $1
+       RETURNING role, display_name, permissions, updated_at`,
+      [role, JSON.stringify(blank)]
+    );
+    if (!result.rows.length) {
+      await client.query("ROLLBACK");
+      return next(new AppError(`Role ${role} not found in role_permissions`, 404));
+    }
+
+    await writeAudit(client, {
+      action: "permission_reset",
+      description: `Permissions reset to all-false for role: ${role}`,
+      performed_by: callerId,
+      metadata: { role },
+    });
+
+    await client.query("COMMIT");
+    await refreshPermissionCache();
+
+    return sendSuccess(res, `Permissions for ${role} reset — all modules set to no access`, result.rows[0]);
+  } catch (err) {
+    await client.query("ROLLBACK");
+    next(err);
+  } finally {
+    client.release();
+  }
 };
 
 /**
@@ -599,9 +798,127 @@ const reorderLeadStatuses = async (req, res, next) => {
   } finally { client.release(); }
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// PER-USER PERMISSION OVERRIDES
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * GET /api/v1/users/:id/permission-overrides
+ * List all per-user overrides for one user (admin view).
+ */
+const getUserOverrides = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const userChk = await pool.query(
+      "SELECT id, CONCAT(first_name,' ',last_name) AS full_name, role FROM users WHERE id = $1", [id]
+    );
+    if (!userChk.rows.length) return next(new AppError("User not found", 404));
+
+    const result = await pool.query(
+      `SELECT upo.*, CONCAT(s.first_name,' ',s.last_name) AS set_by_name
+       FROM user_permission_overrides upo
+       LEFT JOIN users s ON s.id = upo.set_by
+       WHERE upo.user_id = $1
+       ORDER BY upo.module, upo.permission_key`,
+      [id]
+    );
+
+    return sendSuccess(res, "Permission overrides fetched", {
+      user: userChk.rows[0],
+      overrides: result.rows,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * PUT /api/v1/users/:id/permission-overrides
+ * Set or clear per-user permission overrides.
+ * Body: { overrides: [ { module, permission_key, value }, ... ] }
+ * Pass value: null to remove an override (revert to role default).
+ */
+const setUserOverrides = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { overrides } = req.body;
+    const { id: callerId } = req.user;
+
+    if (!Array.isArray(overrides) || !overrides.length) {
+      return next(new AppError("overrides array is required", 400));
+    }
+
+    const userChk = await pool.query("SELECT id, role FROM users WHERE id = $1", [id]);
+    if (!userChk.rows.length) return next(new AppError("User not found", 404));
+    if (userChk.rows[0].role === "super_admin") {
+      return next(new AppError("Cannot set overrides for Super Admin — always full access", 400));
+    }
+
+    for (const o of overrides) {
+      if (!MODULES.includes(o.module)) {
+        return next(new AppError(`Invalid module: ${o.module}`, 400));
+      }
+      if (!PERMISSION_KEYS.includes(o.permission_key)) {
+        return next(new AppError(`Invalid permission key: ${o.permission_key}`, 400));
+      }
+      if (o.value !== null && typeof o.value !== "boolean") {
+        return next(new AppError("value must be true, false, or null", 400));
+      }
+    }
+
+    await client.query("BEGIN");
+    for (const o of overrides) {
+      if (o.value === null) {
+        await client.query(
+          `DELETE FROM user_permission_overrides
+           WHERE user_id = $1 AND module = $2 AND permission_key = $3`,
+          [id, o.module, o.permission_key]
+        );
+      } else {
+        await client.query(
+          `INSERT INTO user_permission_overrides (user_id, module, permission_key, value, set_by)
+           VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (user_id, module, permission_key)
+           DO UPDATE SET value = $4, set_by = $5, updated_at = NOW()`,
+          [id, o.module, o.permission_key, o.value, callerId]
+        );
+      }
+    }
+
+    await writeAudit(client, {
+      action: "permission_override_update",
+      description: `Permission overrides updated for user ${id}`,
+      performed_by: callerId,
+      target_user_id: id,
+      metadata: { overrides },
+    });
+
+    await client.query("COMMIT");
+
+    const result = await pool.query(
+      `SELECT module, permission_key, value FROM user_permission_overrides WHERE user_id = $1
+       ORDER BY module, permission_key`,
+      [id]
+    );
+
+    return sendSuccess(res, "Permission overrides updated", { user_id: id, overrides: result.rows });
+  } catch (err) {
+    await client.query("ROLLBACK");
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   getRoles,
+  getRolePermissions,
   updateRolePermissions,
+  resetRolePermissions,
+  getMyPermissions,
+  getUserOverrides,
+  setUserOverrides,
   getLeadSources,
   createLeadSource,
   updateLeadSource,
