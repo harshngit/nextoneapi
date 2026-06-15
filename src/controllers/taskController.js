@@ -55,7 +55,7 @@ const getAllTasks = async (req, res, next) => {
     const dataResult = await pool.query(
       `SELECT t.id, t.title, t.lead_id, t.due_date, t.priority, t.notes,
               t.is_completed, t.completed_at, t.created_at,
-              l.name AS lead_name,
+              l.name AS lead_name, l.phone AS lead_phone,
               CONCAT(u.first_name, ' ', u.last_name) AS assigned_to
        FROM tasks t
        LEFT JOIN leads l ON l.id = t.lead_id
@@ -173,21 +173,21 @@ const getTodayTasks = async (req, res, next) => {
 
     const [overdue, dueToday, completedToday] = await Promise.all([
       pool.query(
-        `SELECT t.id, t.title, t.due_date, t.priority, l.name AS lead_name
+        `SELECT t.id, t.title, t.lead_id, t.due_date, t.priority, l.name AS lead_name, l.phone AS lead_phone
          FROM tasks t LEFT JOIN leads l ON l.id = t.lead_id
          WHERE t.assigned_to = $1 AND t.is_completed = false AND t.due_date::date < $2
          ORDER BY t.due_date ASC`,
         [userId, today]
       ),
       pool.query(
-        `SELECT t.id, t.title, t.due_date, t.priority, l.name AS lead_name
+        `SELECT t.id, t.title, t.lead_id, t.due_date, t.priority, l.name AS lead_name, l.phone AS lead_phone
          FROM tasks t LEFT JOIN leads l ON l.id = t.lead_id
          WHERE t.assigned_to = $1 AND t.is_completed = false AND t.due_date::date = $2
          ORDER BY t.due_date ASC`,
         [userId, today]
       ),
       pool.query(
-        `SELECT t.id, t.title, t.completed_at, l.name AS lead_name
+        `SELECT t.id, t.title, t.lead_id, t.completed_at, l.name AS lead_name, l.phone AS lead_phone
          FROM tasks t LEFT JOIN leads l ON l.id = t.lead_id
          WHERE t.assigned_to = $1 AND t.is_completed = true AND t.completed_at::date = $2
          ORDER BY t.completed_at DESC`,
@@ -216,7 +216,7 @@ const getTodayTasks = async (req, res, next) => {
 const getTaskById = async (req, res, next) => {
   try {
     const result = await pool.query(
-      `SELECT t.*, l.name AS lead_name,
+      `SELECT t.*, l.name AS lead_name, l.phone AS lead_phone,
               CONCAT(u.first_name,' ',u.last_name) AS assigned_name
        FROM tasks t
        LEFT JOIN leads l ON l.id = t.lead_id
@@ -394,9 +394,12 @@ const getTasksByLead = async (req, res, next) => {
     if (lead.rows.length === 0) return next(new AppError("Lead not found", 404));
 
     const result = await pool.query(
-      `SELECT t.id, t.title, t.due_date, t.priority, t.is_completed, t.completed_at, t.notes,
+      `SELECT t.id, t.title, t.lead_id, t.due_date, t.priority, t.is_completed, t.completed_at, t.notes,
+              l.phone AS lead_phone,
               CONCAT(u.first_name,' ',u.last_name) AS assigned_to
-       FROM tasks t LEFT JOIN users u ON u.id = t.assigned_to
+       FROM tasks t
+       LEFT JOIN leads l ON l.id = t.lead_id
+       LEFT JOIN users u ON u.id = t.assigned_to
        WHERE t.lead_id = $1 ORDER BY t.is_completed ASC, t.due_date ASC`,
       [leadId]
     );

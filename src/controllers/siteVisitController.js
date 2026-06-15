@@ -51,7 +51,7 @@ const getAllSiteVisits = async (req, res, next) => {
     const total = parseInt(countRes.rows[0].count);
 
     const dataRes = await pool.query(
-      `SELECT sv.id, sv.visit_date, sv.visit_time,
+      `SELECT sv.id, sv.lead_id, sv.visit_date, sv.visit_time,
               sv.status, sv.transport_arranged, sv.notes, sv.created_at,
               l.name AS lead_name, l.phone AS lead_phone,
               p.name AS project_name, p.city AS project_city,
