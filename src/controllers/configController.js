@@ -16,7 +16,7 @@ const CONFIGURABLE_ROLES = [
 // 13 modules — one per frontend page/sidebar item
 const MODULES = [
   "dashboard", "leads", "projects", "site_visits", "revisits",
-  "closures", "follow_ups", "attendance", "salary", "team",
+  "closures", "targets", "follow_ups", "attendance", "salary", "team",
   "users", "phone_requests", "notifications",
 ];
 
@@ -31,6 +31,7 @@ const MODULE_META = [
   { key: "site_visits",    display_name: "Site Visit Management",    description: "Schedule, track, and capture feedback for site visits",  supports: ["view","create","edit","delete","export"] },
   { key: "revisits",       display_name: "Re-visit Management",      description: "Schedule and track follow-up site re-visits",            supports: ["view","create","edit","delete","export"] },
   { key: "closures",       display_name: "Closures & Bookings",      description: "Record bookings, unit details, and commission",          supports: ["view","create","edit","delete","approve","export"] },
+  { key: "targets",        display_name: "Targets",                 description: "Set and track monthly site-visit and closure targets per user", supports: ["view","create","edit","delete","export"] },
   { key: "follow_ups",     display_name: "Follow-Up & Tasks",        description: "Create and manage follow-up tasks with reminders",       supports: ["view","create","edit","delete","export"] },
   { key: "attendance",     display_name: "Attendance",               description: "Check-in/out, manual entries, attendance approvals",     supports: ["view","create","edit","delete","approve","export"] },
   { key: "salary",         display_name: "Salary & Incentives",      description: "Salary slips, incentives, appraisals",                   supports: ["view","create","edit","delete","approve","export"] },
