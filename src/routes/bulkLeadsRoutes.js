@@ -76,7 +76,8 @@ router.get('/template', authenticate, downloadLeadTemplate);
  *       **Validation:**
  *       - Rows missing any required field are rejected with an error entry
  *       - Phone and Alternate Phone must be exactly 10 digits
- *       - Duplicate phone numbers (already in the system) are skipped, not errored
+ *       - A phone number can be used on at most 3 leads total (e.g. interested in
+ *         multiple projects); rows that would exceed this are skipped, not errored
  *       - Status defaults to "new" if blank or unrecognised
  *
  *       **Assignment priority:**
@@ -133,7 +134,7 @@ router.get('/template', authenticate, downloadLeadTemplate);
  *                   skipped:
  *                     - row: 8
  *                       phone: "9000000001"
- *                       reason: "Duplicate phone number"
+ *                       reason: "Phone number has already been used for 3 leads"
  *       400:
  *         description: No file uploaded, wrong template, or no valid rows found
  *       401:

@@ -23,6 +23,24 @@ const VALID_STATUSES = [
   "negotiation", "booked", "lost",
 ];
 
+// Same phone number can be reused across leads (e.g. interested in multiple
+// projects) but only up to this many times.
+const MAX_LEADS_PER_PHONE = 3;
+
+// ─── Helper — count how many (non-archived) leads already use this phone ─────
+const countLeadsByPhone = async (client, phone, excludeLeadId = null) => {
+  const result = excludeLeadId
+    ? await client.query(
+        "SELECT COUNT(*) FROM leads WHERE phone = $1 AND is_archived = false AND id != $2",
+        [phone, excludeLeadId]
+      )
+    : await client.query(
+        "SELECT COUNT(*) FROM leads WHERE phone = $1 AND is_archived = false",
+        [phone]
+      );
+  return parseInt(result.rows[0].count, 10);
+};
+
 // ─── Helper — activity log ────────────────────────────────────────────────────
 const logActivity = async (client, leadId, type, note, performedBy) => {
   await client.query(
@@ -201,6 +219,14 @@ const createLead = async (req, res, next) => {
     }
 
     await client.query("BEGIN");
+
+    const phoneUsage = await countLeadsByPhone(client, phone);
+    if (phoneUsage >= MAX_LEADS_PER_PHONE) {
+      await client.query("ROLLBACK");
+      return next(new AppError(
+        `This phone number has already been used for ${MAX_LEADS_PER_PHONE} leads. A phone number can be added at most ${MAX_LEADS_PER_PHONE} times.`, 400
+      ));
+    }
 
     const result = await client.query(
       `INSERT INTO leads (name, phone, alternate_phone_number, email, source,
@@ -387,13 +413,22 @@ const updateLead = async (req, res, next) => {
             callback_time, next_followup_time } = req.body;
 
     const existing = await pool.query(
-      "SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [id]
+      "SELECT id, assigned_to, phone FROM leads WHERE id = $1 AND is_archived = false", [id]
     );
     if (existing.rows.length === 0) return next(new AppError("Lead not found", 404));
 
     const { role, id: callerId } = req.user;
     if (role === "sales_executive" && existing.rows[0].assigned_to !== callerId) {
       return next(new AppError("Access denied", 403));
+    }
+
+    if (phone && phone !== existing.rows[0].phone) {
+      const phoneUsage = await countLeadsByPhone(pool, phone, id);
+      if (phoneUsage >= MAX_LEADS_PER_PHONE) {
+        return next(new AppError(
+          `This phone number has already been used for ${MAX_LEADS_PER_PHONE} leads. A phone number can be added at most ${MAX_LEADS_PER_PHONE} times.`, 400
+        ));
+      }
     }
 
     const updates = []; const params = []; let idx = 1;

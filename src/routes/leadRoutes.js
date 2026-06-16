@@ -171,6 +171,9 @@ router.post(
  *       Multiple recordings can be attached at create time. Omit call_recordings if none.
  *
  *       Status defaults to new on creation.
+ *
+ *       A single phone number can only be used on up to 3 leads (e.g. interested
+ *       in multiple projects). The 4th attempt with the same phone is rejected.
  *     tags: [Lead Management]
  *     security:
  *       - BearerAuth: []
@@ -348,6 +351,7 @@ router.get("/:id", authenticate, leadController.getLeadById);
  *     description: >
  *       Updates lead details such as name, contact info, budget, or project mapping.
  *       Does NOT change status or assignment — use the dedicated endpoints for those.
+ *       If the phone number is changed, the same 3-leads-per-phone-number limit applies.
  *     tags: [Lead Management]
  *     security:
  *       - BearerAuth: []
