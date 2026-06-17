@@ -434,7 +434,7 @@ const { authenticate } = require("../middleware/auth");
  *               InvalidRole:
  *                 value:
  *                   success: false
- *                   message: "Invalid role. Must be one of: super_admin, admin, sales_manager, sales_executive, external_caller"
+ *                   message: "Invalid role. Must be one of: super_admin, admin, sales_manager, sales_executive, external_caller, associate, associate_partner, partner, team_leader, cluster, cluster_head, digital_marketing, hr_admin"
  *       403:
  *         description: Token required for this role
  *         content:

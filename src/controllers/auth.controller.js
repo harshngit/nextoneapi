@@ -51,7 +51,11 @@ const register = async (req, res, next) => {
       return next(new AppError("first_name, last_name, email, phone_number, password and role are required", 400));
     }
 
-    const validRoles = ["super_admin", "admin", "sales_manager", "sales_executive", "external_caller"];
+    const validRoles = [
+      "super_admin", "admin", "sales_manager", "sales_executive", "external_caller",
+      "associate", "associate_partner", "partner", "team_leader",
+      "cluster", "cluster_head", "digital_marketing", "hr_admin",
+    ];
     if (!validRoles.includes(role)) {
       return next(new AppError(`Invalid role. Must be one of: ${validRoles.join(", ")}`, 400));
     }

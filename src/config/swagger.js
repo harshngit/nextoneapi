@@ -9,8 +9,8 @@ const options = {
       description: "Auth & User Management REST API",
     },
     servers: [
+      { url: "https://api.nextonerealty.in", description: "Production server" },
       { url: "http://localhost:3000", description: "Local development server" },
-      { url: "https://api.nextonerealty.in", description: "Production server" }
     ],
     components: {
       securitySchemes: {
