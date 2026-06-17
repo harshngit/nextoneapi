@@ -319,9 +319,10 @@ router.get("/:id", authenticate, userController.getUserById);
  *     summary: Update user details
  *     description: >
  *       Updates profile information for a user.
- *       Super Admin and Admin can update any user.
- *       Users can update their own profile (excluding role and email).
- *       Email and role cannot be changed via this endpoint — use dedicated endpoints for those.
+ *       Super Admin and Admin can update any user, including their email.
+ *       Regular users can update their own profile (first_name, last_name, phone, address)
+ *       but cannot change email — only Admin/Super Admin can do that.
+ *       Role changes use the dedicated PATCH /:id/role endpoint.
  *     tags: [Users & Team Management]
  *     security:
  *       - BearerAuth: []
@@ -338,12 +339,37 @@ router.get("/:id", authenticate, userController.getUserById);
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/UpdateUserRequest'
+ *             type: object
+ *             properties:
+ *               first_name:
+ *                 type: string
+ *                 example: "Rahul"
+ *               last_name:
+ *                 type: string
+ *                 example: "Sharma"
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 description: Admin / Super Admin only. Must be unique across all users.
+ *                 example: "rahul.new@nextonerealty.com"
+ *               phone_number:
+ *                 type: string
+ *                 example: "+919876543999"
+ *               address:
+ *                 type: string
+ *                 example: "102, Andheri West, Mumbai - 400053"
+ *               emergency_contact_number:
+ *                 type: string
+ *                 example: "+919876543211"
+ *               manager_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: Admin / Super Admin only.
  *           example:
  *             first_name: "Rahul"
  *             last_name: "Sharma"
+ *             email: "rahul.new@nextonerealty.com"
  *             phone_number: "+919876543999"
- *             manager_id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
  *             address: "102, Andheri West, Mumbai - 400053"
  *             emergency_contact_number: "+919876543211"
  *     responses:
@@ -358,11 +384,12 @@ router.get("/:id", authenticate, userController.getUserById);
  *                 id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
  *                 first_name: "Rahul"
  *                 last_name: "Sharma"
+ *                 email: "rahul.new@nextonerealty.com"
  *                 phone_number: "+919876543999"
  *                 address: "102, Andheri West, Mumbai - 400053"
  *                 emergency_contact_number: "+919876543211"
  *       400:
- *         description: Validation error
+ *         description: Validation error or email already in use
  *       403:
  *         description: Cannot update another user's profile
  *       404:

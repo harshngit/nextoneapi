@@ -204,7 +204,7 @@ const updateUser = async (req, res, next) => {
     const existing = await pool.query("SELECT id, manager_id FROM users WHERE id = $1", [id]);
     if (existing.rows.length === 0) return next(new AppError("User not found", 404));
 
-    const { first_name, last_name, phone_number, manager_id,
+    const { first_name, last_name, email, phone_number, manager_id,
             address, emergency_contact_number } = req.body;
 
     const updates = [];
@@ -219,6 +219,19 @@ const updateUser = async (req, res, next) => {
                                 updates.push(`emergency_contact_number = $${idx++}`);  params.push(emergency_contact_number || null); }
     if (manager_id !== undefined && ["super_admin", "admin"].includes(callerRole)) {
                                 updates.push(`manager_id = $${idx++}`);                params.push(manager_id || null); }
+
+    // Only admin / super_admin can change a user's email
+    if (email !== undefined && ["super_admin", "admin"].includes(callerRole)) {
+      const cleanEmail = email.trim().toLowerCase();
+      if (!cleanEmail) return next(new AppError("Email cannot be empty", 400));
+      const dup = await pool.query(
+        "SELECT id FROM users WHERE email = $1 AND id != $2",
+        [cleanEmail, id]
+      );
+      if (dup.rows.length > 0) return next(new AppError("This email is already in use by another user", 400));
+      updates.push(`email = $${idx++}`);
+      params.push(cleanEmail);
+    }
 
     if (updates.length === 0) return next(new AppError("No fields to update", 400));
 
