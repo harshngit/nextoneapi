@@ -11,6 +11,7 @@ const { pool }     = require('../config/db');
 const { sendSuccess, paginate } = require('../utils/response');
 const AppError     = require('../utils/AppError');
 const emailService = require('../utils/emailService');
+const { getTeamIds, ADMIN_ROLES, LEAF_ROLES } = require('../utils/teamUtils');
 
 const VALID_STATUSES = ['confirmed', 'cancelled', 'on_hold'];
 
@@ -26,12 +27,12 @@ const getAllClosures = async (req, res, next) => {
     let params     = [];
     let idx        = 1;
 
-    // Role scoping — sales exec sees only their own closures
-    if (role === 'sales_executive') {
+    // Role scoping
+    if (LEAF_ROLES.includes(role)) {
       conditions.push(`lc.closed_by = $${idx++}`); params.push(callerId);
-    } else if (role === 'sales_manager') {
-      // closed_by_manager is now UUID[] — check if callerId is in the array
-      conditions.push(`$${idx++} = ANY(lc.closed_by_manager)`); params.push(callerId);
+    } else if (!ADMIN_ROLES.includes(role)) {
+      const teamIds = await getTeamIds(callerId);
+      conditions.push(`lc.closed_by = ANY($${idx++}::uuid[])`); params.push(teamIds);
     }
 
     if (status)          { conditions.push(`lc.status = $${idx++}`);            params.push(status); }

@@ -10,6 +10,7 @@ const { sendSuccess, paginate } = require("../utils/response");
 const AppError       = require("../utils/AppError");
 const { emitToUser } = require("../config/socket");
 const emailService   = require("../utils/emailService");
+const { getTeamIds, ADMIN_ROLES, LEAF_ROLES } = require("../utils/teamUtils");
 const { createNotification, createBulkNotifications, notifyAdmins } = require("./notificationController");
 
 const VALID_PRIORITIES = ["low", "medium", "high"];
@@ -35,8 +36,12 @@ const getAllTasks = async (req, res, next) => {
     let params = [];
     let idx = 1;
 
-    if (role === "sales_executive") { conditions.push(`t.assigned_to = $${idx++}`); params.push(callerId); }
-    else if (role === "sales_manager") { conditions.push(`u.manager_id = $${idx++}`); params.push(callerId); }
+    if (LEAF_ROLES.includes(role)) {
+      conditions.push(`t.assigned_to = $${idx++}`); params.push(callerId);
+    } else if (!ADMIN_ROLES.includes(role)) {
+      const teamIds = await getTeamIds(callerId);
+      conditions.push(`t.assigned_to = ANY($${idx++}::uuid[])`); params.push(teamIds);
+    }
 
     if (is_completed !== undefined) { conditions.push(`t.is_completed = $${idx++}`); params.push(is_completed === "true"); }
     if (lead_id)     { conditions.push(`t.lead_id = $${idx++}`);               params.push(lead_id); }

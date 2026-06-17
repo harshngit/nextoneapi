@@ -15,6 +15,7 @@ const { pool }        = require("../config/db");
 const { sendSuccess, paginate } = require("../utils/response");
 const AppError        = require("../utils/AppError");
 const emailService    = require("../utils/emailService");
+const { getTeamIds, ADMIN_ROLES, LEAF_ROLES } = require("../utils/teamUtils");
 const { createNotification, createBulkNotifications, notifyAdmins } = require("./notificationController");
 
 const VALID_STATUSES = [
@@ -125,12 +126,13 @@ const getAllLeads = async (req, res, next) => {
     let params = [];
     let idx = 1;
 
-    if (role === "sales_executive") {
+    if (LEAF_ROLES.includes(role)) {
       conditions.push(`l.assigned_to = $${idx++}`);
       params.push(callerId);
-    } else if (role === "sales_manager") {
-      conditions.push(`u.manager_id = $${idx++}`);
-      params.push(callerId);
+    } else if (!ADMIN_ROLES.includes(role)) {
+      const teamIds = await getTeamIds(callerId);
+      conditions.push(`l.assigned_to = ANY($${idx++}::uuid[])`);
+      params.push(teamIds);
     }
 
     if (status)      { conditions.push(`l.status = $${idx++}`);             params.push(status); }

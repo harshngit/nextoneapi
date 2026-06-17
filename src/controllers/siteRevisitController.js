@@ -12,6 +12,7 @@ const { sendSuccess, paginate } = require('../utils/response');
 const AppError        = require('../utils/AppError');
 const emailService    = require('../utils/emailService');
 const { createNotification, notifyAdmins } = require('./notificationController');
+const { getTeamIds, ADMIN_ROLES, LEAF_ROLES } = require('../utils/teamUtils');
 
 const VALID_STATUSES   = ['scheduled', 'done', 'cancelled', 'rescheduled', 'no_show'];
 const VALID_REACTIONS  = ['very_positive', 'positive', 'neutral', 'negative', 'not_interested'];
@@ -30,10 +31,11 @@ const getAllRevisits = async (req, res, next) => {
     let idx        = 1;
 
     // Role scoping
-    if (role === 'sales_executive') {
+    if (LEAF_ROLES.includes(role)) {
       conditions.push(`sr.assigned_to = $${idx++}`); params.push(callerId);
-    } else if (role === 'sales_manager') {
-      conditions.push(`u.manager_id = $${idx++}`); params.push(callerId);
+    } else if (!ADMIN_ROLES.includes(role)) {
+      const teamIds = await getTeamIds(callerId);
+      conditions.push(`sr.assigned_to = ANY($${idx++}::uuid[])`); params.push(teamIds);
     }
 
     if (status)            { conditions.push(`sr.status = $${idx++}`);           params.push(status); }
