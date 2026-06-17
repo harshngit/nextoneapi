@@ -252,7 +252,7 @@ const updateUser = async (req, res, next) => {
 };
 
 /**
- * DELETE /api/users/:id  (soft delete)
+ * DELETE /api/users/:id  (soft delete — kept for backward compat)
  */
 const deleteUser = async (req, res, next) => {
   try {
@@ -262,15 +262,59 @@ const deleteUser = async (req, res, next) => {
     if (result.rows.length === 0) return next(new AppError("User not found", 404));
     if (result.rows[0].role === "super_admin") return next(new AppError("Cannot deactivate a Super Admin", 400));
 
-    await pool.query(
-      "UPDATE users SET is_active = false, updated_at = NOW() WHERE id = $1",
-      [id]
-    );
-
-    // Revoke all sessions
+    await pool.query("UPDATE users SET is_active = false, updated_at = NOW() WHERE id = $1", [id]);
     await pool.query("DELETE FROM refresh_tokens WHERE user_id = $1", [id]);
 
     return sendSuccess(res, "User deactivated successfully");
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * PATCH /api/v1/users/:id/status
+ * Body: { is_active: true | false }
+ * Activate or deactivate any user. Only admin / super_admin allowed.
+ */
+const toggleUserStatus = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { is_active } = req.body;
+
+    if (typeof is_active !== "boolean") {
+      return next(new AppError("is_active must be true or false", 400));
+    }
+
+    const result = await pool.query(
+      "SELECT id, role, is_active, first_name, last_name FROM users WHERE id = $1",
+      [id]
+    );
+    if (result.rows.length === 0) return next(new AppError("User not found", 404));
+
+    const user = result.rows[0];
+    if (user.role === "super_admin") {
+      return next(new AppError("Cannot change the status of a Super Admin", 400));
+    }
+    if (user.is_active === is_active) {
+      return next(new AppError(`User is already ${is_active ? "active" : "inactive"}`, 400));
+    }
+
+    await pool.query(
+      "UPDATE users SET is_active = $1, updated_at = NOW() WHERE id = $2",
+      [is_active, id]
+    );
+
+    // Revoke all sessions when deactivating so user is logged out immediately
+    if (!is_active) {
+      await pool.query("DELETE FROM refresh_tokens WHERE user_id = $1", [id]);
+    }
+
+    const action = is_active ? "activated" : "deactivated";
+    return sendSuccess(res, `User ${action} successfully`, {
+      id,
+      full_name: `${user.first_name} ${user.last_name}`,
+      is_active,
+    });
   } catch (err) {
     next(err);
   }
@@ -515,4 +559,4 @@ const getRoles = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { getAllUsers, createUser, getUserById, updateUser, deleteUser, updateRole, getTeam, getUserPerformance, assignManager, getRoles, VALID_ROLES };
+module.exports = { getAllUsers, createUser, getUserById, updateUser, deleteUser, toggleUserStatus, updateRole, getTeam, getUserPerformance, assignManager, getRoles, VALID_ROLES };

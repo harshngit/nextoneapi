@@ -399,6 +399,74 @@ router.put("/:id", authenticate, userController.updateUser);
 
 /**
  * @swagger
+ * /api/v1/users/{id}/status:
+ *   patch:
+ *     summary: Activate or deactivate a user
+ *     description: >
+ *       Toggles a user's active status. Pass `is_active: true` to reactivate
+ *       a deactivated user, or `is_active: false` to deactivate them.
+ *       When deactivating, all existing sessions (refresh tokens) are revoked
+ *       so the user is logged out immediately.
+ *       Only Admin and Super Admin can use this endpoint.
+ *       Super Admin status cannot be changed.
+ *     tags: [Users & Team Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [is_active]
+ *             properties:
+ *               is_active:
+ *                 type: boolean
+ *                 description: true = activate, false = deactivate
+ *                 example: true
+ *           examples:
+ *             activate:
+ *               summary: Activate a user
+ *               value: { "is_active": true }
+ *             deactivate:
+ *               summary: Deactivate a user
+ *               value: { "is_active": false }
+ *     responses:
+ *       200:
+ *         description: User status updated
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "User activated successfully"
+ *               data:
+ *                 id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+ *                 full_name: "Ritu Ritu"
+ *                 is_active: true
+ *       400:
+ *         description: is_active missing, not boolean, or user already in that state
+ *       403:
+ *         description: Insufficient permissions
+ *       404:
+ *         description: User not found
+ */
+router.patch(
+  "/:id/status",
+  authenticate,
+  authorize("super_admin", "admin"),
+  userController.toggleUserStatus
+);
+
+/**
+ * @swagger
  * /api/v1/users/{id}:
  *   delete:
  *     summary: Deactivate (soft-delete) a user
