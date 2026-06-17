@@ -67,7 +67,11 @@ const { authenticate, authorize } = require("../middleware/auth");
 router.get(
   "/",
   authenticate,
-  authorize("super_admin", "admin", "sales_manager"),
+  authorize(
+    "super_admin", "admin",
+    "associate", "associate_partner", "cluster_head", "cluster",
+    "partner", "team_leader", "sales_manager"
+  ),
   userController.getAllUsers
 );
 
@@ -116,6 +120,60 @@ router.get(
  *                   label: "HR Admin"
  */
 router.get("/roles", authenticate, userController.getRoles);
+
+/**
+ * @swagger
+ * /api/v1/users/eligible-managers:
+ *   get:
+ *     summary: Get users eligible to be a manager for a given role
+ *     description: >
+ *       Returns all active users whose role is above the given role in the hierarchy.
+ *       Use this to populate the "Assign Manager" dropdown in the UI.
+ *       Example: for_role=sales_manager returns all team_leaders, partners,
+ *       associate_partners, cluster_heads, clusters, associates, admins, super_admins.
+ *     tags: [Users & Team Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: for_role
+ *         required: true
+ *         schema:
+ *           type: string
+ *           enum: [associate_partner, cluster_head, cluster, partner, team_leader,
+ *                  sales_manager, sales_executive, external_caller]
+ *         example: sales_manager
+ *     responses:
+ *       200:
+ *         description: Eligible managers list
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 for_role: "sales_manager"
+ *                 eligible_roles: ["super_admin","admin","associate","associate_partner","cluster_head","cluster","partner","team_leader"]
+ *                 count: 5
+ *                 managers:
+ *                   - id: "uuid"
+ *                     full_name: "Aniket Jha"
+ *                     role: "associate_partner"
+ *                     email: "aniket@example.com"
+ *                     manager_name: "Super Admin"
+ */
+router.get("/eligible-managers", authenticate, authorize("super_admin", "admin"), userController.getEligibleManagers);
+
+router.get(
+  "/my-team",
+  authenticate,
+  authorize(
+    "super_admin", "admin",
+    "associate", "associate_partner", "cluster_head", "cluster",
+    "partner", "team_leader", "sales_manager",
+    "sales_executive", "external_caller"
+  ),
+  userController.getMyTeam
+);
 
 /**
  * @swagger
@@ -310,6 +368,55 @@ router.put("/:id/permission-overrides", authenticate, authorize(...["super_admin
  *       403:
  *         description: Access denied to this user's profile
  */
+/**
+ * @swagger
+ * /api/v1/users/{id}/team-tree:
+ *   get:
+ *     summary: Get all users in the full recursive sub-tree under a manager
+ *     description: >
+ *       Returns every user who reports (directly or indirectly) to the given manager,
+ *       following the manager_id chain recursively.
+ *       Admin/Super Admin can view any manager's tree.
+ *       Other roles can only view their own tree.
+ *     tags: [Users & Team Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *         description: The manager's user ID
+ *     responses:
+ *       200:
+ *         description: Full team tree returned
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 manager:
+ *                   id: "uuid"
+ *                   full_name: "Aniket Jha"
+ *                   role: "associate_partner"
+ *                 team_count: 12
+ *                 team:
+ *                   - id: "uuid"
+ *                     full_name: "Rahul Sharma"
+ *                     role: "sales_manager"
+ *                     manager_name: "Aniket Jha"
+ *                   - id: "uuid"
+ *                     full_name: "Priya Mehta"
+ *                     role: "sales_executive"
+ *                     manager_name: "Rahul Sharma"
+ */
+router.get(
+  "/:id/team-tree",
+  authenticate,
+  authorize("super_admin", "admin", "associate", "associate_partner", "cluster_head", "cluster", "partner", "team_leader", "sales_manager"),
+  userController.getTeamTree
+);
+
 router.get("/:id", authenticate, userController.getUserById);
 
 /**

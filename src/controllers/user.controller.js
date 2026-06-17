@@ -48,10 +48,23 @@ const getAllUsers = async (req, res, next) => {
     let params = [];
     let idx = 1;
 
-    // Sales Manager can only see their own team
-    if (req.user.role === "sales_manager") {
-      conditions.push(`manager_id = $${idx++}`);
-      params.push(req.user.id);
+    // Hierarchy roles see only users in their recursive sub-tree
+    const HIERARCHY_SCOPED = [
+      'associate', 'associate_partner', 'cluster_head', 'cluster',
+      'partner', 'team_leader', 'sales_manager',
+    ];
+    if (HIERARCHY_SCOPED.includes(req.user.role)) {
+      const subRes = await pool.query(
+        `WITH RECURSIVE sub AS (
+           SELECT id FROM users WHERE id = $1
+           UNION ALL
+           SELECT u.id FROM users u INNER JOIN sub s ON u.manager_id = s.id
+         ) SELECT id FROM sub`,
+        [req.user.id]
+      );
+      const ids = subRes.rows.map(r => r.id);
+      conditions.push(`id = ANY($${idx++}::uuid[])`);
+      params.push(ids);
     }
 
     if (role)       { conditions.push(`role = $${idx++}`);       params.push(role); }
@@ -570,6 +583,45 @@ const assignManager = async (req, res, next) => {
   }
 };
 
+// ─── GET /api/v1/users/my-team ───────────────────────────────────────────────
+// Returns the logged-in user (as "Self") + every user in their recursive
+// sub-tree. Used for the "Assign To" dropdown on leads, tasks, site visits etc.
+const getMyTeam = async (req, res, next) => {
+  try {
+    const { id: callerId } = req.user;
+
+    const result = await pool.query(
+      `WITH RECURSIVE sub AS (
+         SELECT id FROM users WHERE id = $1
+         UNION ALL
+         SELECT u.id FROM users u INNER JOIN sub s ON u.manager_id = s.id
+       )
+       SELECT u.id, u.first_name, u.last_name, u.email, u.phone_number,
+              u.role, u.is_active, u.manager_id,
+              CONCAT(m.first_name, ' ', m.last_name) AS manager_name,
+              (u.id = $1) AS is_self
+       FROM users u
+       LEFT JOIN users m ON m.id = u.manager_id
+       WHERE u.id IN (SELECT id FROM sub) AND u.is_active = true
+       ORDER BY is_self DESC, u.role ASC, u.first_name ASC`,
+      [callerId]
+    );
+
+    return sendSuccess(res, 'My team fetched', {
+      count: result.rows.length,
+      members: result.rows.map(u => ({
+        id:           u.id,
+        full_name:    `${u.first_name} ${u.last_name}`,
+        email:        u.email,
+        role:         u.role,
+        phone_number: u.phone_number,
+        manager_name: u.manager_name || null,
+        is_self:      u.is_self,
+      })),
+    });
+  } catch (err) { next(err); }
+};
+
 /**
  * GET /api/users/roles
  * Returns all valid roles with display labels.
@@ -585,4 +637,112 @@ const getRoles = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-module.exports = { getAllUsers, createUser, getUserById, updateUser, deleteUser, toggleUserStatus, updateRole, getTeam, getUserPerformance, assignManager, getRoles, VALID_ROLES };
+// ─── GET /api/v1/users/:id/team-tree ─────────────────────────────────────────
+// Returns every user in the full recursive sub-tree under the given manager.
+const getTeamTree = async (req, res, next) => {
+  try {
+    const { id: managerId } = req.params;
+    const { role: callerRole, id: callerId } = req.user;
+
+    // Only admin/super_admin or the manager themselves can view their full tree
+    if (!['super_admin', 'admin'].includes(callerRole) && callerId !== managerId) {
+      return next(new AppError('Access denied', 403));
+    }
+
+    const managerRes = await pool.query(
+      'SELECT id, first_name, last_name, role, email, phone_number FROM users WHERE id = $1',
+      [managerId]
+    );
+    if (!managerRes.rows.length) return next(new AppError('User not found', 404));
+    const mgr = managerRes.rows[0];
+
+    const teamRes = await pool.query(
+      `WITH RECURSIVE sub AS (
+         SELECT id FROM users WHERE id = $1
+         UNION ALL
+         SELECT u.id FROM users u INNER JOIN sub s ON u.manager_id = s.id
+       )
+       SELECT u.id, u.first_name, u.last_name, u.email, u.phone_number,
+              u.role, u.is_active, u.manager_id,
+              CONCAT(m.first_name, ' ', m.last_name) AS manager_name
+       FROM users u
+       LEFT JOIN users m ON m.id = u.manager_id
+       WHERE u.id IN (SELECT id FROM sub) AND u.id != $1
+       ORDER BY u.role ASC, u.first_name ASC`,
+      [managerId]
+    );
+
+    return sendSuccess(res, 'Team tree fetched', {
+      manager:    { id: mgr.id, full_name: `${mgr.first_name} ${mgr.last_name}`, role: mgr.role, email: mgr.email },
+      team_count: teamRes.rows.length,
+      team:       teamRes.rows,
+    });
+  } catch (err) { next(err); }
+};
+
+// ─── GET /api/v1/users/eligible-managers?for_role=sales_manager ──────────────
+// Returns active users whose role is above the given role in the hierarchy.
+// Used to populate the "Assign Manager" dropdown in the UI.
+const getEligibleManagers = async (req, res, next) => {
+  try {
+    const { for_role } = req.query;
+    if (!for_role) return next(new AppError('for_role query param is required', 400));
+
+    const ROLE_RANK = {
+      super_admin:       1,
+      admin:             2,
+      associate:         3,
+      associate_partner: 4,
+      cluster_head:      4,
+      cluster:           4,
+      partner:           5,
+      team_leader:       6,
+      sales_manager:     7,
+      sales_executive:   8,
+      external_caller:   8,
+    };
+
+    const targetRank = ROLE_RANK[for_role];
+    if (targetRank === undefined) return next(new AppError(`"${for_role}" is not a valid role`, 400));
+
+    // Roles with a lower rank number have higher authority — they can be managers
+    const eligibleRoles = Object.entries(ROLE_RANK)
+      .filter(([, rank]) => rank < targetRank)
+      .map(([role]) => role);
+
+    if (!eligibleRoles.length) {
+      return sendSuccess(res, 'No eligible managers for this role', { for_role, count: 0, managers: [] });
+    }
+
+    const result = await pool.query(
+      `SELECT u.id, u.first_name, u.last_name, u.email, u.role, u.phone_number,
+              CONCAT(m.first_name, ' ', m.last_name) AS manager_name
+       FROM users u
+       LEFT JOIN users m ON m.id = u.manager_id
+       WHERE u.is_active = true AND u.role = ANY($1::text[])
+       ORDER BY u.role ASC, u.first_name ASC`,
+      [eligibleRoles]
+    );
+
+    return sendSuccess(res, 'Eligible managers fetched', {
+      for_role,
+      eligible_roles: eligibleRoles,
+      count:          result.rows.length,
+      managers:       result.rows.map(u => ({
+        id:           u.id,
+        full_name:    `${u.first_name} ${u.last_name}`,
+        email:        u.email,
+        role:         u.role,
+        phone_number: u.phone_number,
+        manager_name: u.manager_name || null,
+      })),
+    });
+  } catch (err) { next(err); }
+};
+
+module.exports = {
+  getAllUsers, createUser, getUserById, updateUser, deleteUser,
+  toggleUserStatus, updateRole, getTeam, getUserPerformance,
+  assignManager, getRoles, getTeamTree, getEligibleManagers, getMyTeam,
+  VALID_ROLES,
+};
