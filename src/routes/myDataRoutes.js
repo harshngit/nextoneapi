@@ -253,6 +253,89 @@ router.get("/site-visits", authenticate, ctrl.getMySiteVisits);
 
 /**
  * @swagger
+ * /api/v1/me/revisits:
+ *   get:
+ *     summary: My assigned re-visits
+ *     description: >
+ *       Paginated list of site re-visits assigned to the logged-in user.
+ *       Pass `upcoming=true` to get only future scheduled/rescheduled re-visits.
+ *       Includes lead info, project info, and feedback if submitted.
+ *     tags: [My Data]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [scheduled, done, cancelled, rescheduled, no_show]
+ *       - in: query
+ *         name: upcoming
+ *         schema:
+ *           type: string
+ *           enum: ["true", "false"]
+ *         description: If true, returns only future scheduled/rescheduled re-visits
+ *       - in: query
+ *         name: from
+ *         schema:
+ *           type: string
+ *           format: date
+ *         example: "2026-06-01"
+ *       - in: query
+ *         name: to
+ *         schema:
+ *           type: string
+ *           format: date
+ *         example: "2026-06-30"
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *       - in: query
+ *         name: per_page
+ *         schema:
+ *           type: integer
+ *           default: 20
+ *     responses:
+ *       200:
+ *         description: Re-visits returned
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 - id: "rv-uuid"
+ *                   visit_date: "2026-06-20"
+ *                   visit_time: "11:00:00"
+ *                   status: "scheduled"
+ *                   transport_arranged: false
+ *                   reason: "Client wants to see the sample flat again"
+ *                   notes: "Bring updated price list"
+ *                   original_visit_id: "sv-uuid"
+ *                   lead_id: "lead-uuid"
+ *                   lead_name: "Suresh Patel"
+ *                   lead_phone: "9876543210"
+ *                   project_id: "proj-uuid"
+ *                   project_name: "Skyline Heights"
+ *                   project_city: "Mumbai"
+ *                   project_locality: "Andheri West"
+ *                   rating: null
+ *                   client_reaction: null
+ *                   next_step: null
+ *                   remarks: null
+ *               pagination:
+ *                 total: 8
+ *                 page: 1
+ *                 per_page: 20
+ *                 total_pages: 1
+ */
+router.get("/revisits", authenticate, ctrl.getMyRevisits);
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * @swagger
  * /api/v1/me/tasks:
  *   get:
  *     summary: My assigned tasks / follow-ups

@@ -507,6 +507,64 @@ const getMyAttendance = async (req, res, next) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// GET /api/v1/me/revisits
+// Site re-visits assigned to the logged-in user
+// Query: status, from, to, upcoming, page, per_page
+// ─────────────────────────────────────────────────────────────────────────────
+const getMyRevisits = async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const { status, from, to, upcoming } = req.query;
+    const { page, per_page } = parsePage(req.query);
+    const offset = (page - 1) * per_page;
+
+    let conditions = ["sr.assigned_to = $1"];
+    const params   = [userId];
+    let idx        = 2;
+
+    if (status) { conditions.push(`sr.status = $${idx++}`);        params.push(status); }
+    if (from)   { conditions.push(`sr.visit_date >= $${idx++}`);   params.push(from); }
+    if (to)     { conditions.push(`sr.visit_date <= $${idx++}`);   params.push(to); }
+    if (upcoming === "true") {
+      conditions.push(`sr.visit_date >= CURRENT_DATE`);
+      conditions.push(`sr.status IN ('scheduled','rescheduled')`);
+    }
+
+    const where = `WHERE ${conditions.join(" AND ")}`;
+
+    const [countResult, dataResult] = await Promise.all([
+      pool.query(`SELECT COUNT(*) FROM site_revisits sr ${where}`, params),
+      pool.query(
+        `SELECT
+           sr.id, sr.visit_date, sr.visit_time, sr.status,
+           sr.transport_arranged, sr.reason, sr.notes,
+           sr.original_visit_id, sr.created_at, sr.updated_at,
+           l.id    AS lead_id,
+           l.name  AS lead_name,
+           l.phone AS lead_phone,
+           p.id    AS project_id,
+           p.name  AS project_name,
+           p.city  AS project_city,
+           p.locality AS project_locality,
+           rf.rating, rf.client_reaction, rf.next_step, rf.remarks
+         FROM site_revisits sr
+         JOIN    leads    l   ON l.id  = sr.lead_id
+         JOIN    projects p   ON p.id  = sr.project_id
+         LEFT JOIN site_revisit_feedback rf ON rf.revisit_id = sr.id
+         ${where}
+         ORDER BY sr.visit_date DESC, sr.visit_time DESC
+         LIMIT $${idx++} OFFSET $${idx++}`,
+        [...params, per_page, offset]
+      ),
+    ]);
+
+    return res.json(paginate(dataResult.rows, parseInt(countResult.rows[0].count), page, per_page));
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
 // GET /api/v1/me/activities
 // Lead activities performed by the logged-in user
 // Query: type, lead_id, from, to, page, per_page
@@ -559,6 +617,7 @@ module.exports = {
   getMySummary,
   getMyLeads,
   getMySiteVisits,
+  getMyRevisits,
   getMyTasks,
   getMyNotifications,
   getMyAttendance,
