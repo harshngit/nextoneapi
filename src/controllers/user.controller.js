@@ -501,23 +501,40 @@ const assignManager = async (req, res, next) => {
 
     const target = targetResult.rows[0];
 
-    // Only sales_executive and external_caller can be assigned to a manager
-    if (!["sales_executive", "external_caller"].includes(target.role)) {
-      return next(new AppError("Only sales_executive or external_caller can be assigned to a manager", 400));
+    // Defines which manager roles are valid for each user role (full hierarchy)
+    // Top Admin - Associate Partner / Cluster Head / Cluster - Partner - Team Leader - Sales Manager - Sales Executive - External Caller
+    const VALID_MANAGER_FOR = {
+      associate_partner: ["super_admin", "admin"],
+      cluster_head:      ["super_admin", "admin"],
+      cluster:           ["super_admin", "admin"],
+      partner:           ["associate_partner", "cluster_head", "cluster"],
+      team_leader:       ["partner"],
+      sales_manager:     ["team_leader"],
+      sales_executive:   ["sales_manager"],
+      external_caller:   ["sales_manager"],
+    };
+
+    const allowedManagerRoles = VALID_MANAGER_FOR[target.role];
+    if (!allowedManagerRoles) {
+      return next(new AppError(`Users with role "${target.role}" cannot be assigned to a manager`, 400));
     }
 
-    // Verify the target manager exists and has the correct role
+    // Verify the manager exists and has a role valid for this user's level
     const managerResult = await pool.query(
       "SELECT id, role, first_name, last_name FROM users WHERE id = $1 AND is_active = true",
       [manager_id]
     );
     if (managerResult.rows.length === 0) return next(new AppError("Manager not found", 404));
-    if (managerResult.rows[0].role !== "sales_manager") {
-      return next(new AppError("The provided manager_id does not belong to a sales_manager", 400));
+
+    const mgr = managerResult.rows[0];
+    if (!allowedManagerRoles.includes(mgr.role)) {
+      return next(new AppError(
+        `A user with role "${target.role}" must be assigned to one of: ${allowedManagerRoles.join(", ")}`, 400
+      ));
     }
 
-    // sales_manager can only assign users currently unassigned or already on their team
-    if (callerRole === "sales_manager") {
+    // Non-admin callers can only assign users to themselves as manager
+    if (!["super_admin", "admin"].includes(callerRole)) {
       if (manager_id !== callerId) {
         return next(new AppError("You can only assign users to yourself as manager", 403));
       }
@@ -531,7 +548,6 @@ const assignManager = async (req, res, next) => {
       [manager_id, id]
     );
 
-    const mgr = managerResult.rows[0];
     return sendSuccess(res, "User assigned to manager successfully", {
       user_id:      id,
       user_name:    `${target.first_name} ${target.last_name}`,
