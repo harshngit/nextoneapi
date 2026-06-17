@@ -501,25 +501,27 @@ const assignManager = async (req, res, next) => {
 
     const target = targetResult.rows[0];
 
-    // Defines which manager roles are valid for each user role (full hierarchy)
-    // Top Admin - Associate Partner / Cluster Head / Cluster - Partner - Team Leader - Sales Manager - Sales Executive - External Caller
-    const VALID_MANAGER_FOR = {
-      associate_partner: ["super_admin", "admin"],
-      cluster_head:      ["super_admin", "admin"],
-      cluster:           ["super_admin", "admin"],
-      partner:           ["associate_partner", "cluster_head", "cluster"],
-      team_leader:       ["partner"],
-      sales_manager:     ["team_leader"],
-      sales_executive:   ["sales_manager"],
-      external_caller:   ["sales_manager"],
+    // Role rank — higher number = higher in hierarchy
+    // Top Admin → Associate Partner/Cluster Head/Cluster → Partner → Team Leader → Sales Manager → Sales Executive/External Caller
+    const ROLE_RANK = {
+      super_admin:       7,
+      admin:             6,
+      associate_partner: 5,
+      cluster_head:      5,
+      cluster:           5,
+      partner:           4,
+      team_leader:       3,
+      sales_manager:     2,
+      sales_executive:   1,
+      external_caller:   1,
     };
 
-    const allowedManagerRoles = VALID_MANAGER_FOR[target.role];
-    if (!allowedManagerRoles) {
+    const targetRank = ROLE_RANK[target.role];
+    if (!targetRank) {
       return next(new AppError(`Users with role "${target.role}" cannot be assigned to a manager`, 400));
     }
 
-    // Verify the manager exists and has a role valid for this user's level
+    // Verify the manager exists
     const managerResult = await pool.query(
       "SELECT id, role, first_name, last_name FROM users WHERE id = $1 AND is_active = true",
       [manager_id]
@@ -527,9 +529,12 @@ const assignManager = async (req, res, next) => {
     if (managerResult.rows.length === 0) return next(new AppError("Manager not found", 404));
 
     const mgr = managerResult.rows[0];
-    if (!allowedManagerRoles.includes(mgr.role)) {
+    const managerRank = ROLE_RANK[mgr.role];
+
+    // Manager must be strictly higher in the hierarchy than the user being assigned
+    if (!managerRank || managerRank <= targetRank) {
       return next(new AppError(
-        `A user with role "${target.role}" must be assigned to one of: ${allowedManagerRoles.join(", ")}`, 400
+        `Cannot assign: "${mgr.role}" is not above "${target.role}" in the hierarchy`, 400
       ));
     }
 
