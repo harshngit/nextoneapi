@@ -316,6 +316,40 @@ router.get('/calendar', authenticate, ctrl.getCalendar)
 
 /**
  * @swagger
+ * /api/v1/attendance/today-all:
+ *   get:
+ *     summary: Today's attendance for ALL users (admin only)
+ *     description: >
+ *       Returns every active user's attendance status for today.
+ *       Includes who has checked in and who hasn't (shown as absent).
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Today's attendance snapshot
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 date: "2026-06-17"
+ *                 summary:
+ *                   total_employees: 20
+ *                   checked_in: 14
+ *                   not_checked_in: 6
+ *                   present: 10
+ *                   late: 4
+ *                   half_day: 0
+ *                   on_leave: 1
+ *                   absent: 6
+ *                 checked_in: []
+ *                 not_checked_in: []
+ */
+router.get('/today-all', authenticate, authorize(...ADMIN), ctrl.getTodayAll)
+
+/**
+ * @swagger
  * /api/v1/attendance/by-date:
  *   get:
  *     summary: All users' attendance for a specific date

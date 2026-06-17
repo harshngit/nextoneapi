@@ -40,26 +40,25 @@ const countWorkingDays = (year, month) => {
 const CHECKIN_HALF_DAY_CUTOFF = '10:30' // after this → half day
 const CHECKOUT_FULL_DAY_TIME  = '19:30' // must check out at/after this for full day
 
-const resolveStatus = async (checkInTime) => {
+const resolveStatus = (checkInTime) => {
   try {
     const checkIn = new Date(checkInTime)
     const h = checkIn.getHours()
     const m = checkIn.getMinutes()
     const totalMinutes = h * 60 + m
 
-    // Parse cutoffs
     const [hdH, hdM] = CHECKIN_HALF_DAY_CUTOFF.split(':').map(Number)
     const halfDayCutoffMins = hdH * 60 + hdM  // 10:30 = 630
 
-    // After 10:30 → half_day immediately at check-in
+    // After 10:30 → late, track how many minutes late
     if (totalMinutes > halfDayCutoffMins) {
-      return 'half_day'
+      return { status: 'late', lateMinutes: totalMinutes - halfDayCutoffMins }
     }
 
     // Before or at 10:30 → present (full day)
-    return 'present'
+    return { status: 'present', lateMinutes: 0 }
   } catch {
-    return 'present'
+    return { status: 'present', lateMinutes: 0 }
   }
 }
 
@@ -172,35 +171,39 @@ const checkIn = async (req, res, next) => {
     }
 
     const { latitude, longitude, address, device, notes } = req.body
-    const checkInTime = new Date()
-    const status      = await resolveStatus(checkInTime)
-    const photo       = buildPhotoUrl(req.file)
-    const ip          = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || null
-    const userMeta    = await getUserMeta(userId)
+    const checkInTime            = new Date()
+    const { status, lateMinutes } = resolveStatus(checkInTime)
+    const photo                  = buildPhotoUrl(req.file)
+    const ip                     = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || null
+    const userMeta               = await getUserMeta(userId)
 
     let record
     if (existing.rows.length) {
       const r = await pool.query(
-        `UPDATE attendance SET check_in_time=$1, status=$2,
-           checkin_photo=COALESCE($3,checkin_photo),
-           checkin_latitude=$4, checkin_longitude=$5, checkin_address=$6,
-           checkin_ip=$7, checkin_device=$8, notes=COALESCE($9,notes), updated_at=NOW()
-         WHERE user_id=$10 AND date=$11 RETURNING *`,
-        [checkInTime, status, photo, latitude||null, longitude||null, address||null, ip, device||null, notes||null, userId, today]
+        `UPDATE attendance SET check_in_time=$1, status=$2, late_by_minutes=$3,
+           checkin_photo=COALESCE($4,checkin_photo),
+           checkin_latitude=$5, checkin_longitude=$6, checkin_address=$7,
+           checkin_ip=$8, checkin_device=$9, notes=COALESCE($10,notes), updated_at=NOW()
+         WHERE user_id=$11 AND date=$12 RETURNING *`,
+        [checkInTime, status, lateMinutes||null, photo, latitude||null, longitude||null, address||null, ip, device||null, notes||null, userId, today]
       )
       record = r.rows[0]
     } else {
       const r = await pool.query(
         `INSERT INTO attendance
-           (user_id,date,check_in_time,status,checkin_photo,
+           (user_id,date,check_in_time,status,late_by_minutes,checkin_photo,
             checkin_latitude,checkin_longitude,checkin_address,checkin_ip,checkin_device,notes)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-        [userId, today, checkInTime, status, photo, latitude||null, longitude||null, address||null, ip, device||null, notes||null]
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+        [userId, today, checkInTime, status, lateMinutes||null, photo, latitude||null, longitude||null, address||null, ip, device||null, notes||null]
       )
       record = r.rows[0]
     }
 
-    return sendSuccess(res, 'Checked in successfully', { attendance: record, user: userMeta }, 201)
+    const checkInMsg = status === 'late'
+      ? `Checked in late — ${lateMinutes} minute${lateMinutes !== 1 ? 's' : ''} after 10:30 AM`
+      : 'Checked in successfully'
+
+    return sendSuccess(res, checkInMsg, { attendance: record, user: userMeta }, 201)
   } catch (err) { next(err) }
 }
 
@@ -1336,6 +1339,58 @@ const changeAttendanceStatus = async (req, res, next) => {
   }
 }
 
+// ─── TODAY ALL (admin) ────────────────────────────────────────────────────────
+const getTodayAll = async (req, res, next) => {
+  try {
+    const today = new Date().toISOString().split('T')[0]
+
+    const [checkedIn, notCheckedIn] = await Promise.all([
+      pool.query(
+        `SELECT a.*, CONCAT(u.first_name,' ',u.last_name) AS full_name,
+                u.role, u.email, u.phone_number
+         FROM attendance a
+         JOIN users u ON u.id = a.user_id
+         WHERE a.date = $1 AND u.is_active = true
+         ORDER BY a.check_in_time ASC NULLS LAST`,
+        [today]
+      ),
+      pool.query(
+        `SELECT u.id, CONCAT(u.first_name,' ',u.last_name) AS full_name,
+                u.role, u.email, u.phone_number
+         FROM users u
+         WHERE u.is_active = true
+           AND u.id NOT IN (SELECT user_id FROM attendance WHERE date = $1)
+         ORDER BY u.first_name ASC`,
+        [today]
+      ),
+    ])
+
+    const rows = checkedIn.rows
+    const summary = {
+      total_employees: rows.length + notCheckedIn.rows.length,
+      checked_in:      rows.filter(r => r.check_in_time).length,
+      not_checked_in:  notCheckedIn.rows.length,
+      present:         rows.filter(r => r.status === 'present').length,
+      late:            rows.filter(r => r.status === 'late').length,
+      half_day:        rows.filter(r => r.status === 'half_day').length,
+      on_leave:        rows.filter(r => r.status === 'on_leave').length,
+      absent:          rows.filter(r => r.status === 'absent').length + notCheckedIn.rows.length,
+    }
+
+    return sendSuccess(res, `Today's attendance (${today})`, {
+      date:          today,
+      summary,
+      checked_in:    rows,
+      not_checked_in: notCheckedIn.rows.map(u => ({
+        ...u,
+        status:         'absent',
+        check_in_time:  null,
+        check_out_time: null,
+      })),
+    })
+  } catch (err) { next(err) }
+}
+
 module.exports = {
   uploadPhoto, checkIn, checkOut, getToday, getMyAttendance,
   getByDate, getByMonth, getByUser, getAll,
@@ -1345,4 +1400,5 @@ module.exports = {
   approveStatus, getPendingApprovals,
   getTeamAttendance,
   changeAttendanceStatus,
+  getTodayAll,
 }
