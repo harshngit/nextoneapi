@@ -4,7 +4,7 @@ const { pool } = require('../config/db');
 const ADMIN_ROLES = ['super_admin', 'admin'];
 
 // Roles that see only their own assigned data
-const LEAF_ROLES = ['sales_executive', 'external_caller', 'associate', 'hr_admin', 'digital_marketing'];
+const LEAF_ROLES = ['sales_executive', 'external_caller', 'hr_admin', 'digital_marketing'];
 
 // Roles in the middle — see their entire sub-tree recursively via manager_id chain:
 // associate_partner / cluster_head / cluster / partner / team_leader / sales_manager

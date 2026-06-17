@@ -502,18 +502,19 @@ const assignManager = async (req, res, next) => {
     const target = targetResult.rows[0];
 
     // Role rank — lower number = higher authority
-    // 1 (top) → 2 → 3 → 4 → 5 → 6 → 7 (bottom)
+    // 1 (top) → 2 → 3 → 4 → 5 → 6 → 7 → 8 (bottom)
     const ROLE_RANK = {
       super_admin:       1,
       admin:             2,
-      associate_partner: 3,
-      cluster_head:      3,
-      cluster:           3,
-      partner:           4,
-      team_leader:       5,
-      sales_manager:     6,
-      sales_executive:   7,
-      external_caller:   7,
+      associate:         3,
+      associate_partner: 4,
+      cluster_head:      4,
+      cluster:           4,
+      partner:           5,
+      team_leader:       6,
+      sales_manager:     7,
+      sales_executive:   8,
+      external_caller:   8,
     };
 
     const targetRank = ROLE_RANK[target.role];
