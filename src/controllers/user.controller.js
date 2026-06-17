@@ -501,23 +501,23 @@ const assignManager = async (req, res, next) => {
 
     const target = targetResult.rows[0];
 
-    // Role rank — higher number = higher in hierarchy
-    // Top Admin → Associate Partner/Cluster Head/Cluster → Partner → Team Leader → Sales Manager → Sales Executive/External Caller
+    // Role rank — lower number = higher authority
+    // 1 (top) → 2 → 3 → 4 → 5 → 6 → 7 (bottom)
     const ROLE_RANK = {
-      super_admin:       7,
-      admin:             6,
-      associate_partner: 5,
-      cluster_head:      5,
-      cluster:           5,
+      super_admin:       1,
+      admin:             2,
+      associate_partner: 3,
+      cluster_head:      3,
+      cluster:           3,
       partner:           4,
-      team_leader:       3,
-      sales_manager:     2,
-      sales_executive:   1,
-      external_caller:   1,
+      team_leader:       5,
+      sales_manager:     6,
+      sales_executive:   7,
+      external_caller:   7,
     };
 
     const targetRank = ROLE_RANK[target.role];
-    if (!targetRank) {
+    if (targetRank === undefined) {
       return next(new AppError(`Users with role "${target.role}" cannot be assigned to a manager`, 400));
     }
 
@@ -531,10 +531,14 @@ const assignManager = async (req, res, next) => {
     const mgr = managerResult.rows[0];
     const managerRank = ROLE_RANK[mgr.role];
 
-    // Manager must be strictly higher in the hierarchy than the user being assigned
-    if (!managerRank || managerRank <= targetRank) {
+    // Manager must have a lower rank number (= higher authority) than the user being assigned
+    if (managerRank === undefined || managerRank >= targetRank) {
+      const validManagerRoles = Object.entries(ROLE_RANK)
+        .filter(([, rank]) => rank < targetRank)
+        .map(([r]) => r)
+        .join(', ');
       return next(new AppError(
-        `Cannot assign: "${mgr.role}" is not above "${target.role}" in the hierarchy`, 400
+        `The selected manager has role "${mgr.role}" which is not above "${target.role}" in the hierarchy. Valid manager roles for "${target.role}" are: ${validManagerRoles}`, 400
       ));
     }
 
