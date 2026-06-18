@@ -328,8 +328,9 @@ const getMyAttendance = async (req, res, next) => {
       summary: {
         present:              parseInt(s.present),
         absent:               parseInt(s.absent),
-        leave:                parseInt(s.leave),
         late:                 parseInt(s.late),
+        leave:                parseInt(s.leave),
+        half_day:             parseInt(s.half_day_leave) || 0,
         total_working_hours:  parseFloat(s.total_working_hours),
       },
       salary: {
@@ -389,11 +390,12 @@ const getTeamAttendance = async (req, res, next) => {
          ORDER BY a.date DESC, u.first_name ASC LIMIT $4 OFFSET $5`,
         [teamIds, start, end, parseInt(per_page), offset]),
       pool.query(`SELECT
-           COUNT(*) FILTER (WHERE status IN ('present','late'))      AS present,
-           COUNT(*) FILTER (WHERE status = 'absent')                 AS absent,
-           COUNT(*) FILTER (WHERE status = 'leave')                  AS leave,
-           COUNT(*) FILTER (WHERE status = 'late')                   AS late,
-           COALESCE(SUM(working_hours), 0)                           AS total_working_hours
+           COUNT(*) FILTER (WHERE status IN ('present','late'))                  AS present,
+           COUNT(*) FILTER (WHERE status = 'absent')                             AS absent,
+           COUNT(*) FILTER (WHERE status = 'leave')                              AS leave,
+           COUNT(*) FILTER (WHERE status = 'late')                               AS late,
+           COUNT(*) FILTER (WHERE status = 'leave' AND leave_type = 'half_day')  AS half_day,
+           COALESCE(SUM(working_hours), 0)                                       AS total_working_hours
          FROM attendance WHERE user_id = ANY($1::uuid[]) AND date BETWEEN $2 AND $3`,
         [teamIds, start, end]),
     ])
@@ -401,7 +403,7 @@ const getTeamAttendance = async (req, res, next) => {
     const s = sum.rows[0]
     return res.json({
       ...paginate(data.rows, parseInt(cnt.rows[0].count), parseInt(page), parseInt(per_page)),
-      summary: { present:parseInt(s.present), absent:parseInt(s.absent), leave:parseInt(s.leave), late:parseInt(s.late), total_working_hours:parseFloat(s.total_working_hours) },
+      summary: { present:parseInt(s.present), absent:parseInt(s.absent), late:parseInt(s.late), leave:parseInt(s.leave), half_day:parseInt(s.half_day)||0, total_working_hours:parseFloat(s.total_working_hours) },
       period: { from: start, to: end },
       team_size: teamIds.length,
     })
@@ -461,13 +463,14 @@ const getByDate = async (req, res, next) => {
       late:     recs.rows.filter(r=>r.status==='late').length,
       absent:   recs.rows.filter(r=>r.status==='absent').length + noRec.rows.length,
       leave:    recs.rows.filter(r=>r.status==='leave').length,
+      half_day: recs.rows.filter(r=>r.status==='leave' && r.leave_type==='half_day').length,
       total:    recs.rows.length + noRec.rows.length,
     }
 
     return sendSuccess(res, `Attendance for ${date}`, {
       date, summary,
       records:   recs.rows,
-      no_record: noRec.rows.map(u=>({ ...u, status:'absent', check_in_time:null, check_out_time:null })),
+      no_record: noRec.rows.map(u=>({ ...u, status:'absent', check_in_time:null, check_out_time:null, checkin_photo:null, checkout_photo:null })),
     })
   } catch (err) { next(err) }
 }
@@ -559,6 +562,8 @@ const getByMonth = async (req, res, next) => {
           checkout_photo: rec?.checkout_photo || null,
           checkin_address:  rec?.checkin_address  || null,
           checkout_address: rec?.checkout_address || null,
+          leave_type:       rec?.leave_type || null,
+          late_by_minutes:  rec?.late_by_minutes || null,
           is_manual_entry:  rec?.is_manual_entry  || false,
           reason:           rec?.reason || null,
         }
@@ -570,8 +575,9 @@ const getByMonth = async (req, res, next) => {
         summary: {
           present:             wd.filter(d=>['present','late'].includes(d.status)).length,
           absent:              wd.filter(d=>d.status==='absent').length,
-          leave:               wd.filter(d=>d.status==='leave').length,
           late:                wd.filter(d=>d.status==='late').length,
+          leave:               wd.filter(d=>d.status==='leave').length,
+          half_day:            wd.filter(d=>d.status==='leave' && d.leave_type==='half_day').length,
           total_working_hours: parseFloat(wd.reduce((s,d)=>s+(parseFloat(d.working_hours)||0),0).toFixed(2)),
           working_days:        wd.length,
         },
@@ -614,8 +620,9 @@ const getCalendar = async (req, res, next) => {
       summary:{
         present:wd.filter(d=>['present','late'].includes(d.status)).length,
         absent:wd.filter(d=>d.status==='absent').length,
-        leave:wd.filter(d=>d.status==='leave').length,
         late:wd.filter(d=>d.status==='late').length,
+        leave:wd.filter(d=>d.status==='leave').length,
+        half_day:wd.filter(d=>d.status==='leave'&&d.leave_type==='half_day').length,
         total_working_hours:parseFloat(wd.reduce((s,d)=>s+(parseFloat(d.working_hours)||0),0).toFixed(2)),
         working_days:wd.length,
       },
@@ -634,13 +641,13 @@ const getByUser = async (req, res, next) => {
     const [cnt,data,sum]=await Promise.all([
       pool.query(`SELECT COUNT(*) FROM attendance WHERE user_id=$1 AND date BETWEEN $2 AND $3`,[user_id,start,end]),
       pool.query(`SELECT a.*,CONCAT(u.first_name,' ',u.last_name) AS full_name,u.role FROM attendance a JOIN users u ON u.id=a.user_id WHERE a.user_id=$1 AND a.date BETWEEN $2 AND $3 ORDER BY a.date DESC LIMIT $4 OFFSET $5`,[user_id,start,end,parseInt(per_page),offset]),
-      pool.query(`SELECT COUNT(*) FILTER (WHERE status IN('present','late')) AS present,COUNT(*) FILTER (WHERE status='absent') AS absent,COUNT(*) FILTER (WHERE status='leave') AS leave,COUNT(*) FILTER (WHERE status='late') AS late,COALESCE(SUM(working_hours),0) AS total_working_hours FROM attendance WHERE user_id=$1 AND date BETWEEN $2 AND $3`,[user_id,start,end]),
+      pool.query(`SELECT COUNT(*) FILTER (WHERE status IN('present','late')) AS present,COUNT(*) FILTER (WHERE status='absent') AS absent,COUNT(*) FILTER (WHERE status='leave') AS leave,COUNT(*) FILTER (WHERE status='late') AS late,COUNT(*) FILTER (WHERE status='leave' AND leave_type='half_day') AS half_day,COALESCE(SUM(working_hours),0) AS total_working_hours FROM attendance WHERE user_id=$1 AND date BETWEEN $2 AND $3`,[user_id,start,end]),
     ])
     const u=uChk.rows[0], s=sum.rows[0]
     return res.json({
       ...paginate(data.rows,parseInt(cnt.rows[0].count),parseInt(page),parseInt(per_page)),
       user:{id:u.id,full_name:`${u.first_name} ${u.last_name||''}`.trim(),role:u.role,email:u.email},
-      summary:{present:parseInt(s.present),absent:parseInt(s.absent),leave:parseInt(s.leave),late:parseInt(s.late),total_working_hours:parseFloat(s.total_working_hours)},
+      summary:{present:parseInt(s.present),absent:parseInt(s.absent),late:parseInt(s.late),leave:parseInt(s.leave),half_day:parseInt(s.half_day)||0,total_working_hours:parseFloat(s.total_working_hours)},
       period:{from:start,to:end},
     })
   } catch (err) { next(err) }
@@ -659,12 +666,12 @@ const getAll = async (req, res, next) => {
     const [cnt,data,sum]=await Promise.all([
       pool.query(`SELECT COUNT(*) FROM attendance a ${where}`,params),
       pool.query(`SELECT a.*,CONCAT(u.first_name,' ',u.last_name) AS full_name,u.role,u.email,u.phone_number FROM attendance a JOIN users u ON u.id=a.user_id ${where} ORDER BY a.date DESC,u.first_name ASC LIMIT $${idx++} OFFSET $${idx++}`,[...params,parseInt(per_page),offset]),
-      pool.query(`SELECT COUNT(*) FILTER (WHERE status IN('present','late')) AS present,COUNT(*) FILTER (WHERE status='absent') AS absent,COUNT(*) FILTER (WHERE status='leave') AS leave,COUNT(*) FILTER (WHERE status='late') AS late FROM attendance a ${where}`,params),
+      pool.query(`SELECT COUNT(*) FILTER (WHERE status IN('present','late')) AS present,COUNT(*) FILTER (WHERE status='absent') AS absent,COUNT(*) FILTER (WHERE status='leave') AS leave,COUNT(*) FILTER (WHERE status='late') AS late,COUNT(*) FILTER (WHERE status='leave' AND leave_type='half_day') AS half_day FROM attendance a ${where}`,params),
     ])
     const s=sum.rows[0]
     return res.json({
       ...paginate(data.rows,parseInt(cnt.rows[0].count),parseInt(page),parseInt(per_page)),
-      summary:{present:parseInt(s.present),absent:parseInt(s.absent),leave:parseInt(s.leave),late:parseInt(s.late)},
+      summary:{present:parseInt(s.present),absent:parseInt(s.absent),late:parseInt(s.late),leave:parseInt(s.leave),half_day:parseInt(s.half_day)||0},
       period:{from:start,to:end},
     })
   } catch (err) { next(err) }
@@ -692,6 +699,7 @@ const getSummary = async (req, res, next) => {
               COUNT(a.id) FILTER (WHERE a.status='absent') AS absent,
               COUNT(a.id) FILTER (WHERE a.status='leave') AS leave,
               COUNT(a.id) FILTER (WHERE a.status='late') AS late,
+              COUNT(a.id) FILTER (WHERE a.status='leave' AND a.leave_type='half_day') AS half_day,
               COUNT(a.id) AS total_days,
               COALESCE(SUM(a.working_hours),0) AS total_working_hours,
               MAX(a.date) FILTER (WHERE a.check_in_time IS NOT NULL) AS last_present
@@ -700,7 +708,7 @@ const getSummary = async (req, res, next) => {
     )
     return sendSuccess(res,'Summary fetched',{
       period:{from:start,to:end},
-      data:r.rows.map(x=>({...x,present:parseInt(x.present),absent:parseInt(x.absent),leave:parseInt(x.leave),late:parseInt(x.late),total_days:parseInt(x.total_days),total_working_hours:parseFloat(x.total_working_hours),attendance_percent:parseInt(x.total_days)>0?parseFloat(((parseInt(x.present)/parseInt(x.total_days))*100).toFixed(1)):0})),
+      data:r.rows.map(x=>({...x,present:parseInt(x.present),absent:parseInt(x.absent),late:parseInt(x.late),leave:parseInt(x.leave),half_day:parseInt(x.half_day)||0,total_days:parseInt(x.total_days),total_working_hours:parseFloat(x.total_working_hours),attendance_percent:parseInt(x.total_days)>0?parseFloat(((parseInt(x.present)/parseInt(x.total_days))*100).toFixed(1)):0})),
     })
   } catch (err) { next(err) }
 }
@@ -1336,6 +1344,7 @@ const getTodayAll = async (req, res, next) => {
       present:         rows.filter(r => r.status === 'present').length,
       late:            rows.filter(r => r.status === 'late').length,
       leave:           rows.filter(r => r.status === 'leave').length,
+      half_day:        rows.filter(r => r.status === 'leave' && r.leave_type === 'half_day').length,
       absent:          rows.filter(r => r.status === 'absent').length + notCheckedIn.rows.length,
     }
 
@@ -1348,6 +1357,8 @@ const getTodayAll = async (req, res, next) => {
         status:         'absent',
         check_in_time:  null,
         check_out_time: null,
+        checkin_photo:  null,
+        checkout_photo: null,
       })),
     })
   } catch (err) { next(err) }
