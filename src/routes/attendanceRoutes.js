@@ -5,7 +5,11 @@ const { authenticate, authorize } = require('../middleware/auth')
 const { uploadCheckinPhoto, uploadCheckoutPhoto } = require('../middleware/attendanceUpload')
 
 const ADMIN   = ['super_admin', 'admin']
-const MANAGER = ['super_admin', 'admin', 'sales_manager']
+const HIERARCHY = [
+  'super_admin', 'admin',
+  'associate', 'associate_partner', 'cluster_head', 'cluster',
+  'partner', 'team_leader', 'sales_manager',
+]
 
 /**
  * @swagger
@@ -287,7 +291,7 @@ router.get('/me', authenticate, ctrl.getMyAttendance)
 router.get(
   '/team',
   authenticate,
-  authorize(...MANAGER),
+  authorize(...HIERARCHY),
   ctrl.getTeamAttendance
 )
 
@@ -383,7 +387,7 @@ router.get('/today-all', authenticate, authorize(...ADMIN), ctrl.getTodayAll)
 router.get(
   '/by-date',
   authenticate,
-  authorize(...MANAGER),
+  authorize(...HIERARCHY),
   ctrl.getByDate
 )
 
@@ -441,7 +445,7 @@ router.get(
 router.get(
   '/by-month',
   authenticate,
-  authorize(...MANAGER),
+  authorize(...HIERARCHY),
   ctrl.getByMonth
 )
 
@@ -461,7 +465,7 @@ router.get(
  *       200:
  *         description: Summary per user
  */
-router.get('/summary', authenticate, authorize(...MANAGER), ctrl.getSummary)
+router.get('/summary', authenticate, authorize(...HIERARCHY), ctrl.getSummary)
 
 /**
  * @swagger
@@ -479,7 +483,7 @@ router.get('/summary', authenticate, authorize(...MANAGER), ctrl.getSummary)
  *       200:
  *         description: List of late records
  */
-router.get('/late', authenticate, authorize(...MANAGER), ctrl.getLateArrivals)
+router.get('/late', authenticate, authorize(...HIERARCHY), ctrl.getLateArrivals)
 
 /**
  * @swagger
@@ -510,7 +514,7 @@ router.get('/late', authenticate, authorize(...MANAGER), ctrl.getLateArrivals)
  *               type: string
  *               format: binary
  */
-router.get('/export', authenticate, authorize(...MANAGER), ctrl.exportExcel)
+router.get('/export', authenticate, authorize(...HIERARCHY), ctrl.exportExcel)
 
 /**
  * @swagger
@@ -532,7 +536,7 @@ router.get('/export', authenticate, authorize(...MANAGER), ctrl.exportExcel)
  *       404:
  *         description: User not found
  */
-router.get('/user/:user_id', authenticate, authorize(...MANAGER), ctrl.getByUser)
+router.get('/user/:user_id', authenticate, authorize(...HIERARCHY), ctrl.getByUser)
 
 /**
  * @swagger
