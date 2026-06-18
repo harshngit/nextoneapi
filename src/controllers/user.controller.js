@@ -656,21 +656,35 @@ const getTeamTree = async (req, res, next) => {
     if (!managerRes.rows.length) return next(new AppError('User not found', 404));
     const mgr = managerRes.rows[0];
 
-    const teamRes = await pool.query(
-      `WITH RECURSIVE sub AS (
-         SELECT id FROM users WHERE id = $1
-         UNION ALL
-         SELECT u.id FROM users u INNER JOIN sub s ON u.manager_id = s.id
-       )
-       SELECT u.id, u.first_name, u.last_name, u.email, u.phone_number,
-              u.role, u.is_active, u.manager_id,
-              CONCAT(m.first_name, ' ', m.last_name) AS manager_name
-       FROM users u
-       LEFT JOIN users m ON m.id = u.manager_id
-       WHERE u.id IN (SELECT id FROM sub) AND u.id != $1
-       ORDER BY u.role ASC, u.first_name ASC`,
-      [managerId]
-    );
+    let teamRes;
+    if (['super_admin', 'admin'].includes(mgr.role)) {
+      teamRes = await pool.query(
+        `SELECT u.id, u.first_name, u.last_name, u.email, u.phone_number,
+                u.role, u.is_active, u.manager_id,
+                CONCAT(m.first_name, ' ', m.last_name) AS manager_name
+         FROM users u
+         LEFT JOIN users m ON m.id = u.manager_id
+         WHERE u.id != $1 AND u.is_active = true
+         ORDER BY u.role ASC, u.first_name ASC`,
+        [managerId]
+      );
+    } else {
+      teamRes = await pool.query(
+        `WITH RECURSIVE sub AS (
+           SELECT id FROM users WHERE id = $1
+           UNION ALL
+           SELECT u.id FROM users u INNER JOIN sub s ON u.manager_id = s.id
+         )
+         SELECT u.id, u.first_name, u.last_name, u.email, u.phone_number,
+                u.role, u.is_active, u.manager_id,
+                CONCAT(m.first_name, ' ', m.last_name) AS manager_name
+         FROM users u
+         LEFT JOIN users m ON m.id = u.manager_id
+         WHERE u.id IN (SELECT id FROM sub) AND u.id != $1
+         ORDER BY u.role ASC, u.first_name ASC`,
+        [managerId]
+      );
+    }
 
     return sendSuccess(res, 'Team tree fetched', {
       manager:    { id: mgr.id, full_name: `${mgr.first_name} ${mgr.last_name}`, role: mgr.role, email: mgr.email },
