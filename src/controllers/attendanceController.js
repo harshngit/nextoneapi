@@ -415,28 +415,27 @@ const getByDate = async (req, res, next) => {
     const { role, id: callerId } = req.user
     if (!date) return next(new AppError('date query param required (YYYY-MM-DD)', 400))
 
-    // Build user scope filter
-    // sales_manager → only their team members
-    // sales_executive / external_caller → only themselves
-    // admin/super_admin → all users (or single user if user_id passed)
+    // Scope: admin sees all (or filter by user_id), hierarchy roles see recursive sub-tree, leaf roles see self
     let scopeFilter     = ''
     let scopeParams     = [date]
     let noRecScopeWhere = 'u.is_active=true'
     let noRecParams     = [date]
     let idx             = 2
 
-    if (role === 'sales_manager') {
-      scopeFilter     = `AND u.manager_id=$${++idx}`
-      scopeParams     = [date, callerId]
-      noRecScopeWhere = `u.is_active=true AND u.manager_id=$2`
-      noRecParams     = [date, callerId]
-    } else if (['sales_executive', 'external_caller'].includes(role)) {
+    const LEAF = ['sales_executive', 'external_caller', 'hr_admin', 'digital_marketing']
+
+    if (LEAF.includes(role)) {
       scopeFilter     = `AND a.user_id=$${++idx}`
       scopeParams     = [date, callerId]
       noRecScopeWhere = `u.is_active=true AND u.id=$2`
       noRecParams     = [date, callerId]
+    } else if (!ADMIN_ROLES.includes(role)) {
+      const teamIds = await getTeamIds(callerId)
+      scopeFilter     = `AND a.user_id = ANY($${++idx}::uuid[])`
+      scopeParams     = [date, teamIds]
+      noRecScopeWhere = `u.is_active=true AND u.id = ANY($2::uuid[])`
+      noRecParams     = [date, teamIds]
     } else if (user_id) {
-      // admin filtering to one user
       scopeFilter     = `AND a.user_id=$${++idx}`
       scopeParams     = [date, user_id]
       noRecScopeWhere = `u.is_active=true AND u.id=$2`
@@ -484,10 +483,7 @@ const getByMonth = async (req, res, next) => {
     const end    = new Date(y,m,0).toISOString().split('T')[0]
     const offset = (parseInt(page)-1)*parseInt(per_page)
 
-    // ── Scope users to manager's team ──────────────────────────────────────
-    // sales_manager  → always scoped to their own team (manager_id = callerId)
-    // admin/super_admin → can pass manager_id param to scope, or user_id for one user
-    // All others → scoped to themselves only
+    // Scope: admin sees all (or filter by user_id/manager_id), hierarchy → recursive sub-tree
     let uFilter   = ''
     let uParams   = [parseInt(per_page), offset]
     let cntFilter = ''
@@ -495,16 +491,24 @@ const getByMonth = async (req, res, next) => {
     let attFilter = ''
     let attParams = [start, end]
 
-    if (role === 'sales_manager') {
-      // Always show only this manager's team members
-      uFilter   = 'AND manager_id=$3'
+    const LEAF = ['sales_executive', 'external_caller', 'hr_admin', 'digital_marketing']
+
+    if (LEAF.includes(role)) {
+      uFilter   = 'AND id=$3'
       uParams   = [parseInt(per_page), offset, callerId]
-      cntFilter = 'AND manager_id=$1'
+      cntFilter = 'AND id=$1'
       cntParams = [callerId]
-      attFilter = 'AND a.user_id IN (SELECT id FROM users WHERE manager_id=$3 AND is_active=true)'
+      attFilter = 'AND a.user_id=$3'
       attParams = [start, end, callerId]
+    } else if (!ADMIN_ROLES.includes(role)) {
+      const teamIds = await getTeamIds(callerId)
+      uFilter   = 'AND id = ANY($3::uuid[])'
+      uParams   = [parseInt(per_page), offset, teamIds]
+      cntFilter = 'AND id = ANY($1::uuid[])'
+      cntParams = [teamIds]
+      attFilter = 'AND a.user_id = ANY($3::uuid[])'
+      attParams = [start, end, teamIds]
     } else if (user_id) {
-      // Single user filter (admin viewing one person's grid, or exec viewing own)
       uFilter   = 'AND id=$3'
       uParams   = [parseInt(per_page), offset, user_id]
       cntFilter = 'AND id=$1'
@@ -512,15 +516,15 @@ const getByMonth = async (req, res, next) => {
       attFilter = 'AND a.user_id=$3'
       attParams = [start, end, user_id]
     } else if (manager_id) {
-      // Admin viewing a specific manager's team
-      uFilter   = 'AND manager_id=$3'
-      uParams   = [parseInt(per_page), offset, manager_id]
-      cntFilter = 'AND manager_id=$1'
-      cntParams = [manager_id]
-      attFilter = 'AND a.user_id IN (SELECT id FROM users WHERE manager_id=$3 AND is_active=true)'
-      attParams = [start, end, manager_id]
+      const mTeamIds = await getTeamIds(manager_id)
+      uFilter   = 'AND id = ANY($3::uuid[])'
+      uParams   = [parseInt(per_page), offset, mTeamIds]
+      cntFilter = 'AND id = ANY($1::uuid[])'
+      cntParams = [mTeamIds]
+      attFilter = 'AND a.user_id = ANY($3::uuid[])'
+      attParams = [start, end, mTeamIds]
     }
-    // else: admin/super_admin with no filter → all users (uFilter stays '')
+    // else: admin/super_admin with no filter → all users
 
     const [users, cnt, attRows] = await Promise.all([
       pool.query(`SELECT id,first_name,last_name,role,email FROM users WHERE is_active=true ${uFilter} ORDER BY first_name ASC LIMIT $1 OFFSET $2`, uParams),
@@ -673,9 +677,12 @@ const getSummary = async (req, res, next) => {
     const { role, id: callerId } = req.user
     const now=new Date(), start=from||new Date(now.getFullYear(),now.getMonth(),1).toISOString().split('T')[0], end=to||now.toISOString().split('T')[0]
     const conds=['a.date BETWEEN $1 AND $2'], params=[start,end]; let idx=3
-    if (role === 'sales_manager') {
-      // Scope to this manager's team only
-      conds.push(`u.manager_id=$${idx++}`); params.push(callerId)
+    const LEAF = ['sales_executive', 'external_caller', 'hr_admin', 'digital_marketing']
+    if (LEAF.includes(role)) {
+      conds.push(`u.id=$${idx++}`); params.push(callerId)
+    } else if (!ADMIN_ROLES.includes(role)) {
+      const teamIds = await getTeamIds(callerId)
+      conds.push(`u.id = ANY($${idx++}::uuid[])`); params.push(teamIds)
     } else if (user_id) {
       conds.push(`u.id=$${idx++}`); params.push(user_id)
     }
