@@ -484,7 +484,7 @@ router.put("/:id", authenticate, leadController.updateLead);
  *       404:
  *         description: Lead not found
  */
-router.delete("/:id", authenticate, authorize("super_admin", "admin"), leadController.deleteLead);
+router.delete("/:id", authenticate, leadController.deleteLead);
 
 /**
  * @swagger

@@ -467,8 +467,8 @@ const deleteLead = async (req, res, next) => {
     const { id } = req.params;
     const existing = await pool.query("SELECT id FROM leads WHERE id = $1", [id]);
     if (existing.rows.length === 0) return next(new AppError("Lead not found", 404));
-    await pool.query("UPDATE leads SET is_archived = true, updated_at = NOW() WHERE id = $1", [id]);
-    return sendSuccess(res, "Lead archived successfully");
+    await pool.query("DELETE FROM leads WHERE id = $1", [id]);
+    return sendSuccess(res, "Lead deleted successfully");
   } catch (err) {
     next(err);
   }
