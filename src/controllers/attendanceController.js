@@ -3,6 +3,7 @@ const fs       = require('fs')
 const ExcelJS  = require('exceljs')
 const { pool } = require('../config/db')
 const { sendSuccess, sendError, paginate } = require('../utils/response')
+const { getTeamIds, ADMIN_ROLES } = require('../utils/teamUtils')
 const AppError = require('../utils/AppError')
 const { createNotification, notifyAdmins } = require('./notificationController')
 
@@ -357,32 +358,28 @@ const getTeamAttendance = async (req, res, next) => {
     const end   = to   || now.toISOString().split('T')[0]
     const offset = (parseInt(page) - 1) * parseInt(per_page)
 
-    // sales_manager → always their own team
-    // admin/super_admin → require manager_id param
-    let managerId = null
-    if (role === 'sales_manager') {
-      managerId = callerId
-    } else if (['admin', 'super_admin'].includes(role) && manager_id) {
-      managerId = manager_id
+    // admin/super_admin → can pass manager_id to scope, or see all
+    // hierarchy roles → recursive sub-tree via getTeamIds
+    let teamIds = []
+    if (ADMIN_ROLES.includes(role)) {
+      if (manager_id) {
+        teamIds = await getTeamIds(manager_id)
+        teamIds = teamIds.filter(id => id !== manager_id)
+      } else {
+        return next(new AppError('manager_id is required for admin', 400))
+      }
+    } else {
+      teamIds = await getTeamIds(callerId)
+      teamIds = teamIds.filter(id => id !== callerId)
     }
 
-    if (!managerId) return next(new AppError('manager_id is required', 403))
-
-    const teamResult = await pool.query(
-      `SELECT id, CONCAT(first_name,' ',last_name) AS full_name, role, email
-       FROM users WHERE manager_id = $1 AND is_active = true ORDER BY first_name ASC`,
-      [managerId]
-    )
-
-    if (teamResult.rows.length === 0) {
+    if (teamIds.length === 0) {
       return sendSuccess(res, 'No team members found', {
-        period: { from: start, to: end }, manager_id: managerId, team_size: 0,
+        period: { from: start, to: end }, team_size: 0,
         data: [], summary: { present:0, absent:0, late:0, leave:0, total_working_hours:0 },
         pagination: { total:0, page:1, per_page:parseInt(per_page), total_pages:0 },
       })
     }
-
-    const teamIds = teamResult.rows.map(u => u.id)
 
     const [cnt, data, sum] = await Promise.all([
       pool.query(`SELECT COUNT(*) FROM attendance a WHERE a.user_id = ANY($1::uuid[]) AND a.date BETWEEN $2 AND $3`, [teamIds, start, end]),
@@ -405,8 +402,8 @@ const getTeamAttendance = async (req, res, next) => {
     return res.json({
       ...paginate(data.rows, parseInt(cnt.rows[0].count), parseInt(page), parseInt(per_page)),
       summary: { present:parseInt(s.present), absent:parseInt(s.absent), leave:parseInt(s.leave), late:parseInt(s.late), total_working_hours:parseFloat(s.total_working_hours) },
-      period: { from: start, to: end }, manager_id: managerId,
-      team_size: teamResult.rows.length, team_members: teamResult.rows,
+      period: { from: start, to: end },
+      team_size: teamIds.length,
     })
   } catch (err) { next(err) }
 }
