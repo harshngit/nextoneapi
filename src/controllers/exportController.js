@@ -531,14 +531,13 @@ const buildUsersSheet = async (wb) => {
 // ─────────────────────────────────────────────────────────────────────────────
 
 const STATUS_FILL = {
-  present:  { type:'pattern', pattern:'solid', fgColor:{ argb:'FFD1FAE5' } },
-  late:     { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFEF3C7' } },
-  absent:   { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFEE2E2' } },
-  on_leave: { type:'pattern', pattern:'solid', fgColor:{ argb:'FFE0E7FF' } },
-  half_day: { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFCE7F3' } },
-  weekend:  { type:'pattern', pattern:'solid', fgColor:{ argb:'FFF3F4F6' } },
+  present: { type:'pattern', pattern:'solid', fgColor:{ argb:'FFD1FAE5' } },
+  late:    { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFEF3C7' } },
+  absent:  { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFEE2E2' } },
+  leave:   { type:'pattern', pattern:'solid', fgColor:{ argb:'FFE0E7FF' } },
+  weekend: { type:'pattern', pattern:'solid', fgColor:{ argb:'FFF3F4F6' } },
 }
-const STATUS_FONT = { present:'065F46', late:'92400E', absent:'991B1B', on_leave:'3730A3', half_day:'9D174D', weekend:'6B7280' }
+const STATUS_FONT = { present:'065F46', late:'92400E', absent:'991B1B', leave:'3730A3', weekend:'6B7280' }
 
 const buildAttendanceSheets = async (wb, user, start, end) => {
   const admin = isAdmin(user)
@@ -619,7 +618,7 @@ const buildAttendanceSheets = async (wb, user, start, end) => {
       const isWk = [0,6].includes(new Date(d).getDay())
       const rec  = lookup[u.id]?.[d]
       const st   = rec?.status || (isWk ? 'weekend' : 'absent')
-      const abbr = { present:'P', late:'L', absent:'A', on_leave:'OL', half_day:'H', weekend:'-' }
+      const abbr = { present:'P', late:'L', absent:'A', leave:'LV', weekend:'-' }
       const cell = row.getCell(4 + i)
       cell.value = abbr[st] || st.charAt(0).toUpperCase()
       cell.alignment = { horizontal:'center', vertical:'middle' }
@@ -634,14 +633,14 @@ const buildAttendanceSheets = async (wb, user, start, end) => {
   addTitle(ws3, `Attendance Summary  |  ${fmtDate(start)} – ${fmtDate(end)}`, 11, 'FF4C1D95')
   ws3.columns = [{key:'sno',width:5},{key:'name',width:24},{key:'role',width:18},{key:'present',width:10},{key:'late',width:8},{key:'absent',width:10},{key:'leave',width:10},{key:'wh',width:14},{key:'pct',width:14},{key:'last',width:16},{key:'email',width:26}]
   const h3 = ws3.getRow(2)
-  h3.values = ['#','Employee','Role','Present','Late','Absent','On Leave','Working Hrs','Attend %','Last Seen','Email']
+  h3.values = ['#','Employee','Role','Present','Late','Absent','Leave','Working Hrs','Attend %','Last Seen','Email']
   styleHeader(h3, 'FF4C1D95')
 
-  const sr = await pool.query(`SELECT u.id,CONCAT(u.first_name,' ',u.last_name) AS full_name,u.role,u.email,COUNT(a.id) FILTER(WHERE a.status IN('present','late')) AS present,COUNT(a.id) FILTER(WHERE a.status='late') AS late,COUNT(a.id) FILTER(WHERE a.status='absent') AS absent,COUNT(a.id) FILTER(WHERE a.status IN('on_leave','half_day')) AS on_leave,COUNT(a.id) AS total_days,COALESCE(SUM(a.working_hours),0) AS total_wh,MAX(a.date) FILTER(WHERE a.check_in_time IS NOT NULL) AS last_present FROM users u LEFT JOIN attendance a ON a.user_id=u.id AND a.date BETWEEN $1 AND $2 WHERE u.is_active=true ${usrFilter} GROUP BY u.id ORDER BY u.first_name ASC`,[start,end])
+  const sr = await pool.query(`SELECT u.id,CONCAT(u.first_name,' ',u.last_name) AS full_name,u.role,u.email,COUNT(a.id) FILTER(WHERE a.status IN('present','late')) AS present,COUNT(a.id) FILTER(WHERE a.status='late') AS late,COUNT(a.id) FILTER(WHERE a.status='absent') AS absent,COUNT(a.id) FILTER(WHERE a.status='leave') AS leave,COUNT(a.id) AS total_days,COALESCE(SUM(a.working_hours),0) AS total_wh,MAX(a.date) FILTER(WHERE a.check_in_time IS NOT NULL) AS last_present FROM users u LEFT JOIN attendance a ON a.user_id=u.id AND a.date BETWEEN $1 AND $2 WHERE u.is_active=true ${usrFilter} GROUP BY u.id ORDER BY u.first_name ASC`,[start,end])
 
   sr.rows.forEach((r, i) => {
     const pct = parseInt(r.total_days)>0 ? ((parseInt(r.present)/parseInt(r.total_days))*100).toFixed(1) : 0
-    const row = ws3.addRow({ sno:i+1, name:r.full_name, role:r.role?.replace(/_/g,' '), present:parseInt(r.present), late:parseInt(r.late), absent:parseInt(r.absent), leave:parseInt(r.on_leave), wh:`${parseFloat(r.total_wh).toFixed(1)}h`, pct:`${pct}%`, last:r.last_present?fmtDate(r.last_present):'—', email:r.email })
+    const row = ws3.addRow({ sno:i+1, name:r.full_name, role:r.role?.replace(/_/g,' '), present:parseInt(r.present), late:parseInt(r.late), absent:parseInt(r.absent), leave:parseInt(r.leave), wh:`${parseFloat(r.total_wh).toFixed(1)}h`, pct:`${pct}%`, last:r.last_present?fmtDate(r.last_present):'—', email:r.email })
     row.height = 20
     const pc = row.getCell('pct')
     const pn = parseFloat(pct)

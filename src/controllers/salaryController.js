@@ -246,28 +246,24 @@ const generateSalarySlip = async (req, res, next) => {
     // Pull attendance summary for the month
     const attResult = await pool.query(
       `SELECT
-         COUNT(*) FILTER (WHERE status IN ('present', 'late'))        AS present_count,
-         COUNT(*) FILTER (WHERE status = 'half_day')                   AS half_day_count,
-         COUNT(*) FILTER (WHERE status IN ('on_leave'))                AS leave_count,
-         COUNT(*) FILTER (WHERE status = 'absent')                     AS absent_count
+         COUNT(*) FILTER (WHERE status IN ('present', 'late'))                                    AS present_count,
+         COUNT(*) FILTER (WHERE status = 'leave' AND leave_type = 'half_day')                    AS half_day_leave_count,
+         COUNT(*) FILTER (WHERE status = 'leave' AND (leave_type IS NULL OR leave_type != 'half_day')) AS full_leave_count,
+         COUNT(*) FILTER (WHERE status = 'absent')                                               AS absent_count
        FROM attendance
        WHERE user_id = $1 AND date BETWEEN $2 AND $3`,
       [user_id, start, end]
     )
 
     const att = attResult.rows[0]
-    const presentCount  = parseFloat(att.present_count)  || 0
-    const halfDayCount  = parseFloat(att.half_day_count) || 0
-    const leaveCount    = parseFloat(att.leave_count)    || 0
-    const absentCount   = parseFloat(att.absent_count)   || 0
+    const presentCount      = parseFloat(att.present_count)       || 0
+    const halfDayLeaveCount = parseFloat(att.half_day_leave_count) || 0
+    const fullLeaveCount    = parseFloat(att.full_leave_count)    || 0
+    const absentCount       = parseFloat(att.absent_count)        || 0
 
-    // Salary rule:
-    //   present / late  → 1.0 × per_day  (full salary)
-    //   half_day        → 0.5 × per_day  (50% deduction — checked in after 2PM or left before 7:30PM)
-    //   on_leave/absent → 0
-    const presentDays = presentCount + (halfDayCount * 0.5)
+    const presentDays = presentCount + (halfDayLeaveCount * 0.5)
     const absentDays  = absentCount
-    const leaveDays   = leaveCount
+    const leaveDays   = fullLeaveCount + halfDayLeaveCount
 
     // Working days: Mon–Fri count for the month (or admin override)
     const workingDays = working_days_override
@@ -649,10 +645,10 @@ const generateAllSalarySlips = async (req, res, next) => {
     const attResult = await pool.query(
       `SELECT
          user_id,
-         COUNT(*) FILTER (WHERE status IN ('present', 'late'))  AS present_count,
-         COUNT(*) FILTER (WHERE status = 'half_day')             AS half_day_count,
-         COUNT(*) FILTER (WHERE status IN ('on_leave'))          AS leave_count,
-         COUNT(*) FILTER (WHERE status = 'absent')               AS absent_count
+         COUNT(*) FILTER (WHERE status IN ('present', 'late'))                                    AS present_count,
+         COUNT(*) FILTER (WHERE status = 'leave' AND leave_type = 'half_day')                    AS half_day_leave_count,
+         COUNT(*) FILTER (WHERE status = 'leave' AND (leave_type IS NULL OR leave_type != 'half_day')) AS full_leave_count,
+         COUNT(*) FILTER (WHERE status = 'absent')                                               AS absent_count
        FROM attendance
        WHERE date BETWEEN $1 AND $2
          AND user_id = ANY($3::uuid[])
@@ -668,15 +664,14 @@ const generateAllSalarySlips = async (req, res, next) => {
 
     for (const emp of employees.rows) {
       try {
-        const att = attMap[emp.id] || { present_count: 0, half_day_count: 0, leave_count: 0, absent_count: 0 }
-        const presentCount = parseFloat(att.present_count)  || 0
-        const halfDayCount = parseFloat(att.half_day_count) || 0
-        const leaveCount   = parseFloat(att.leave_count)    || 0
-        const absentCount  = parseFloat(att.absent_count)   || 0
-        // present/late = full day, half_day = 0.5 day
-        const presentDays  = presentCount + (halfDayCount * 0.5)
+        const att = attMap[emp.id] || { present_count: 0, half_day_leave_count: 0, full_leave_count: 0, absent_count: 0 }
+        const presentCount      = parseFloat(att.present_count)       || 0
+        const halfDayLeaveCount = parseFloat(att.half_day_leave_count) || 0
+        const fullLeaveCount    = parseFloat(att.full_leave_count)    || 0
+        const absentCount       = parseFloat(att.absent_count)        || 0
+        const presentDays  = presentCount + (halfDayLeaveCount * 0.5)
         const absentDays   = absentCount
-        const leaveDays    = leaveCount
+        const leaveDays    = fullLeaveCount + halfDayLeaveCount
 
         const monthlySalary = parseFloat(emp.monthly_salary)
         const perDaySalary  = parseFloat((monthlySalary / workingDays).toFixed(2))

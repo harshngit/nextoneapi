@@ -114,8 +114,8 @@ const getMySummary = async (req, res, next) => {
            COUNT(*)                                              AS total_days,
            COUNT(*) FILTER (WHERE status = 'present')           AS present,
            COUNT(*) FILTER (WHERE status = 'absent')            AS absent,
-           COUNT(*) FILTER (WHERE status = 'half_day')          AS half_day,
-           COUNT(*) FILTER (WHERE status = 'on_leave')          AS on_leave
+           COUNT(*) FILTER (WHERE status = 'late')              AS late,
+           COUNT(*) FILTER (WHERE status = 'leave')             AS leave
          FROM attendance
          WHERE user_id = $1
            AND date >= DATE_TRUNC('month', CURRENT_DATE)
@@ -179,8 +179,8 @@ const getMySummary = async (req, res, next) => {
         total_days: parseInt(ATT.total_days),
         present:    parseInt(ATT.present),
         absent:     parseInt(ATT.absent),
-        half_day:   parseInt(ATT.half_day),
-        on_leave:   parseInt(ATT.on_leave),
+        late:       parseInt(ATT.late),
+        leave:      parseInt(ATT.leave),
       },
     });
   } catch (err) {
@@ -463,8 +463,8 @@ const getMyAttendance = async (req, res, next) => {
            COUNT(*)                                          AS total_days,
            COUNT(*) FILTER (WHERE status = 'present')       AS present,
            COUNT(*) FILTER (WHERE status = 'absent')        AS absent,
-           COUNT(*) FILTER (WHERE status = 'half_day')      AS half_day,
-           COUNT(*) FILTER (WHERE status = 'on_leave')      AS on_leave,
+           COUNT(*) FILTER (WHERE status = 'late')           AS late,
+           COUNT(*) FILTER (WHERE status = 'leave')          AS leave,
            ROUND(
              AVG(
                CASE
@@ -494,8 +494,8 @@ const getMyAttendance = async (req, res, next) => {
       total_days:       parseInt(summary.total_days),
       present:          parseInt(summary.present),
       absent:           parseInt(summary.absent),
-      half_day:         parseInt(summary.half_day),
-      on_leave:         parseInt(summary.on_leave),
+      late:             parseInt(summary.late),
+      leave:            parseInt(summary.leave),
       avg_hours_per_day: summary.avg_hours_per_day
         ? parseFloat(summary.avg_hours_per_day)
         : null,

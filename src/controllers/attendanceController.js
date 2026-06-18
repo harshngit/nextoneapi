@@ -23,69 +23,47 @@ const countWorkingDays = (year, month) => {
 /**
  * ─── Attendance Rules ────────────────────────────────────────────────────────
  *
- * CHECK-IN window determines status:
- *   Before or at 10:30 → present (on time, full day)
- *   After 10:30        → half_day (too late for full day)
+ * 4 statuses: present · late · absent · leave
  *
- * CHECK-OUT rule (applied at checkout):
- *   Checked out BEFORE 19:30  → remains half_day (left too early)
- *   Checked out AT/AFTER 19:30 → if checked in on time (present), keeps present; if half_day, remains half_day
+ * CHECK-IN (IST):
+ *   Before or at 10:30 IST → present
+ *   After 10:30 IST        → late  (+ late_by_minutes tracked)
+ *
+ * CHECK-OUT: recorded but does NOT change status.
  *
  * SALARY impact:
- *   present / late  → 100% of per-day salary
- *   half_day        → 50%  of per-day salary
- *   absent          → 0%
+ *   present / late                      → 100% of per-day salary
+ *   leave   (leave_type = 'half_day')   →  50% of per-day salary
+ *   leave   (other)                     →   0%
+ *   absent                              →   0%
  */
 
-const CHECKIN_HALF_DAY_CUTOFF = '10:30' // after this → half day
-const CHECKOUT_FULL_DAY_TIME  = '19:30' // must check out at/after this for full day
+const CHECKIN_LATE_CUTOFF = '10:30' // after this IST → late
+
+// Convert any Date to IST hours+minutes regardless of server timezone
+const getISTMinutes = (date) => {
+  const d = new Date(date)
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Kolkata',
+    hour: 'numeric', minute: 'numeric', hour12: false,
+  }).formatToParts(d)
+  const h = parseInt(parts.find(p => p.type === 'hour').value)
+  const m = parseInt(parts.find(p => p.type === 'minute').value)
+  return h * 60 + m
+}
 
 const resolveStatus = (checkInTime) => {
   try {
-    const checkIn = new Date(checkInTime)
-    const h = checkIn.getHours()
-    const m = checkIn.getMinutes()
-    const totalMinutes = h * 60 + m
+    const totalMinutes = getISTMinutes(checkInTime)
+    const [cutH, cutM] = CHECKIN_LATE_CUTOFF.split(':').map(Number)
+    const cutoffMins = cutH * 60 + cutM  // 10:30 = 630
 
-    const [hdH, hdM] = CHECKIN_HALF_DAY_CUTOFF.split(':').map(Number)
-    const halfDayCutoffMins = hdH * 60 + hdM  // 10:30 = 630
-
-    // After 10:30 → late, track how many minutes late
-    if (totalMinutes > halfDayCutoffMins) {
-      return { status: 'late', lateMinutes: totalMinutes - halfDayCutoffMins }
+    if (totalMinutes > cutoffMins) {
+      return { status: 'late', lateMinutes: totalMinutes - cutoffMins }
     }
-
-    // Before or at 10:30 → present (full day)
     return { status: 'present', lateMinutes: 0 }
   } catch {
     return { status: 'present', lateMinutes: 0 }
-  }
-}
-
-/**
- * Re-evaluates attendance status at checkout time.
- * If employee checks out before 19:30, downgrades to half_day.
- * Returns the final status to save.
- */
-const resolveStatusAtCheckout = (checkInStatus, checkOutTime) => {
-  try {
-    const checkOut = new Date(checkOutTime)
-    const h = checkOut.getHours()
-    const m = checkOut.getMinutes()
-    const totalMinutes = h * 60 + m
-
-    const [coH, coM] = CHECKOUT_FULL_DAY_TIME.split(':').map(Number)
-    const fullDayMins = coH * 60 + coM  // 19:30 = 1170
-
-    // If checked out before 19:30 → half day regardless of check-in status
-    if (totalMinutes < fullDayMins) {
-      return 'half_day'
-    }
-
-    // Checked out on time — keep whatever status was set at check-in
-    return checkInStatus
-  } catch {
-    return checkInStatus
   }
 }
 
@@ -114,16 +92,15 @@ const buildPhotoUrl = (file) => {
 // ─── Excel style helpers ──────────────────────────────────────────────────────
 
 const STATUS_FILL = {
-  present:  { type:'pattern', pattern:'solid', fgColor:{ argb:'FFD1FAE5' } },
-  late:     { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFEF3C7' } },
-  absent:   { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFEE2E2' } },
-  on_leave: { type:'pattern', pattern:'solid', fgColor:{ argb:'FFE0E7FF' } },
-  half_day: { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFCE7F3' } },
-  weekend:  { type:'pattern', pattern:'solid', fgColor:{ argb:'FFF3F4F6' } },
+  present: { type:'pattern', pattern:'solid', fgColor:{ argb:'FFD1FAE5' } },
+  late:    { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFEF3C7' } },
+  absent:  { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFEE2E2' } },
+  leave:   { type:'pattern', pattern:'solid', fgColor:{ argb:'FFE0E7FF' } },
+  weekend: { type:'pattern', pattern:'solid', fgColor:{ argb:'FFF3F4F6' } },
 }
 const STATUS_FONT = {
   present:'065F46', late:'92400E', absent:'991B1B',
-  on_leave:'3730A3', half_day:'9F1239', weekend:'6B7280',
+  leave:'3730A3', weekend:'6B7280',
 }
 
 const applyHeaderStyle = (cell, argb = 'FF1E40AF') => {
@@ -229,37 +206,22 @@ const checkOut = async (req, res, next) => {
     const photo        = buildPhotoUrl(req.file)
     const ip           = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || null
     const userMeta     = await getUserMeta(userId)
-
-    // Re-evaluate final status based on checkout time
-    // If checked out before 19:30 → half_day (left early)
     const currentStatus = existing.rows[0].status
-    const finalStatus   = resolveStatusAtCheckout(currentStatus, checkOutTime)
 
     const r = await pool.query(
-      `UPDATE attendance SET check_out_time=$1, working_hours=$2, status=$3,
-         checkout_photo=COALESCE($4,checkout_photo),
-         checkout_latitude=$5, checkout_longitude=$6, checkout_address=$7,
-         checkout_ip=$8, checkout_device=$9, notes=COALESCE($10,notes), updated_at=NOW()
-       WHERE user_id=$11 AND date=$12 RETURNING *`,
-      [checkOutTime, workingHours, finalStatus, photo, latitude||null, longitude||null, address||null, ip, device||null, notes||null, userId, today]
+      `UPDATE attendance SET check_out_time=$1, working_hours=$2,
+         checkout_photo=COALESCE($3,checkout_photo),
+         checkout_latitude=$4, checkout_longitude=$5, checkout_address=$6,
+         checkout_ip=$7, checkout_device=$8, notes=COALESCE($9,notes), updated_at=NOW()
+       WHERE user_id=$10 AND date=$11 RETURNING *`,
+      [checkOutTime, workingHours, photo, latitude||null, longitude||null, address||null, ip, device||null, notes||null, userId, today]
     )
 
-    const statusMessage = finalStatus === 'half_day' && currentStatus !== 'half_day'
-      ? 'Checked out — marked as half day (checkout before 7:30 PM)'
-      : finalStatus === 'half_day' && currentStatus === 'half_day'
-      ? 'Checked out — marked as half day (check-in after 10:30 AM)'
-      : 'Checked out successfully'
-
-    return sendSuccess(res, statusMessage, {
+    return sendSuccess(res, 'Checked out successfully', {
       attendance:    r.rows[0],
       user:          userMeta,
       working_hours: workingHours,
-      status:        finalStatus,
-      checkout_rule: {
-        checked_out_at: checkOutTime.toTimeString().slice(0, 5),
-        full_day_requires: CHECKOUT_FULL_DAY_TIME,
-        is_full_day: finalStatus !== 'half_day',
-      },
+      status:        currentStatus,
     })
   } catch (err) { next(err) }
 }
@@ -315,9 +277,9 @@ const getMyAttendance = async (req, res, next) => {
       pool.query(`SELECT
            COUNT(*) FILTER (WHERE status IN ('present','late')) AS present,
            COUNT(*) FILTER (WHERE status='absent') AS absent,
-           COUNT(*) FILTER (WHERE status IN ('on_leave','half_day')) AS on_leave,
+           COUNT(*) FILTER (WHERE status='leave') AS leave,
            COUNT(*) FILTER (WHERE status='late') AS late,
-           COUNT(*) FILTER (WHERE status='half_day') AS half_day,
+           COUNT(*) FILTER (WHERE status='leave' AND leave_type='half_day') AS half_day_leave,
            COALESCE(SUM(working_hours),0) AS total_working_hours
          FROM attendance WHERE user_id=$1 AND date BETWEEN $2 AND $3`, [userId,start,end]),
       // Get current monthly salary set by admin
@@ -335,10 +297,9 @@ const getMyAttendance = async (req, res, next) => {
     ])
 
     const s = sum.rows[0]
-    const presentCount = parseInt(s.present)
-    const halfDayCount = parseInt(s.half_day)
-    // Salary rule: present/late = full, half_day = 0.5, absent/leave = 0
-    const presentDays  = presentCount + (halfDayCount * 0.5)
+    const presentCount   = parseInt(s.present)
+    const halfDayLeave   = parseInt(s.half_day_leave) || 0
+    const presentDays    = presentCount + (halfDayLeave * 0.5)
 
     // Calculate earned salary on the fly from attendance
     let earnedSalary = null
@@ -366,7 +327,7 @@ const getMyAttendance = async (req, res, next) => {
       summary: {
         present:              parseInt(s.present),
         absent:               parseInt(s.absent),
-        on_leave:             parseInt(s.on_leave),
+        leave:                parseInt(s.leave),
         late:                 parseInt(s.late),
         total_working_hours:  parseFloat(s.total_working_hours),
       },
@@ -416,7 +377,7 @@ const getTeamAttendance = async (req, res, next) => {
     if (teamResult.rows.length === 0) {
       return sendSuccess(res, 'No team members found', {
         period: { from: start, to: end }, manager_id: managerId, team_size: 0,
-        data: [], summary: { present:0, absent:0, late:0, on_leave:0, total_working_hours:0 },
+        data: [], summary: { present:0, absent:0, late:0, leave:0, total_working_hours:0 },
         pagination: { total:0, page:1, per_page:parseInt(per_page), total_pages:0 },
       })
     }
@@ -433,7 +394,7 @@ const getTeamAttendance = async (req, res, next) => {
       pool.query(`SELECT
            COUNT(*) FILTER (WHERE status IN ('present','late'))      AS present,
            COUNT(*) FILTER (WHERE status = 'absent')                 AS absent,
-           COUNT(*) FILTER (WHERE status IN ('on_leave','half_day')) AS on_leave,
+           COUNT(*) FILTER (WHERE status = 'leave')                  AS leave,
            COUNT(*) FILTER (WHERE status = 'late')                   AS late,
            COALESCE(SUM(working_hours), 0)                           AS total_working_hours
          FROM attendance WHERE user_id = ANY($1::uuid[]) AND date BETWEEN $2 AND $3`,
@@ -443,7 +404,7 @@ const getTeamAttendance = async (req, res, next) => {
     const s = sum.rows[0]
     return res.json({
       ...paginate(data.rows, parseInt(cnt.rows[0].count), parseInt(page), parseInt(per_page)),
-      summary: { present:parseInt(s.present), absent:parseInt(s.absent), on_leave:parseInt(s.on_leave), late:parseInt(s.late), total_working_hours:parseFloat(s.total_working_hours) },
+      summary: { present:parseInt(s.present), absent:parseInt(s.absent), leave:parseInt(s.leave), late:parseInt(s.late), total_working_hours:parseFloat(s.total_working_hours) },
       period: { from: start, to: end }, manager_id: managerId,
       team_size: teamResult.rows.length, team_members: teamResult.rows,
     })
@@ -503,7 +464,7 @@ const getByDate = async (req, res, next) => {
       present:  recs.rows.filter(r=>['present','late'].includes(r.status)).length,
       late:     recs.rows.filter(r=>r.status==='late').length,
       absent:   recs.rows.filter(r=>r.status==='absent').length + noRec.rows.length,
-      on_leave: recs.rows.filter(r=>['on_leave','half_day'].includes(r.status)).length,
+      leave:    recs.rows.filter(r=>r.status==='leave').length,
       total:    recs.rows.length + noRec.rows.length,
     }
 
@@ -608,7 +569,7 @@ const getByMonth = async (req, res, next) => {
         summary: {
           present:             wd.filter(d=>['present','late'].includes(d.status)).length,
           absent:              wd.filter(d=>d.status==='absent').length,
-          on_leave:            wd.filter(d=>['on_leave','half_day'].includes(d.status)).length,
+          leave:               wd.filter(d=>d.status==='leave').length,
           late:                wd.filter(d=>d.status==='late').length,
           total_working_hours: parseFloat(wd.reduce((s,d)=>s+(parseFloat(d.working_hours)||0),0).toFixed(2)),
           working_days:        wd.length,
@@ -652,7 +613,7 @@ const getCalendar = async (req, res, next) => {
       summary:{
         present:wd.filter(d=>['present','late'].includes(d.status)).length,
         absent:wd.filter(d=>d.status==='absent').length,
-        on_leave:wd.filter(d=>['on_leave','half_day'].includes(d.status)).length,
+        leave:wd.filter(d=>d.status==='leave').length,
         late:wd.filter(d=>d.status==='late').length,
         total_working_hours:parseFloat(wd.reduce((s,d)=>s+(parseFloat(d.working_hours)||0),0).toFixed(2)),
         working_days:wd.length,
@@ -672,13 +633,13 @@ const getByUser = async (req, res, next) => {
     const [cnt,data,sum]=await Promise.all([
       pool.query(`SELECT COUNT(*) FROM attendance WHERE user_id=$1 AND date BETWEEN $2 AND $3`,[user_id,start,end]),
       pool.query(`SELECT a.*,CONCAT(u.first_name,' ',u.last_name) AS full_name,u.role FROM attendance a JOIN users u ON u.id=a.user_id WHERE a.user_id=$1 AND a.date BETWEEN $2 AND $3 ORDER BY a.date DESC LIMIT $4 OFFSET $5`,[user_id,start,end,parseInt(per_page),offset]),
-      pool.query(`SELECT COUNT(*) FILTER (WHERE status IN('present','late')) AS present,COUNT(*) FILTER (WHERE status='absent') AS absent,COUNT(*) FILTER (WHERE status IN('on_leave','half_day')) AS on_leave,COUNT(*) FILTER (WHERE status='late') AS late,COALESCE(SUM(working_hours),0) AS total_working_hours FROM attendance WHERE user_id=$1 AND date BETWEEN $2 AND $3`,[user_id,start,end]),
+      pool.query(`SELECT COUNT(*) FILTER (WHERE status IN('present','late')) AS present,COUNT(*) FILTER (WHERE status='absent') AS absent,COUNT(*) FILTER (WHERE status='leave') AS leave,COUNT(*) FILTER (WHERE status='late') AS late,COALESCE(SUM(working_hours),0) AS total_working_hours FROM attendance WHERE user_id=$1 AND date BETWEEN $2 AND $3`,[user_id,start,end]),
     ])
     const u=uChk.rows[0], s=sum.rows[0]
     return res.json({
       ...paginate(data.rows,parseInt(cnt.rows[0].count),parseInt(page),parseInt(per_page)),
       user:{id:u.id,full_name:`${u.first_name} ${u.last_name||''}`.trim(),role:u.role,email:u.email},
-      summary:{present:parseInt(s.present),absent:parseInt(s.absent),on_leave:parseInt(s.on_leave),late:parseInt(s.late),total_working_hours:parseFloat(s.total_working_hours)},
+      summary:{present:parseInt(s.present),absent:parseInt(s.absent),leave:parseInt(s.leave),late:parseInt(s.late),total_working_hours:parseFloat(s.total_working_hours)},
       period:{from:start,to:end},
     })
   } catch (err) { next(err) }
@@ -697,12 +658,12 @@ const getAll = async (req, res, next) => {
     const [cnt,data,sum]=await Promise.all([
       pool.query(`SELECT COUNT(*) FROM attendance a ${where}`,params),
       pool.query(`SELECT a.*,CONCAT(u.first_name,' ',u.last_name) AS full_name,u.role,u.email,u.phone_number FROM attendance a JOIN users u ON u.id=a.user_id ${where} ORDER BY a.date DESC,u.first_name ASC LIMIT $${idx++} OFFSET $${idx++}`,[...params,parseInt(per_page),offset]),
-      pool.query(`SELECT COUNT(*) FILTER (WHERE status IN('present','late')) AS present,COUNT(*) FILTER (WHERE status='absent') AS absent,COUNT(*) FILTER (WHERE status IN('on_leave','half_day')) AS on_leave,COUNT(*) FILTER (WHERE status='late') AS late FROM attendance a ${where}`,params),
+      pool.query(`SELECT COUNT(*) FILTER (WHERE status IN('present','late')) AS present,COUNT(*) FILTER (WHERE status='absent') AS absent,COUNT(*) FILTER (WHERE status='leave') AS leave,COUNT(*) FILTER (WHERE status='late') AS late FROM attendance a ${where}`,params),
     ])
     const s=sum.rows[0]
     return res.json({
       ...paginate(data.rows,parseInt(cnt.rows[0].count),parseInt(page),parseInt(per_page)),
-      summary:{present:parseInt(s.present),absent:parseInt(s.absent),on_leave:parseInt(s.on_leave),late:parseInt(s.late)},
+      summary:{present:parseInt(s.present),absent:parseInt(s.absent),leave:parseInt(s.leave),late:parseInt(s.late)},
       period:{from:start,to:end},
     })
   } catch (err) { next(err) }
@@ -725,7 +686,7 @@ const getSummary = async (req, res, next) => {
       `SELECT u.id,CONCAT(u.first_name,' ',u.last_name) AS full_name,u.role,u.email,
               COUNT(a.id) FILTER (WHERE a.status IN('present','late')) AS present,
               COUNT(a.id) FILTER (WHERE a.status='absent') AS absent,
-              COUNT(a.id) FILTER (WHERE a.status IN('on_leave','half_day')) AS on_leave,
+              COUNT(a.id) FILTER (WHERE a.status='leave') AS leave,
               COUNT(a.id) FILTER (WHERE a.status='late') AS late,
               COUNT(a.id) AS total_days,
               COALESCE(SUM(a.working_hours),0) AS total_working_hours,
@@ -735,7 +696,7 @@ const getSummary = async (req, res, next) => {
     )
     return sendSuccess(res,'Summary fetched',{
       period:{from:start,to:end},
-      data:r.rows.map(x=>({...x,present:parseInt(x.present),absent:parseInt(x.absent),on_leave:parseInt(x.on_leave),late:parseInt(x.late),total_days:parseInt(x.total_days),total_working_hours:parseFloat(x.total_working_hours),attendance_percent:parseInt(x.total_days)>0?parseFloat(((parseInt(x.present)/parseInt(x.total_days))*100).toFixed(1)):0})),
+      data:r.rows.map(x=>({...x,present:parseInt(x.present),absent:parseInt(x.absent),leave:parseInt(x.leave),late:parseInt(x.late),total_days:parseInt(x.total_days),total_working_hours:parseFloat(x.total_working_hours),attendance_percent:parseInt(x.total_days)>0?parseFloat(((parseInt(x.present)/parseInt(x.total_days))*100).toFixed(1)):0})),
     })
   } catch (err) { next(err) }
 }
@@ -761,8 +722,7 @@ const markLeave = async (req, res, next) => {
     if (!valid.includes(leave_type)) return next(new AppError(`leave_type must be one of: ${valid.join(', ')}`,400))
     const userMeta=await getUserMeta(user_id)
     if (!userMeta) return next(new AppError('User not found',404))
-    const status=leave_type==='half_day'?'half_day':'on_leave'
-    const r=await pool.query(`INSERT INTO attendance (user_id,date,status,leave_type,reason,is_manual_entry,manual_by) VALUES ($1,$2,$3,$4,$5,true,$6) ON CONFLICT (user_id,date) DO UPDATE SET status=EXCLUDED.status,leave_type=EXCLUDED.leave_type,reason=EXCLUDED.reason,is_manual_entry=true,manual_by=EXCLUDED.manual_by,updated_at=NOW() RETURNING *`,[user_id,date,status,leave_type,reason||null,req.user.id])
+    const r=await pool.query(`INSERT INTO attendance (user_id,date,status,leave_type,reason,is_manual_entry,manual_by) VALUES ($1,$2,'leave',$3,$4,true,$5) ON CONFLICT (user_id,date) DO UPDATE SET status='leave',leave_type=EXCLUDED.leave_type,reason=EXCLUDED.reason,is_manual_entry=true,manual_by=EXCLUDED.manual_by,updated_at=NOW() RETURNING *`,[user_id,date,leave_type,reason||null,req.user.id])
     return sendSuccess(res,'Leave marked',{attendance:r.rows[0],user:userMeta},201)
   } catch (err) { next(err) }
 }
@@ -772,7 +732,7 @@ const manualEntry = async (req, res, next) => {
   try {
     const {user_id,date,status,check_in_time,check_out_time,reason}=req.body
     if (!user_id||!date||!status) return next(new AppError('user_id, date and status required',400))
-    const valid=['present','absent','on_leave','half_day','late']
+    const valid=['present','absent','leave','late']
     if (!valid.includes(status)) return next(new AppError(`status must be one of: ${valid.join(', ')}`,400))
     const userMeta=await getUserMeta(user_id)
     if (!userMeta) return next(new AppError('User not found',404))
@@ -918,7 +878,7 @@ const exportExcel = async (req, res, next) => {
         const isWk=[0,6].includes(new Date(d).getDay())
         const rec=lookup[u.id]?.[d]
         const st=rec?.status||(isWk?'weekend':'absent')
-        const abbr={present:'P',late:'L',absent:'A',on_leave:'OL',half_day:'H',weekend:'-'}
+        const abbr={present:'P',late:'L',absent:'A',leave:'LV',weekend:'-'}
         const cell=row.getCell(4+i)
         cell.value=abbr[st]||st.charAt(0).toUpperCase()
         cell.alignment={horizontal:'center',vertical:'middle'}
@@ -932,7 +892,7 @@ const exportExcel = async (req, res, next) => {
     // Legend
     const legRow=ws2.getRow(4+usersRes.rows.length+2)
     legRow.getCell(1).value='Legend:'; legRow.getCell(1).font={bold:true,size:10}
-    const leg=[['P','Present','D1FAE5','065F46'],['L','Late','FEF3C7','92400E'],['A','Absent','FEE2E2','991B1B'],['OL','On Leave','E0E7FF','3730A3'],['H','Half Day','FCE7F3','9F1239'],['-','Weekend','F3F4F6','6B7280']]
+    const leg=[['P','Present','D1FAE5','065F46'],['L','Late','FEF3C7','92400E'],['A','Absent','FEE2E2','991B1B'],['LV','Leave','E0E7FF','3730A3'],['-','Weekend','F3F4F6','6B7280']]
     leg.forEach((l,i)=>{
       const c=legRow.getCell(2+i)
       c.value=`${l[0]}=${l[1]}`; c.fill={type:'pattern',pattern:'solid',fgColor:{argb:`FF${l[2]}`}}
@@ -950,14 +910,14 @@ const exportExcel = async (req, res, next) => {
     t3.alignment={vertical:'middle',horizontal:'center'}; ws3.getRow(1).height=32
     ws3.columns=[{key:'sno',width:6},{key:'name',width:24},{key:'role',width:18},{key:'present',width:10},{key:'late',width:8},{key:'absent',width:10},{key:'leave',width:10},{key:'wh',width:14},{key:'pct',width:14},{key:'last',width:16},{key:'email',width:26}]
     const h3=ws3.getRow(2)
-    h3.values=['#','Employee','Role','Present','Late','Absent','On Leave','Working Hrs','Attend %','Last Seen','Email']
+    h3.values=['#','Employee','Role','Present','Late','Absent','Leave','Working Hrs','Attend %','Last Seen','Email']
     styleHeader(h3,'FF4C1D95')
 
-    const sr=await pool.query(`SELECT u.id,CONCAT(u.first_name,' ',u.last_name) AS full_name,u.role,u.email,COUNT(a.id) FILTER(WHERE a.status IN('present','late')) AS present,COUNT(a.id) FILTER(WHERE a.status='late') AS late,COUNT(a.id) FILTER(WHERE a.status='absent') AS absent,COUNT(a.id) FILTER(WHERE a.status IN('on_leave','half_day')) AS on_leave,COUNT(a.id) AS total_days,COALESCE(SUM(a.working_hours),0) AS total_wh,MAX(a.date) FILTER(WHERE a.check_in_time IS NOT NULL) AS last_present FROM users u LEFT JOIN attendance a ON a.user_id=u.id AND a.date BETWEEN $1 AND $2 WHERE u.is_active=true ${user_id?'AND u.id=$3':''} GROUP BY u.id ORDER BY u.first_name ASC`, user_id?[start,end,user_id]:[start,end])
+    const sr=await pool.query(`SELECT u.id,CONCAT(u.first_name,' ',u.last_name) AS full_name,u.role,u.email,COUNT(a.id) FILTER(WHERE a.status IN('present','late')) AS present,COUNT(a.id) FILTER(WHERE a.status='late') AS late,COUNT(a.id) FILTER(WHERE a.status='absent') AS absent,COUNT(a.id) FILTER(WHERE a.status='leave') AS leave,COUNT(a.id) AS total_days,COALESCE(SUM(a.working_hours),0) AS total_wh,MAX(a.date) FILTER(WHERE a.check_in_time IS NOT NULL) AS last_present FROM users u LEFT JOIN attendance a ON a.user_id=u.id AND a.date BETWEEN $1 AND $2 WHERE u.is_active=true ${user_id?'AND u.id=$3':''} GROUP BY u.id ORDER BY u.first_name ASC`, user_id?[start,end,user_id]:[start,end])
 
     sr.rows.forEach((r,i)=>{
       const pct=parseInt(r.total_days)>0?((parseInt(r.present)/parseInt(r.total_days))*100).toFixed(1):0
-      const row=ws3.addRow({sno:i+1,name:r.full_name,role:r.role?.replace(/_/g,' '),present:parseInt(r.present),late:parseInt(r.late),absent:parseInt(r.absent),leave:parseInt(r.on_leave),wh:`${parseFloat(r.total_wh).toFixed(1)}h`,pct:`${pct}%`,last:r.last_present?fmtDate(r.last_present):'-',email:r.email})
+      const row=ws3.addRow({sno:i+1,name:r.full_name,role:r.role?.replace(/_/g,' '),present:parseInt(r.present),late:parseInt(r.late),absent:parseInt(r.absent),leave:parseInt(r.leave),wh:`${parseFloat(r.total_wh).toFixed(1)}h`,pct:`${pct}%`,last:r.last_present?fmtDate(r.last_present):'-',email:r.email})
       row.height=20
       if(typeof row.eachCell==='function'){row.eachCell(c=>{c.alignment={vertical:'middle',horizontal:'center'}})}
       row.getCell(2).alignment={vertical:'middle',horizontal:'left'}; row.getCell(3).alignment={vertical:'middle',horizontal:'left'}
@@ -1012,7 +972,7 @@ const markAbsentEOD = async () => {
 // ─── APPROVE / CHANGE STATUS (admin/super_admin only) ────────────────────────
 /**
  * PATCH /api/v1/attendance/:id/approve
- * Body: { status: 'present'|'absent'|'on_leave'|'half_day'|'late', reason? }
+ * Body: { status: 'present'|'absent'|'leave'|'late', reason? }
  * Only super_admin and admin can call this.
  * Use case: employee checks in, admin reviews and approves/changes status.
  */
@@ -1021,7 +981,7 @@ const approveStatus = async (req, res, next) => {
     const { id } = req.params
     const { status, reason } = req.body
 
-    const validStatuses = ['present', 'absent', 'on_leave', 'half_day', 'late']
+    const validStatuses = ['present', 'absent', 'leave', 'late']
     if (!status || !validStatuses.includes(status)) {
       return next(new AppError(`status is required and must be one of: ${validStatuses.join(', ')}`, 400))
     }
@@ -1122,12 +1082,12 @@ const getPendingApprovals = async (req, res, next) => {
  * the salary slip for that month if one exists.
  *
  * Body: { status, reason? }
- * status: present | half_day | absent | on_leave | late
+ * status: present | absent | leave | late
  *
  * Salary recalculation rules (same as generateSalarySlip):
  *   present / late  → 1.0 day
- *   half_day        → 0.5 day
- *   absent / on_leave → 0 day
+ *   leave (half_day leave_type) → 0.5 day
+ *   leave (other) / absent → 0 day
  *
  * Response includes:
  *   - updated attendance record
@@ -1140,7 +1100,7 @@ const changeAttendanceStatus = async (req, res, next) => {
     const { id }             = req.params
     const { status, reason } = req.body
 
-    const VALID = ['present', 'half_day', 'absent', 'on_leave', 'late']
+    const VALID = ['present', 'absent', 'leave', 'late']
     if (!status || !VALID.includes(status)) {
       return next(new AppError(`status is required and must be one of: ${VALID.join(', ')}`, 400))
     }
@@ -1208,25 +1168,24 @@ const changeAttendanceStatus = async (req, res, next) => {
 
       const attSummary = await client.query(
         `SELECT
-           COUNT(*) FILTER (WHERE status IN ('present','late'))  AS present_count,
-           COUNT(*) FILTER (WHERE status = 'half_day')           AS half_day_count,
-           COUNT(*) FILTER (WHERE status = 'on_leave')           AS leave_count,
-           COUNT(*) FILTER (WHERE status = 'absent')             AS absent_count
+           COUNT(*) FILTER (WHERE status IN ('present','late'))                       AS present_count,
+           COUNT(*) FILTER (WHERE status = 'leave' AND leave_type = 'half_day')      AS half_day_leave_count,
+           COUNT(*) FILTER (WHERE status = 'leave' AND (leave_type IS NULL OR leave_type != 'half_day')) AS full_leave_count,
+           COUNT(*) FILTER (WHERE status = 'absent')                                 AS absent_count
          FROM attendance
          WHERE user_id = $1 AND date BETWEEN $2 AND $3`,
         [userId, start, end]
       )
 
-      const att          = attSummary.rows[0]
-      const presentCount = parseFloat(att.present_count)  || 0
-      const halfDayCount = parseFloat(att.half_day_count) || 0
-      const leaveCount   = parseFloat(att.leave_count)    || 0
-      const absentCount  = parseFloat(att.absent_count)   || 0
+      const att              = attSummary.rows[0]
+      const presentCount     = parseFloat(att.present_count)          || 0
+      const halfDayLeaveCount = parseFloat(att.half_day_leave_count) || 0
+      const fullLeaveCount   = parseFloat(att.full_leave_count)      || 0
+      const absentCount      = parseFloat(att.absent_count)          || 0
 
-      // half_day = 0.5 day, present/late = 1 day, absent/on_leave = 0
-      const newPresentDays = presentCount + (halfDayCount * 0.5)
+      const newPresentDays = presentCount + (halfDayLeaveCount * 0.5)
       const newAbsentDays  = absentCount
-      const newLeaveDays   = leaveCount
+      const newLeaveDays   = fullLeaveCount + halfDayLeaveCount
 
       const workingDays   = parseFloat(existingSlip.working_days) || countWorkingDays(year, month)
       const monthlySalary = parseFloat(existingSlip.monthly_salary)
@@ -1372,8 +1331,7 @@ const getTodayAll = async (req, res, next) => {
       not_checked_in:  notCheckedIn.rows.length,
       present:         rows.filter(r => r.status === 'present').length,
       late:            rows.filter(r => r.status === 'late').length,
-      half_day:        rows.filter(r => r.status === 'half_day').length,
-      on_leave:        rows.filter(r => r.status === 'on_leave').length,
+      leave:           rows.filter(r => r.status === 'leave').length,
       absent:          rows.filter(r => r.status === 'absent').length + notCheckedIn.rows.length,
     }
 
@@ -1391,6 +1349,130 @@ const getTodayAll = async (req, res, next) => {
   } catch (err) { next(err) }
 }
 
+// ─── APPLY LEAVE (any authenticated user) ────────────────────────────────────
+const applyLeave = async (req, res, next) => {
+  try {
+    const userId = req.user.id
+    const { date, leave_type = 'full_day', reason } = req.body
+
+    if (!date) return next(new AppError('date is required (YYYY-MM-DD)', 400))
+
+    const valid = ['full_day', 'half_day', 'sick', 'casual', 'unpaid']
+    if (!valid.includes(leave_type)) {
+      return next(new AppError(`leave_type must be one of: ${valid.join(', ')}`, 400))
+    }
+
+    const leaveDate = new Date(date)
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    if (leaveDate < today) {
+      return next(new AppError('Cannot apply leave for past dates', 400))
+    }
+
+    const existing = await pool.query(
+      `SELECT id, status, check_in_time FROM attendance WHERE user_id = $1 AND date = $2`,
+      [userId, date]
+    )
+    if (existing.rows[0]?.check_in_time) {
+      return next(new AppError('You have already checked in for this date. Contact admin to change status.', 400))
+    }
+
+    const userMeta = await getUserMeta(userId)
+
+    const r = await pool.query(
+      `INSERT INTO attendance (user_id, date, status, leave_type, reason)
+       VALUES ($1, $2, 'leave', $3, $4)
+       ON CONFLICT (user_id, date) DO UPDATE
+         SET status = 'leave', leave_type = EXCLUDED.leave_type,
+             reason = EXCLUDED.reason, updated_at = NOW()
+       RETURNING *`,
+      [userId, date, leave_type, reason || null]
+    )
+
+    setImmediate(async () => {
+      try {
+        await notifyAdmins({
+          type: 'leave_applied',
+          title: 'Leave Application',
+          message: `${userMeta.full_name} (${userMeta.role}) applied for ${leave_type.replace('_', ' ')} leave on ${date}.${reason ? ` Reason: ${reason}` : ''}`,
+          reference_id: r.rows[0].id,
+          reference_type: 'attendance',
+          metadata: { user_id: userId, date, leave_type },
+        })
+      } catch (e) {
+        console.error('[Notification] applyLeave failed:', e.message)
+      }
+    })
+
+    return sendSuccess(res, 'Leave applied successfully', {
+      attendance: r.rows[0],
+      user: userMeta,
+    }, 201)
+  } catch (err) { next(err) }
+}
+
+// ─── TODAY'S LEAVES (admin) ──────────────────────────────────────────────────
+const getTodayLeaves = async (req, res, next) => {
+  try {
+    const today = new Date().toISOString().split('T')[0]
+
+    const result = await pool.query(
+      `SELECT a.*, CONCAT(u.first_name, ' ', u.last_name) AS full_name,
+              u.role, u.email, u.phone_number
+       FROM attendance a
+       JOIN users u ON u.id = a.user_id
+       WHERE a.date = $1 AND a.status = 'leave' AND u.is_active = true
+       ORDER BY u.first_name ASC`,
+      [today]
+    )
+
+    return sendSuccess(res, `Today's leaves (${today})`, {
+      date: today,
+      total: result.rows.length,
+      leaves: result.rows,
+    })
+  } catch (err) { next(err) }
+}
+
+// ─── ALL LEAVES (admin, filterable) ──────────────────────────────────────────
+const getAllLeaves = async (req, res, next) => {
+  try {
+    const { from, to, user_id, leave_type, page = 1, per_page = 30 } = req.query
+    const offset = (parseInt(page) - 1) * parseInt(per_page)
+    const now = new Date()
+    const start = from || new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]
+    const end = to || now.toISOString().split('T')[0]
+
+    const conds = [`a.date BETWEEN $1 AND $2`, `a.status = 'leave'`]
+    const params = [start, end]
+    let idx = 3
+
+    if (user_id) { conds.push(`a.user_id = $${idx++}`); params.push(user_id) }
+    if (leave_type) { conds.push(`a.leave_type = $${idx++}`); params.push(leave_type) }
+
+    const where = `WHERE ${conds.join(' AND ')}`
+
+    const [cnt, data] = await Promise.all([
+      pool.query(`SELECT COUNT(*) FROM attendance a ${where}`, params),
+      pool.query(
+        `SELECT a.*, CONCAT(u.first_name, ' ', u.last_name) AS full_name,
+                u.role, u.email, u.phone_number
+         FROM attendance a
+         JOIN users u ON u.id = a.user_id
+         ${where}
+         ORDER BY a.date DESC, u.first_name ASC
+         LIMIT $${idx++} OFFSET $${idx++}`,
+        [...params, parseInt(per_page), offset]
+      ),
+    ])
+
+    return res.json({
+      ...paginate(data.rows, parseInt(cnt.rows[0].count), parseInt(page), parseInt(per_page)),
+      period: { from: start, to: end },
+    })
+  } catch (err) { next(err) }
+}
+
 module.exports = {
   uploadPhoto, checkIn, checkOut, getToday, getMyAttendance,
   getByDate, getByMonth, getByUser, getAll,
@@ -1401,4 +1483,5 @@ module.exports = {
   getTeamAttendance,
   changeAttendanceStatus,
   getTodayAll,
+  applyLeave, getTodayLeaves, getAllLeaves,
 }

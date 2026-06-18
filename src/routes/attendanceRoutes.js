@@ -19,7 +19,7 @@ const MANAGER = ['super_admin', 'admin', 'sales_manager']
  *     2. `POST /checkin`  with `photo_url` + GPS in body
  *     3. At end of day: repeat for checkout
  *
- *     **Status values:** `present` · `late` · `absent` · `on_leave` · `half_day`
+ *     **Status values:** `present` · `late` · `absent` · `leave`
  *
  *     **Excel export tabs:** All Records · By Month · Summary · Late Arrivals
  */
@@ -274,7 +274,7 @@ router.get('/me', authenticate, ctrl.getMyAttendance)
  *                 present: 18
  *                 absent: 2
  *                 late: 3
- *                 on_leave: 1
+ *                 leave: 1
  *               team_size: 4
  *               pagination:
  *                 total: 60
@@ -340,8 +340,7 @@ router.get('/calendar', authenticate, ctrl.getCalendar)
  *                   not_checked_in: 6
  *                   present: 10
  *                   late: 4
- *                   half_day: 0
- *                   on_leave: 1
+ *                   leave: 1
  *                   absent: 6
  *                 checked_in: []
  *                 not_checked_in: []
@@ -376,7 +375,7 @@ router.get('/today-all', authenticate, authorize(...ADMIN), ctrl.getTodayAll)
  *                   present: 18
  *                   late: 3
  *                   absent: 2
- *                   on_leave: 1
+ *                   leave: 1
  *                   total: 24
  *                 records: []
  *                 no_record: []
@@ -423,7 +422,7 @@ router.get(
  *                     present: 18
  *                     absent: 2
  *                     late: 3
- *                     on_leave: 1
+ *                     leave: 1
  *                     working_days: 26
  *                     total_working_hours: 155.5
  *                   days:
@@ -549,7 +548,7 @@ router.get('/user/:user_id', authenticate, authorize(...MANAGER), ctrl.getByUser
  *       - { in: query, name: user_id,  schema: { type: string, format: uuid } }
  *       - in: query
  *         name: status
- *         schema: { type: string, enum: [present, absent, on_leave, half_day, late] }
+ *         schema: { type: string, enum: [present, absent, leave, late] }
  *       - { in: query, name: page,     schema: { type: integer, default: 1 } }
  *       - { in: query, name: per_page, schema: { type: integer, default: 30 } }
  *     responses:
@@ -561,6 +560,81 @@ router.get('/', authenticate, authorize(...ADMIN), ctrl.getAll)
 // ─────────────────────────────────────────────────────────────────────────────
 // ADMIN — WRITE OPERATIONS
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * @swagger
+ * /api/v1/attendance/leave/apply:
+ *   post:
+ *     summary: Apply for leave (any user)
+ *     description: >
+ *       Any authenticated user can apply for leave for today or a future date.
+ *       Cannot apply for past dates or dates where check-in already exists.
+ *       Admins are notified when leave is applied.
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [date]
+ *             properties:
+ *               date:       { type: string, format: date, example: "2026-06-20" }
+ *               leave_type: { type: string, enum: [full_day, half_day, sick, casual, unpaid], default: full_day }
+ *               reason:     { type: string, example: "Family emergency" }
+ *     responses:
+ *       201:
+ *         description: Leave applied
+ *       400:
+ *         description: Past date, already checked in, or invalid leave_type
+ */
+router.post('/leave/apply', authenticate, ctrl.applyLeave)
+
+/**
+ * @swagger
+ * /api/v1/attendance/leaves/today:
+ *   get:
+ *     summary: Get today's leaves (admin)
+ *     description: Returns all users who are on leave today.
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Today's leaves
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 date: "2026-06-18"
+ *                 total: 3
+ *                 leaves: []
+ */
+router.get('/leaves/today', authenticate, authorize(...ADMIN), ctrl.getTodayLeaves)
+
+/**
+ * @swagger
+ * /api/v1/attendance/leaves:
+ *   get:
+ *     summary: All leave records (admin, filterable + paginated)
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - { in: query, name: from,       schema: { type: string, format: date } }
+ *       - { in: query, name: to,         schema: { type: string, format: date } }
+ *       - { in: query, name: user_id,    schema: { type: string, format: uuid } }
+ *       - { in: query, name: leave_type, schema: { type: string, enum: [full_day, half_day, sick, casual, unpaid] } }
+ *       - { in: query, name: page,       schema: { type: integer, default: 1 } }
+ *       - { in: query, name: per_page,   schema: { type: integer, default: 30 } }
+ *     responses:
+ *       200:
+ *         description: Paginated leave records
+ */
+router.get('/leaves', authenticate, authorize(...ADMIN), ctrl.getAllLeaves)
 
 /**
  * @swagger
@@ -606,7 +680,7 @@ router.post('/leave',  authenticate, authorize(...ADMIN), ctrl.markLeave)
  *             properties:
  *               user_id:        { type: string, format: uuid }
  *               date:           { type: string, format: date }
- *               status:         { type: string, enum: [present, absent, on_leave, half_day, late] }
+ *               status:         { type: string, enum: [present, absent, leave, late] }
  *               check_in_time:  { type: string, format: date-time }
  *               check_out_time: { type: string, format: date-time }
  *               reason:         { type: string }
@@ -634,7 +708,7 @@ router.post('/manual', authenticate, authorize(...ADMIN), ctrl.manualEntry)
  *             properties:
  *               check_in_time:  { type: string, format: date-time }
  *               check_out_time: { type: string, format: date-time }
- *               status:         { type: string, enum: [present, absent, on_leave, half_day, late] }
+ *               status:         { type: string, enum: [present, absent, leave, late] }
  *               reason:         { type: string }
  *               notes:          { type: string }
  *     responses:
@@ -702,7 +776,7 @@ router.get('/pending', authenticate, authorize(...ADMIN), ctrl.getPendingApprova
  *     summary: Approve / change attendance status (admin/super_admin only)
  *     description: >
  *       Admin can review and change the status of any attendance record.
- *       Use cases: mark an absent as on_leave, change late to present, etc.
+ *       Use cases: mark an absent as leave, change late to present, etc.
  *     tags: [Attendance]
  *     security:
  *       - BearerAuth: []
@@ -722,7 +796,7 @@ router.get('/pending', authenticate, authorize(...ADMIN), ctrl.getPendingApprova
  *             properties:
  *               status:
  *                 type: string
- *                 enum: [present, absent, on_leave, half_day, late]
+ *                 enum: [present, absent, leave, late]
  *                 example: present
  *               reason:
  *                 type: string
@@ -760,13 +834,13 @@ router.patch('/:id/approve', authenticate, authorize(...ADMIN), ctrl.approveStat
  *     summary: Change attendance status and auto-update salary slip (Admin)
  *     description: >
  *       Changes an attendance record's status to any valid value
- *       (present, half_day, absent, on_leave, late) AND automatically
+ *       (present, absent, leave, late) AND automatically
  *       recalculates the salary slip for that month if one already exists.
  *
  *       **Salary recalculation rules:**
  *       - present / late  → counts as 1 full day
- *       - half_day        → counts as 0.5 day (50% of per-day salary)
- *       - absent / on_leave → counts as 0 days (no pay)
+ *       - leave (half_day type) → counts as 0.5 day (50% of per-day salary)
+ *       - leave (other) / absent → counts as 0 days (no pay)
  *
  *       The entire month's attendance is re-summed and the salary slip
  *       is updated in one transaction. The response shows the exact
@@ -795,7 +869,7 @@ router.patch('/:id/approve', authenticate, authorize(...ADMIN), ctrl.approveStat
  *             properties:
  *               status:
  *                 type: string
- *                 enum: [present, half_day, absent, on_leave, late]
+ *                 enum: [present, absent, leave, late]
  *                 example: present
  *               reason:
  *                 type: string
@@ -808,7 +882,7 @@ router.patch('/:id/approve', authenticate, authorize(...ADMIN), ctrl.approveStat
  *           application/json:
  *             example:
  *               success: true
- *               message: "Attendance changed from \"half_day\" to \"present\" successfully"
+ *               message: "Attendance changed from \"leave\" to \"present\" successfully"
  *               data:
  *                 attendance:
  *                   id: "att-uuid"
