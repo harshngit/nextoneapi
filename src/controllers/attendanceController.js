@@ -136,7 +136,7 @@ const addPhotoUrlsToRows = (rows) => rows.map(addPhotoUrls)
 const resolvePhotoUrl = (req, expectedSubfolder) => {
   if (req.file) return buildPhotoUrl(req.file)
   const bodyUrl = req.body?.photo_url
-  if (typeof bodyUrl === 'string' && bodyUrl.startsWith(`/uploads/attendance/${expectedSubfolder}/`)) {
+  if (typeof bodyUrl === 'string' && bodyUrl.includes(`/uploads/attendance/${expectedSubfolder}/`)) {
     return bodyUrl
   }
   return null
