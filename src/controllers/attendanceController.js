@@ -103,11 +103,28 @@ const isBeforeJoinDate = (dateStr, joinDateStr) => {
   return dateStr < joinDateStr
 }
 
+const BASE_URL = (process.env.BASE_URL || 'https://api.nextonerealty.in').replace(/\/+$/, '')
+
+const toFullUrl = (relativePath) => {
+  if (!relativePath) return null
+  if (relativePath.startsWith('http')) return relativePath
+  return `${BASE_URL}${relativePath.startsWith('/') ? '' : '/'}${relativePath}`
+}
+
 const buildPhotoUrl = (file) => {
   if (!file) return null
   const subfolder = file.destination.split('attendance/')[1]
-  return `/uploads/attendance/${subfolder}/${file.filename}`
+  return toFullUrl(`/uploads/attendance/${subfolder}/${file.filename}`)
 }
+
+const addPhotoUrls = (row) => {
+  if (!row) return row
+  if (row.checkin_photo) row.checkin_photo = toFullUrl(row.checkin_photo)
+  if (row.checkout_photo) row.checkout_photo = toFullUrl(row.checkout_photo)
+  return row
+}
+
+const addPhotoUrlsToRows = (rows) => rows.map(addPhotoUrls)
 
 // Resolves the photo to store on an attendance row.
 // Supports BOTH flows:
@@ -221,7 +238,7 @@ const checkIn = async (req, res, next) => {
       ? `Checked in late — ${lateMinutes} minute${lateMinutes !== 1 ? 's' : ''} after 10:30 AM`
       : 'Checked in successfully'
 
-    return sendSuccess(res, checkInMsg, { attendance: record, user: userMeta }, 201)
+    return sendSuccess(res, checkInMsg, { attendance: addPhotoUrls(record), user: userMeta }, 201)
   } catch (err) { next(err) }
 }
 
@@ -263,7 +280,7 @@ const checkOut = async (req, res, next) => {
     )
 
     return sendSuccess(res, 'Checked out successfully', {
-      attendance:    r.rows[0],
+      attendance:    addPhotoUrls(r.rows[0]),
       user:          userMeta,
       working_hours: workingHours,
       status:        currentStatus,
@@ -289,11 +306,11 @@ const getToday = async (req, res, next) => {
       check_in_time:  rec?.check_in_time  || null,
       check_out_time: rec?.check_out_time || null,
       working_hours:  rec?.working_hours  || null,
-      checkin_photo:  rec?.checkin_photo  || null,
-      checkout_photo: rec?.checkout_photo || null,
+      checkin_photo:  toFullUrl(rec?.checkin_photo) || null,
+      checkout_photo: toFullUrl(rec?.checkout_photo) || null,
       checkin_location:  rec ? { latitude:rec.checkin_latitude,  longitude:rec.checkin_longitude,  address:rec.checkin_address  } : null,
       checkout_location: rec ? { latitude:rec.checkout_latitude, longitude:rec.checkout_longitude, address:rec.checkout_address } : null,
-      full_record: rec,
+      full_record: addPhotoUrls(rec),
     })
   } catch (err) { next(err) }
 }
@@ -368,7 +385,7 @@ const getMyAttendance = async (req, res, next) => {
     }
 
     return res.json({
-      ...paginate(data.rows, parseInt(cnt.rows[0].count), parseInt(page), parseInt(per_page)),
+      ...paginate(addPhotoUrlsToRows(data.rows), parseInt(cnt.rows[0].count), parseInt(page), parseInt(per_page)),
       summary: {
         present:              parseInt(s.present),
         absent:               parseInt(s.absent),
@@ -452,7 +469,7 @@ const getTeamAttendance = async (req, res, next) => {
 
     const s = sum.rows[0]
     return res.json({
-      ...paginate(data.rows, parseInt(cnt.rows[0].count), parseInt(page), parseInt(per_page)),
+      ...paginate(addPhotoUrlsToRows(data.rows), parseInt(cnt.rows[0].count), parseInt(page), parseInt(per_page)),
       summary: { present:parseInt(s.present), absent:parseInt(s.absent), late:parseInt(s.late), leave:parseInt(s.leave), half_day:parseInt(s.half_day)||0, total_working_hours:parseFloat(s.total_working_hours) },
       period: { from: start, to: end },
       team_size: teamIds.length,
@@ -537,7 +554,7 @@ const getByDate = async (req, res, next) => {
 
     return sendSuccess(res, `Attendance for ${date}`, {
       date, summary,
-      records:   recs.rows,
+      records:   addPhotoUrlsToRows(recs.rows),
       no_record: noRecWithStatus,
     })
   } catch (err) { next(err) }
@@ -631,8 +648,8 @@ const getByMonth = async (req, res, next) => {
           check_in_time:  rec?.check_in_time  || null,
           check_out_time: rec?.check_out_time || null,
           working_hours:  rec?.working_hours  || null,
-          checkin_photo:  rec?.checkin_photo  || null,
-          checkout_photo: rec?.checkout_photo || null,
+          checkin_photo:  toFullUrl(rec?.checkin_photo) || null,
+          checkout_photo: toFullUrl(rec?.checkout_photo) || null,
           checkin_address:  rec?.checkin_address  || null,
           checkout_address: rec?.checkout_address || null,
           leave_type:       rec?.leave_type || null,
@@ -728,7 +745,7 @@ const getByUser = async (req, res, next) => {
     ])
     const u=uChk.rows[0], s=sum.rows[0]
     return res.json({
-      ...paginate(data.rows,parseInt(cnt.rows[0].count),parseInt(page),parseInt(per_page)),
+      ...paginate(addPhotoUrlsToRows(data.rows),parseInt(cnt.rows[0].count),parseInt(page),parseInt(per_page)),
       user:{id:u.id,full_name:`${u.first_name} ${u.last_name||''}`.trim(),role:u.role,email:u.email},
       summary:{present:parseInt(s.present),absent:parseInt(s.absent),late:parseInt(s.late),leave:parseInt(s.leave),half_day:parseInt(s.half_day)||0,total_working_hours:parseFloat(s.total_working_hours)},
       period:{from:start,to:end},
@@ -753,7 +770,7 @@ const getAll = async (req, res, next) => {
     ])
     const s=sum.rows[0]
     return res.json({
-      ...paginate(data.rows,parseInt(cnt.rows[0].count),parseInt(page),parseInt(per_page)),
+      ...paginate(addPhotoUrlsToRows(data.rows),parseInt(cnt.rows[0].count),parseInt(page),parseInt(per_page)),
       summary:{present:parseInt(s.present),absent:parseInt(s.absent),late:parseInt(s.late),leave:parseInt(s.leave),half_day:parseInt(s.half_day)||0},
       period:{from:start,to:end},
     })
@@ -818,7 +835,7 @@ const markLeave = async (req, res, next) => {
     const userMeta=await getUserMeta(user_id)
     if (!userMeta) return next(new AppError('User not found',404))
     const r=await pool.query(`INSERT INTO attendance (user_id,date,status,leave_type,reason,is_manual_entry,manual_by) VALUES ($1,$2,'leave',$3,$4,true,$5) ON CONFLICT (user_id,date) DO UPDATE SET status='leave',leave_type=EXCLUDED.leave_type,reason=EXCLUDED.reason,is_manual_entry=true,manual_by=EXCLUDED.manual_by,updated_at=NOW() RETURNING *`,[user_id,date,leave_type,reason||null,req.user.id])
-    return sendSuccess(res,'Leave marked',{attendance:r.rows[0],user:userMeta},201)
+    return sendSuccess(res,'Leave marked',{attendance:addPhotoUrls(r.rows[0]),user:userMeta},201)
   } catch (err) { next(err) }
 }
 
@@ -833,7 +850,7 @@ const manualEntry = async (req, res, next) => {
     if (!userMeta) return next(new AppError('User not found',404))
     const wh=calcWorkingHours(check_in_time,check_out_time)
     const r=await pool.query(`INSERT INTO attendance (user_id,date,status,check_in_time,check_out_time,working_hours,reason,is_manual_entry,manual_by) VALUES ($1,$2,$3,$4,$5,$6,$7,true,$8) ON CONFLICT (user_id,date) DO UPDATE SET status=EXCLUDED.status,check_in_time=EXCLUDED.check_in_time,check_out_time=EXCLUDED.check_out_time,working_hours=EXCLUDED.working_hours,reason=EXCLUDED.reason,is_manual_entry=true,manual_by=EXCLUDED.manual_by,updated_at=NOW() RETURNING *`,[user_id,date,status,check_in_time||null,check_out_time||null,wh,reason||null,req.user.id])
-    return sendSuccess(res,'Manual entry saved',{attendance:r.rows[0],user:userMeta},201)
+    return sendSuccess(res,'Manual entry saved',{attendance:addPhotoUrls(r.rows[0]),user:userMeta},201)
   } catch (err) { next(err) }
 }
 
@@ -848,7 +865,7 @@ const updateAttendance = async (req, res, next) => {
     const ni=check_in_time!==undefined?check_in_time:rec.check_in_time
     const no=check_out_time!==undefined?check_out_time:rec.check_out_time
     const r=await pool.query(`UPDATE attendance SET check_in_time=COALESCE($1,check_in_time),check_out_time=COALESCE($2,check_out_time),working_hours=$3,status=COALESCE($4,status),reason=COALESCE($5,reason),notes=COALESCE($6,notes),is_manual_entry=true,manual_by=$7,updated_at=NOW() WHERE id=$8 RETURNING *`,[check_in_time||null,check_out_time||null,calcWorkingHours(ni,no),status||null,reason||null,notes||null,req.user.id,id])
-    return sendSuccess(res,'Updated',{attendance:r.rows[0],user:await getUserMeta(r.rows[0].user_id)})
+    return sendSuccess(res,'Updated',{attendance:addPhotoUrls(r.rows[0]),user:await getUserMeta(r.rows[0].user_id)})
   } catch (err) { next(err) }
 }
 
@@ -1469,7 +1486,7 @@ const getTodayAll = async (req, res, next) => {
     return sendSuccess(res, `Today's attendance (${today})`, {
       date:          today,
       summary,
-      checked_in:    rows,
+      checked_in:    addPhotoUrlsToRows(rows),
       not_checked_in: notCheckedInWithStatus,
     })
   } catch (err) { next(err) }
@@ -1531,7 +1548,7 @@ const applyLeave = async (req, res, next) => {
     })
 
     return sendSuccess(res, 'Leave applied successfully', {
-      attendance: r.rows[0],
+      attendance: addPhotoUrls(r.rows[0]),
       user: userMeta,
     }, 201)
   } catch (err) { next(err) }
@@ -1593,7 +1610,7 @@ const getAllLeaves = async (req, res, next) => {
     ])
 
     return res.json({
-      ...paginate(data.rows, parseInt(cnt.rows[0].count), parseInt(page), parseInt(per_page)),
+      ...paginate(addPhotoUrlsToRows(data.rows), parseInt(cnt.rows[0].count), parseInt(page), parseInt(per_page)),
       period: { from: start, to: end },
     })
   } catch (err) { next(err) }
