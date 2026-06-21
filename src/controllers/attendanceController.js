@@ -84,24 +84,60 @@ const getUserMeta = async (userId) => {
   return { id: u.id, full_name: `${u.first_name} ${u.last_name||''}`.trim(), role: u.role, email: u.email, phone: u.phone_number }
 }
 
+// ─── Join-date awareness ──────────────────────────────────────────────────────
+// A day before a user's account even existed should never read as "absent".
+// We compare the day string (YYYY-MM-DD) against the user's created_at date (IST calendar day).
+// Status used for such days: 'not_joined'.
+const NOT_JOINED_STATUS = 'not_joined'
+
+const toISTDateStr = (d) => {
+  const dt = new Date(d)
+  // Convert to IST calendar date regardless of server timezone
+  const ist = new Date(dt.getTime() + (dt.getTimezoneOffset() * 60000) + (330 * 60000))
+  return ist.toISOString().split('T')[0]
+}
+
+// dateStr: 'YYYY-MM-DD' day being rendered. joinDateStr: user's created_at as 'YYYY-MM-DD' (IST).
+const isBeforeJoinDate = (dateStr, joinDateStr) => {
+  if (!joinDateStr) return false
+  return dateStr < joinDateStr
+}
+
 const buildPhotoUrl = (file) => {
   if (!file) return null
   const subfolder = file.destination.split('attendance/')[1]
   return `/uploads/attendance/${subfolder}/${file.filename}`
 }
 
+// Resolves the photo to store on an attendance row.
+// Supports BOTH flows:
+//  1. Two-step (current frontend): photo uploaded earlier via /upload-photo,
+//     and the returned `photo_url` is passed in the JSON body of /checkin or /checkout.
+//  2. Direct multipart upload straight to /checkin or /checkout (req.file), if ever added later.
+// Only accepts photo_url values that point inside our own attendance upload folder,
+// to avoid someone passing an arbitrary external URL into the DB.
+const resolvePhotoUrl = (req, expectedSubfolder) => {
+  if (req.file) return buildPhotoUrl(req.file)
+  const bodyUrl = req.body?.photo_url
+  if (typeof bodyUrl === 'string' && bodyUrl.startsWith(`/uploads/attendance/${expectedSubfolder}/`)) {
+    return bodyUrl
+  }
+  return null
+}
+
 // ─── Excel style helpers ──────────────────────────────────────────────────────
 
 const STATUS_FILL = {
-  present: { type:'pattern', pattern:'solid', fgColor:{ argb:'FFD1FAE5' } },
-  late:    { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFEF3C7' } },
-  absent:  { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFEE2E2' } },
-  leave:   { type:'pattern', pattern:'solid', fgColor:{ argb:'FFE0E7FF' } },
-  weekend: { type:'pattern', pattern:'solid', fgColor:{ argb:'FFF3F4F6' } },
+  present:    { type:'pattern', pattern:'solid', fgColor:{ argb:'FFD1FAE5' } },
+  late:       { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFEF3C7' } },
+  absent:     { type:'pattern', pattern:'solid', fgColor:{ argb:'FFFEE2E2' } },
+  leave:      { type:'pattern', pattern:'solid', fgColor:{ argb:'FFE0E7FF' } },
+  weekend:    { type:'pattern', pattern:'solid', fgColor:{ argb:'FFF3F4F6' } },
+  not_joined: { type:'pattern', pattern:'solid', fgColor:{ argb:'FFE5E7EB' } },
 }
 const STATUS_FONT = {
   present:'065F46', late:'92400E', absent:'991B1B',
-  leave:'3730A3', weekend:'6B7280',
+  leave:'3730A3', weekend:'6B7280', not_joined:'9CA3AF',
 }
 
 const applyHeaderStyle = (cell, argb = 'FF1E40AF') => {
@@ -151,7 +187,11 @@ const checkIn = async (req, res, next) => {
     const { latitude, longitude, address, device, notes } = req.body
     const checkInTime            = new Date()
     const { status, lateMinutes } = resolveStatus(checkInTime)
-    const photo                  = buildPhotoUrl(req.file)
+    const photo                  = resolvePhotoUrl(req, 'checkin')
+    if (!photo) {
+      if (req.file) fs.unlink(req.file.path, ()=>{})
+      return next(new AppError('Selfie photo is required for check-in. Upload via /attendance/upload-photo?type=checkin first, then pass the returned photo_url.', 400))
+    }
     const ip                     = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || null
     const userMeta               = await getUserMeta(userId)
 
@@ -159,7 +199,7 @@ const checkIn = async (req, res, next) => {
     if (existing.rows.length) {
       const r = await pool.query(
         `UPDATE attendance SET check_in_time=$1, status=$2, late_by_minutes=$3,
-           checkin_photo=COALESCE($4,checkin_photo),
+           checkin_photo=$4,
            checkin_latitude=$5, checkin_longitude=$6, checkin_address=$7,
            checkin_ip=$8, checkin_device=$9, notes=COALESCE($10,notes), updated_at=NOW()
          WHERE user_id=$11 AND date=$12 RETURNING *`,
@@ -204,14 +244,18 @@ const checkOut = async (req, res, next) => {
     const { latitude, longitude, address, device, notes } = req.body
     const checkOutTime = new Date()
     const workingHours = calcWorkingHours(existing.rows[0].check_in_time, checkOutTime)
-    const photo        = buildPhotoUrl(req.file)
+    const photo         = resolvePhotoUrl(req, 'checkout')
+    if (!photo) {
+      if (req.file) fs.unlink(req.file.path, ()=>{})
+      return next(new AppError('Selfie photo is required for check-out. Upload via /attendance/upload-photo?type=checkout first, then pass the returned photo_url.', 400))
+    }
     const ip           = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || null
     const userMeta     = await getUserMeta(userId)
     const currentStatus = existing.rows[0].status
 
     const r = await pool.query(
       `UPDATE attendance SET check_out_time=$1, working_hours=$2,
-         checkout_photo=COALESCE($3,checkout_photo),
+         checkout_photo=$3,
          checkout_latitude=$4, checkout_longitude=$5, checkout_address=$6,
          checkout_ip=$7, checkout_device=$8, notes=COALESCE($9,notes), updated_at=NOW()
        WHERE user_id=$10 AND date=$11 RETURNING *`,
@@ -377,12 +421,13 @@ const getTeamAttendance = async (req, res, next) => {
     if (teamIds.length === 0) {
       return sendSuccess(res, 'No team members found', {
         period: { from: start, to: end }, team_size: 0,
+        team_members: [],
         data: [], summary: { present:0, absent:0, late:0, leave:0, total_working_hours:0 },
         pagination: { total:0, page:1, per_page:parseInt(per_page), total_pages:0 },
       })
     }
 
-    const [cnt, data, sum] = await Promise.all([
+    const [cnt, data, sum, members] = await Promise.all([
       pool.query(`SELECT COUNT(*) FROM attendance a WHERE a.user_id = ANY($1::uuid[]) AND a.date BETWEEN $2 AND $3`, [teamIds, start, end]),
       pool.query(`SELECT a.*, CONCAT(u.first_name,' ',u.last_name) AS full_name, u.role, u.email, u.phone_number
          FROM attendance a JOIN users u ON u.id = a.user_id
@@ -398,6 +443,11 @@ const getTeamAttendance = async (req, res, next) => {
            COALESCE(SUM(working_hours), 0)                                       AS total_working_hours
          FROM attendance WHERE user_id = ANY($1::uuid[]) AND date BETWEEN $2 AND $3`,
         [teamIds, start, end]),
+      // Full team roster (not paginated) — used by the frontend to render every team
+      // member even on days where they have no attendance record yet.
+      pool.query(`SELECT id, CONCAT(first_name,' ',last_name) AS full_name, role, email, phone_number, manager_id, created_at
+         FROM users WHERE id = ANY($1::uuid[]) AND is_active = true
+         ORDER BY first_name ASC`, [teamIds]),
     ])
 
     const s = sum.rows[0]
@@ -406,6 +456,7 @@ const getTeamAttendance = async (req, res, next) => {
       summary: { present:parseInt(s.present), absent:parseInt(s.absent), late:parseInt(s.late), leave:parseInt(s.leave), half_day:parseInt(s.half_day)||0, total_working_hours:parseFloat(s.total_working_hours) },
       period: { from: start, to: end },
       team_size: teamIds.length,
+      team_members: members.rows,
     })
   } catch (err) { next(err) }
 }
@@ -451,26 +502,43 @@ const getByDate = async (req, res, next) => {
          WHERE a.date=$1 ${scopeFilter} ORDER BY u.first_name ASC`, scopeParams
       ),
       pool.query(
-        `SELECT u.id, CONCAT(u.first_name,' ',u.last_name) AS full_name, u.role, u.email, u.phone_number, u.manager_id
+        `SELECT u.id, CONCAT(u.first_name,' ',u.last_name) AS full_name, u.role, u.email, u.phone_number, u.manager_id, u.created_at
          FROM users u WHERE ${noRecScopeWhere}
            AND u.id NOT IN (SELECT user_id FROM attendance WHERE date=$1)
          ORDER BY u.first_name ASC`, noRecParams
       ),
     ])
 
+    // Split "no record" users into truly absent vs not yet joined as of `date`
+    const noRecWithStatus = noRec.rows.map(u => {
+      const joinDateStr  = u.created_at ? toISTDateStr(u.created_at) : null
+      const notYetJoined = isBeforeJoinDate(date, joinDateStr)
+      return {
+        ...u,
+        status:         notYetJoined ? NOT_JOINED_STATUS : 'absent',
+        check_in_time:  null,
+        check_out_time: null,
+        checkin_photo:  null,
+        checkout_photo: null,
+      }
+    })
+    const notJoinedCount = noRecWithStatus.filter(u => u.status === NOT_JOINED_STATUS).length
+    const trulyAbsentCount = noRecWithStatus.length - notJoinedCount
+
     const summary = {
-      present:  recs.rows.filter(r=>['present','late'].includes(r.status)).length,
-      late:     recs.rows.filter(r=>r.status==='late').length,
-      absent:   recs.rows.filter(r=>r.status==='absent').length + noRec.rows.length,
-      leave:    recs.rows.filter(r=>r.status==='leave').length,
-      half_day: recs.rows.filter(r=>r.status==='leave' && r.leave_type==='half_day').length,
-      total:    recs.rows.length + noRec.rows.length,
+      present:    recs.rows.filter(r=>['present','late'].includes(r.status)).length,
+      late:       recs.rows.filter(r=>r.status==='late').length,
+      absent:     recs.rows.filter(r=>r.status==='absent').length + trulyAbsentCount,
+      leave:      recs.rows.filter(r=>r.status==='leave').length,
+      half_day:   recs.rows.filter(r=>r.status==='leave' && r.leave_type==='half_day').length,
+      not_joined: notJoinedCount,
+      total:      recs.rows.length + noRec.rows.length,
     }
 
     return sendSuccess(res, `Attendance for ${date}`, {
       date, summary,
       records:   recs.rows,
-      no_record: noRec.rows.map(u=>({ ...u, status:'absent', check_in_time:null, check_out_time:null, checkin_photo:null, checkout_photo:null })),
+      no_record: noRecWithStatus,
     })
   } catch (err) { next(err) }
 }
@@ -530,7 +598,7 @@ const getByMonth = async (req, res, next) => {
     // else: admin/super_admin with no filter → all users
 
     const [users, cnt, attRows] = await Promise.all([
-      pool.query(`SELECT id,first_name,last_name,role,email FROM users WHERE is_active=true ${uFilter} ORDER BY first_name ASC LIMIT $1 OFFSET $2`, uParams),
+      pool.query(`SELECT id,first_name,last_name,role,email,created_at FROM users WHERE is_active=true ${uFilter} ORDER BY first_name ASC LIMIT $1 OFFSET $2`, uParams),
       pool.query(`SELECT COUNT(*) FROM users WHERE is_active=true ${cntFilter}`, cntParams),
       pool.query(`SELECT a.* FROM attendance a WHERE a.date BETWEEN $1 AND $2 ${attFilter}`, attParams),
     ])
@@ -547,14 +615,19 @@ const getByMonth = async (req, res, next) => {
     while (cur <= new Date(end)) { allDays.push(cur.toISOString().split('T')[0]); cur.setDate(cur.getDate()+1) }
 
     const data = users.rows.map(u => {
+      const joinDateStr = u.created_at ? toISTDateStr(u.created_at) : null
       const days = allDays.map(date => {
-        const isWk = [0,6].includes(new Date(date).getDay())
-        const rec  = lookup[u.id]?.[date]
+        // Company works Monday–Sunday — no automatic weekly off. is_weekend is kept purely
+        // as informational metadata (e.g. so the UI can still show "Sat"/"Sun" styling),
+        // it no longer forces a 'weekend' status or excludes the day from working-day counts.
+        const isWk         = [0,6].includes(new Date(date).getDay())
+        const rec           = lookup[u.id]?.[date]
+        const notYetJoined  = isBeforeJoinDate(date, joinDateStr)
         return {
           date,
           day:            new Date(date).toLocaleDateString('en-IN',{weekday:'short'}),
           is_weekend:     isWk,
-          status:         rec?.status || (isWk ? 'weekend' : 'absent'),
+          status:         rec?.status || (notYetJoined ? NOT_JOINED_STATUS : 'absent'),
           check_in_time:  rec?.check_in_time  || null,
           check_out_time: rec?.check_out_time || null,
           working_hours:  rec?.working_hours  || null,
@@ -568,9 +641,11 @@ const getByMonth = async (req, res, next) => {
           reason:           rec?.reason || null,
         }
       })
-      const wd = days.filter(d=>!d.is_weekend)
+      // Working-day summary excludes ONLY days before the user joined — every calendar
+      // day (including Sat/Sun) counts as a working day now that there's no weekly off.
+      const wd = days.filter(d=>d.status !== NOT_JOINED_STATUS)
       return {
-        user: { id:u.id, full_name:`${u.first_name} ${u.last_name||''}`.trim(), role:u.role, email:u.email },
+        user: { id:u.id, full_name:`${u.first_name} ${u.last_name||''}`.trim(), role:u.role, email:u.email, created_at:u.created_at },
         days,
         summary: {
           present:             wd.filter(d=>['present','late'].includes(d.status)).length,
@@ -604,17 +679,25 @@ const getCalendar = async (req, res, next) => {
     const userMeta = await getUserMeta(targetId)
     if (!userMeta) return next(new AppError('User not found',404))
 
+    const joinRow     = await pool.query(`SELECT created_at FROM users WHERE id=$1`, [targetId])
+    const joinDateStr = joinRow.rows[0]?.created_at ? toISTDateStr(joinRow.rows[0].created_at) : null
+
     const recs = await pool.query(`SELECT * FROM attendance WHERE user_id=$1 AND date BETWEEN $2 AND $3 ORDER BY date ASC`, [targetId,start,end])
     const map  = {}
     recs.rows.forEach(r=>{ map[toDateStr(r.date)] = r })
 
     const days=[], cur=new Date(start), endDate=new Date(end)
     while (cur<=endDate) {
+      // Company works Monday–Sunday — no automatic weekly off.
+      // is_weekend is kept as informational metadata only (UI styling), not a status.
       const ds=cur.toISOString().split('T')[0], isWk=[0,6].includes(cur.getDay())
-      days.push({ date:ds, day:cur.toLocaleDateString('en-IN',{weekday:'short'}), is_weekend:isWk, ...(map[ds]||{status:isWk?'weekend':'absent'}) })
+      const notYetJoined = isBeforeJoinDate(ds, joinDateStr)
+      days.push({ date:ds, day:cur.toLocaleDateString('en-IN',{weekday:'short'}), is_weekend:isWk, ...(map[ds]||{status: notYetJoined ? NOT_JOINED_STATUS : 'absent'}) })
       cur.setDate(cur.getDate()+1)
     }
-    const wd=days.filter(d=>!d.is_weekend)
+    // Every calendar day counts as a working day now (no weekly off) — only exclude
+    // days before the user joined.
+    const wd=days.filter(d=>d.status !== NOT_JOINED_STATUS)
     return sendSuccess(res,'Calendar fetched',{
       user:userMeta, month:m, year:y, days,
       summary:{
@@ -795,7 +878,7 @@ const exportExcel = async (req, res, next) => {
 
     const [allRecs, usersRes] = await Promise.all([
       pool.query(`SELECT a.*,CONCAT(u.first_name,' ',u.last_name) AS full_name,u.role,u.email,u.phone_number FROM attendance a JOIN users u ON u.id=a.user_id WHERE a.date BETWEEN $1 AND $2 ${uF} ORDER BY a.date ASC,u.first_name ASC`, uP),
-      pool.query(`SELECT id,first_name,last_name,role,email FROM users WHERE is_active=true ${usrF} ORDER BY first_name ASC`, usrP),
+      pool.query(`SELECT id,first_name,last_name,role,email,created_at FROM users WHERE is_active=true ${usrF} ORDER BY first_name ASC`, usrP),
     ])
 
     const allDays=[]
@@ -886,11 +969,14 @@ const exportExcel = async (req, res, next) => {
       row.getCell(2).value=`${u.first_name} ${u.last_name||''}`.trim()
       row.getCell(3).value=u.role?.replace(/_/g,' ')
       ;[1,2,3].forEach(c=>{row.getCell(c).font={size:10};row.getCell(c).alignment={vertical:'middle'};row.getCell(c).border={top:{style:'hair'},bottom:{style:'hair'},left:{style:'thin'},right:{style:'thin'}}})
+      const joinDateStr = u.created_at ? toISTDateStr(u.created_at) : null
       allDays.forEach((d,i)=>{
-        const isWk=[0,6].includes(new Date(d).getDay())
         const rec=lookup[u.id]?.[d]
-        const st=rec?.status||(isWk?'weekend':'absent')
-        const abbr={present:'P',late:'L',absent:'A',leave:'LV',weekend:'-'}
+        const notYetJoined = isBeforeJoinDate(d, joinDateStr)
+        // Company works Monday–Sunday — no automatic weekly off, so a missing record
+        // on Sat/Sun defaults to 'absent' same as any other day, not 'weekend'.
+        const st=rec?.status||(notYetJoined ? NOT_JOINED_STATUS : 'absent')
+        const abbr={present:'P',late:'L',absent:'A',leave:'LV',weekend:'-',not_joined:'NJ'}
         const cell=row.getCell(4+i)
         cell.value=abbr[st]||st.charAt(0).toUpperCase()
         cell.alignment={horizontal:'center',vertical:'middle'}
@@ -904,7 +990,7 @@ const exportExcel = async (req, res, next) => {
     // Legend
     const legRow=ws2.getRow(4+usersRes.rows.length+2)
     legRow.getCell(1).value='Legend:'; legRow.getCell(1).font={bold:true,size:10}
-    const leg=[['P','Present','D1FAE5','065F46'],['L','Late','FEF3C7','92400E'],['A','Absent','FEE2E2','991B1B'],['LV','Leave','E0E7FF','3730A3'],['-','Weekend','F3F4F6','6B7280']]
+    const leg=[['P','Present','D1FAE5','065F46'],['L','Late','FEF3C7','92400E'],['A','Absent','FEE2E2','991B1B'],['LV','Leave','E0E7FF','3730A3'],['-','Weekend','F3F4F6','6B7280'],['NJ','Not Joined Yet','E5E7EB','9CA3AF']]
     leg.forEach((l,i)=>{
       const c=legRow.getCell(2+i)
       c.value=`${l[0]}=${l[1]}`; c.fill={type:'pattern',pattern:'solid',fgColor:{argb:`FF${l[2]}`}}
@@ -971,10 +1057,22 @@ const exportExcel = async (req, res, next) => {
 }
 
 // ─── EOD CRON ─────────────────────────────────────────────────────────────────
+// NOTE: this function is currently NOT scheduled anywhere (no setInterval/cron calls it).
+// It's kept here for whenever you decide to wire up an actual EOD "mark absent" job.
+// Fixed to skip users whose account was created after `today` (IST) so they are never
+// marked absent for a day before they joined.
 const markAbsentEOD = async () => {
   try {
     const today=new Date().toISOString().split('T')[0]
-    const r=await pool.query(`INSERT INTO attendance(user_id,date,status) SELECT u.id,$1,'absent' FROM users u WHERE u.is_active=true AND u.id NOT IN(SELECT user_id FROM attendance WHERE date=$1) ON CONFLICT(user_id,date) DO NOTHING RETURNING user_id`,[today])
+    const r=await pool.query(
+      `INSERT INTO attendance(user_id,date,status)
+       SELECT u.id,$1,'absent' FROM users u
+       WHERE u.is_active=true
+         AND u.id NOT IN(SELECT user_id FROM attendance WHERE date=$1)
+         AND u.created_at::date <= $1::date
+       ON CONFLICT(user_id,date) DO NOTHING RETURNING user_id`,
+      [today]
+    )
     console.log(`[EOD Cron] ${r.rows.length} users marked absent for ${today}`)
     return r.rows.length
   } catch(err) { console.error('[markAbsentEOD]',err) }
@@ -1327,7 +1425,7 @@ const getTodayAll = async (req, res, next) => {
       ),
       pool.query(
         `SELECT u.id, CONCAT(u.first_name,' ',u.last_name) AS full_name,
-                u.role, u.email, u.phone_number
+                u.role, u.email, u.phone_number, u.created_at
          FROM users u
          WHERE u.is_active = true
            AND u.id NOT IN (SELECT user_id FROM attendance WHERE date = $1)
@@ -1337,29 +1435,42 @@ const getTodayAll = async (req, res, next) => {
     ])
 
     const rows = checkedIn.rows
+
+    // Split "not checked in" into truly-not-checked-in vs not-yet-joined (created_at is in the future
+    // relative to today's IST date — can happen if the account was created later the same day before
+    // the user has had a chance to check in, or genuinely hasn't joined yet).
+    const notCheckedInWithStatus = notCheckedIn.rows.map(u => {
+      const joinDateStr  = u.created_at ? toISTDateStr(u.created_at) : null
+      const notYetJoined = isBeforeJoinDate(today, joinDateStr)
+      return {
+        ...u,
+        status:         notYetJoined ? NOT_JOINED_STATUS : 'absent',
+        check_in_time:  null,
+        check_out_time: null,
+        checkin_photo:  null,
+        checkout_photo: null,
+      }
+    })
+    const notJoinedCount    = notCheckedInWithStatus.filter(u => u.status === NOT_JOINED_STATUS).length
+    const trulyNotCheckedIn = notCheckedInWithStatus.length - notJoinedCount
+
     const summary = {
-      total_employees: rows.length + notCheckedIn.rows.length,
+      total_employees: rows.length + trulyNotCheckedIn,
       checked_in:      rows.filter(r => r.check_in_time).length,
-      not_checked_in:  notCheckedIn.rows.length,
+      not_checked_in:  trulyNotCheckedIn,
       present:         rows.filter(r => r.status === 'present').length,
       late:            rows.filter(r => r.status === 'late').length,
       leave:           rows.filter(r => r.status === 'leave').length,
       half_day:        rows.filter(r => r.status === 'leave' && r.leave_type === 'half_day').length,
-      absent:          rows.filter(r => r.status === 'absent').length + notCheckedIn.rows.length,
+      absent:          rows.filter(r => r.status === 'absent').length + trulyNotCheckedIn,
+      not_joined:      notJoinedCount,
     }
 
     return sendSuccess(res, `Today's attendance (${today})`, {
       date:          today,
       summary,
       checked_in:    rows,
-      not_checked_in: notCheckedIn.rows.map(u => ({
-        ...u,
-        status:         'absent',
-        check_in_time:  null,
-        check_out_time: null,
-        checkin_photo:  null,
-        checkout_photo: null,
-      })),
+      not_checked_in: notCheckedInWithStatus,
     })
   } catch (err) { next(err) }
 }

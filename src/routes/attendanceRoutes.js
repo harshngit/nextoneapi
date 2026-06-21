@@ -20,10 +20,18 @@ const HIERARCHY = [
  *
  *     **Mobile check-in flow:**
  *     1. `POST /upload-photo?type=checkin`  → get back `photo_url`
- *     2. `POST /checkin`  with `photo_url` + GPS in body
+ *     2. `POST /checkin`  with `photo_url` + GPS in body (photo_url is REQUIRED)
  *     3. At end of day: repeat for checkout
  *
- *     **Status values:** `present` · `late` · `absent` · `leave`
+ *     **Work week:** Monday–Sunday, no automatic weekly off. Every day with no
+ *     attendance record defaults to `absent` (Saturdays/Sundays included).
+ *
+ *     **Status values:** `present` · `late` · `absent` · `leave` · `not_joined` (synthesized
+ *     display-only status for days before a user's account existed — never stored in the DB).
+ *
+ *     **Holidays:** see the separate `Holidays` tag — admin/super_admin can declare a date as
+ *     a holiday for specific roles and/or specific users, which auto-marks `leave` (leave_type
+ *     `holiday`) for everyone targeted.
  *
  *     **Excel export tabs:** All Records · By Month · Summary · Late Arrivals
  */
@@ -102,19 +110,22 @@ router.post(
  *     description: >
  *       Server auto-records the check-in timestamp.
  *       Upload the selfie first via `/upload-photo?type=checkin`, then pass the
- *       returned `photo_url` here. All fields except auth are optional.
+ *       returned `photo_url` here — `photo_url` is REQUIRED, check-in will be
+ *       rejected with 400 if it is missing.
  *     tags: [Attendance]
  *     security:
  *       - BearerAuth: []
  *     requestBody:
+ *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
+ *             required: [photo_url]
  *             properties:
  *               photo_url:
  *                 type: string
- *                 description: URL returned from /upload-photo
+ *                 description: REQUIRED — URL returned from /upload-photo?type=checkin
  *                 example: "/uploads/attendance/checkin/uuid_2025-06-28_xxx.jpg"
  *               latitude:
  *                 type: number
@@ -150,7 +161,7 @@ router.post(
  *                   full_name: "Rahul Sharma"
  *                   role: "sales_executive"
  *       400:
- *         description: Already checked in
+ *         description: Already checked in, or photo_url missing
  */
 router.post('/checkin', authenticate, ctrl.checkIn)
 
@@ -161,18 +172,22 @@ router.post('/checkin', authenticate, ctrl.checkIn)
  *     summary: Check out for the day
  *     description: >
  *       Server auto-records check-out time and calculates working hours.
- *       Must have checked in first. Pass `photo_url` from `/upload-photo?type=checkout`.
+ *       Must have checked in first. Pass `photo_url` from `/upload-photo?type=checkout` —
+ *       `photo_url` is REQUIRED, check-out will be rejected with 400 if missing.
  *     tags: [Attendance]
  *     security:
  *       - BearerAuth: []
  *     requestBody:
+ *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
+ *             required: [photo_url]
  *             properties:
  *               photo_url:
  *                 type: string
+ *                 description: REQUIRED — URL returned from /upload-photo?type=checkout
  *                 example: "/uploads/attendance/checkout/uuid_2025-06-28_xxx.jpg"
  *               latitude:   { type: number }
  *               longitude:  { type: number }
@@ -195,6 +210,8 @@ router.post('/checkin', authenticate, ctrl.checkIn)
  *                   full_name: "Rahul Sharma"
  *                   role: "sales_executive"
  *                 working_hours: 8.88
+ *       400:
+ *         description: Not checked in yet, already checked out, or photo_url missing
  */
 router.post('/checkout', authenticate, ctrl.checkOut)
 
