@@ -139,7 +139,7 @@ const getHolidays = async (req, res, next) => {
     const { role, id: callerId } = req.user
     const { year, month, upcoming_only, page = 1, per_page = 50 } = req.query
     const offset = (parseInt(page) - 1) * parseInt(per_page)
-    const ADMIN_ROLES = ['super_admin', 'admin', 'superadmin']
+    const ADMIN_ROLES = ['super_admin', 'admin']
 
     const conds = []
     const params = []
