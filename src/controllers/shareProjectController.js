@@ -351,4 +351,71 @@ const shareProject = async (req, res, next) => {
   }
 };
 
-module.exports = { shareProject };
+// ── Share project document on WhatsApp ───────────────────────────────────────
+const whatsapp = require('../utils/whatsappService');
+
+const BACKEND_URL = (process.env.BACKEND_URL || '').replace(/\/$/, '');
+
+const shareProjectWhatsapp = async (req, res, next) => {
+  try {
+    const { id: projectId } = req.params;
+    const { phone, document_id } = req.body;
+
+    if (!phone) return next(new AppError('phone is required', 400));
+
+    const cleanedPhone = whatsapp.cleanPhone(phone);
+    if (!cleanedPhone) return next(new AppError('Invalid phone number', 400));
+
+    if (!document_id) return next(new AppError('document_id is required', 400));
+
+    if (!BACKEND_URL) return next(new AppError('BACKEND_URL is not configured on the server', 500));
+
+    // ── Fetch project ────────────────────────────────────────────────────────
+    const projectResult = await pool.query(
+      'SELECT id, name FROM projects WHERE id = $1',
+      [projectId]
+    );
+    if (projectResult.rows.length === 0) {
+      return next(new AppError('Project not found', 404));
+    }
+    const project = projectResult.rows[0];
+
+    // ── Fetch the document ───────────────────────────────────────────────────
+    const docResult = await pool.query(
+      'SELECT id, document_type, file_name, file_path, mime_type FROM project_documents WHERE id = $1 AND project_id = $2',
+      [document_id, projectId]
+    );
+    if (docResult.rows.length === 0) {
+      return next(new AppError('Document not found for this project', 404));
+    }
+    const doc = docResult.rows[0];
+
+    // ── Construct public URL ─────────────────────────────────────────────────
+    const filePath     = doc.file_path.startsWith('/') ? doc.file_path : `/${doc.file_path}`;
+    const documentLink = `${BACKEND_URL}${filePath}`;
+
+    const typeLabel = doc.document_type.replace(/_/g, ' ');
+    const caption   = `${project.name} — ${typeLabel.charAt(0).toUpperCase() + typeLabel.slice(1)}`;
+
+    // ── Send via WhatsApp ────────────────────────────────────────────────────
+    const result = await whatsapp.sendDocument({
+      phone,
+      documentLink,
+      fileName: doc.file_name,
+      caption,
+    });
+
+    return sendSuccess(res, 'Document shared via WhatsApp', {
+      project_id:         projectId,
+      project_name:       project.name,
+      document:           { id: doc.id, file_name: doc.file_name, type: doc.document_type },
+      sent_to:            phone,
+      whatsapp_message_id: result?.messages?.[0]?.id || null,
+    });
+
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { shareProject, shareProjectWhatsapp };

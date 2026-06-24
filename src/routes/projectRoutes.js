@@ -637,4 +637,71 @@ router.get("/:id/leads", authenticate, authorize("super_admin", "admin", "sales_
 const shareProjectController = require("../controllers/shareProjectController").shareProject;
 router.post("/:id/share", authenticate, shareProjectController);
 
+/**
+ * @swagger
+ * /api/v1/projects/{id}/share-whatsapp:
+ *   post:
+ *     summary: Share a project document via WhatsApp
+ *     description: >
+ *       Sends a specific project document (unit plan, creative, payment plan, or video)
+ *       to a WhatsApp number as a document message.
+ *       Requires BACKEND_URL env var to construct the public file link.
+ *     tags: [Projects]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Project UUID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [phone, document_id]
+ *             properties:
+ *               phone:
+ *                 type: string
+ *                 description: WhatsApp phone number (10-digit Indian or E.164 format)
+ *                 example: "9876543210"
+ *               document_id:
+ *                 type: string
+ *                 format: uuid
+ *                 description: ID of the project document to send
+ *                 example: "doc-uuid-001"
+ *           example:
+ *             phone: "9876543210"
+ *             document_id: "doc-uuid-001"
+ *     responses:
+ *       200:
+ *         description: Document sent via WhatsApp
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Document shared via WhatsApp"
+ *               data:
+ *                 project_id: "proj-uuid-001"
+ *                 project_name: "Skyline Heights"
+ *                 document:
+ *                   id: "doc-uuid-001"
+ *                   file_name: "2bhk_floorplan.pdf"
+ *                   type: "unit_plan"
+ *                 sent_to: "9876543210"
+ *                 whatsapp_message_id: "wamid.xxx"
+ *       400:
+ *         description: Missing phone or document_id, invalid phone number
+ *       404:
+ *         description: Project or document not found
+ *       500:
+ *         description: BACKEND_URL not configured
+ */
+const shareProjectWhatsappController = require("../controllers/shareProjectController").shareProjectWhatsapp;
+router.post("/:id/share-whatsapp", authenticate, shareProjectWhatsappController);
+
 module.exports = router;

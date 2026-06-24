@@ -759,10 +759,12 @@ router.patch("/:id/convert", authenticate, authorize("super_admin", "admin", "sa
  *   post:
  *     summary: Send project details to lead via WhatsApp
  *     description: >
- *       Logs a WhatsApp activity on the lead with the project details message.
- *       If WHATSAPP_API_URL and WHATSAPP_API_TOKEN env vars are configured,
- *       also triggers an actual WhatsApp send to the lead's phone number.
- *       Activity is always logged regardless of external API availability.
+ *       Sends an approved WhatsApp template message ('lead_project_details') to the
+ *       lead's phone number via Meta's WhatsApp Cloud API — the same provider used
+ *       for site visit confirmations/reminders (WHATSAPP_TOKEN / WHATSAPP_PHONE_ID
+ *       env vars). This is a templated transactional message, not free text — Meta
+ *       requires pre-approved templates for business-initiated WhatsApp messages.
+ *       An activity entry is logged on the lead regardless of send outcome.
  *     tags: [Lead Management]
  *     security:
  *       - BearerAuth: []
@@ -784,25 +786,24 @@ router.patch("/:id/convert", authenticate, authorize("super_admin", "admin", "sa
  *                 type: string
  *                 format: uuid
  *                 description: Override project to share details for (defaults to lead's assigned project)
- *               message:
- *                 type: string
- *                 description: Custom message override (auto-generated if omitted)
  *           example:
  *             project_id: "proj-uuid-001"
- *             message: "Hi! Here are the details for Skyline Heights you enquired about."
  *     responses:
  *       200:
- *         description: WhatsApp activity logged (and message sent if API is configured)
+ *         description: WhatsApp message sent (or send failed — check whatsapp_sent) and activity logged
  *         content:
  *           application/json:
  *             example:
  *               success: true
- *               message: "WhatsApp details sent and activity logged"
+ *               message: "Project details sent via WhatsApp and activity logged"
  *               data:
  *                 lead_id: "lead-uuid-001"
  *                 phone: "+919876543210"
- *                 whatsapp_sent: false
+ *                 project: "Skyline Heights"
+ *                 whatsapp_sent: true
  *                 activity_logged: true
+ *       400:
+ *         description: Lead has no phone number on record
  *       403:
  *         description: Access denied
  *       404:

@@ -11,6 +11,7 @@ const { pool }     = require('../config/db');
 const { sendSuccess, paginate } = require('../utils/response');
 const AppError     = require('../utils/AppError');
 const emailService = require('../utils/emailService');
+const whatsappService = require('../utils/whatsappService');
 const { getTeamIds, ADMIN_ROLES, LEAF_ROLES } = require('../utils/teamUtils');
 
 const VALID_STATUSES = ['confirmed', 'cancelled', 'on_hold'];
@@ -198,6 +199,25 @@ const createClosure = async (req, res, next) => {
           adminEmails
         });
       } catch (e) { console.error('[Email] createClosure notification failed:', e.message); }
+    });
+
+    // ── 📱 WhatsApp — booking confirmation to the client ──────────────────────
+    setImmediate(async () => {
+      try {
+        const unitDesc = [unit_type, unit_number, tower_block].filter(Boolean).join(' · ');
+        await whatsappService.sendBookingConfirmed({
+          leadName:    lead.name,
+          leadPhone:   lead.phone,
+          projectName: lead.project_name || 'the project',
+          unitDesc:    unitDesc || null,
+          bookingDate: booking_date,
+        });
+        await pool.query(
+          `UPDATE lead_closures SET whatsapp_confirmed_sent = true WHERE lead_id = $1`, [lead_id]
+        );
+      } catch (waErr) {
+        console.error('[WhatsApp] createClosure booking confirmation failed:', waErr.message);
+      }
     });
 
     // Fetch managers for frontend Reporting Manager dropdown
@@ -408,6 +428,34 @@ const updateClosureStatus = async (req, res, next) => {
        req.user.id]
     );
     await client.query('COMMIT');
+
+    // ── 📱 WhatsApp — booking cancelled / on-hold notice to the client ───────
+    if (['cancelled', 'on_hold'].includes(status)) {
+      setImmediate(async () => {
+        try {
+          const leadRow = await pool.query(
+            `SELECT l.name, l.phone, p.name AS project_name
+             FROM leads l LEFT JOIN projects p ON p.id = l.project_id
+             WHERE l.id = $1`,
+            [existing.rows[0].lead_id]
+          );
+          if (!leadRow.rows.length) return;
+          const lead = leadRow.rows[0];
+
+          await whatsappService.sendBookingCancelled({
+            leadName:    lead.name,
+            leadPhone:   lead.phone,
+            projectName: lead.project_name,
+            newStatus:   status,
+          });
+          await pool.query(
+            `UPDATE lead_closures SET whatsapp_cancelled_sent = true WHERE id = $1`, [id]
+          );
+        } catch (waErr) {
+          console.error('[WhatsApp] updateClosureStatus notification failed:', waErr.message);
+        }
+      });
+    }
 
     return sendSuccess(res, `Closure status updated to ${status}`);
   } catch (err) {

@@ -10,6 +10,7 @@ const { sendSuccess, paginate } = require("../utils/response");
 const AppError       = require("../utils/AppError");
 const { emitToUser } = require("../config/socket");
 const emailService   = require("../utils/emailService");
+const whatsappService = require("../utils/whatsappService");
 const { getTeamIds, ADMIN_ROLES, LEAF_ROLES } = require("../utils/teamUtils");
 const { createNotification, createBulkNotifications, notifyAdmins } = require("./notificationController");
 
@@ -158,6 +159,27 @@ const createTask = async (req, res, next) => {
         });
       } catch (emailErr) {
         console.error("[Email] createTask notification failed:", emailErr.message);
+      }
+    });
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── 📱 WhatsApp — client-facing "we'll be in touch" message ──────────────
+    // Distinct from the internal staff email above — this goes to the LEAD's
+    // phone, not the assignee's.
+    setImmediate(async () => {
+      try {
+        const clientLead = lead.rows[0];
+        if (!clientLead?.phone) return;
+        await whatsappService.sendFollowUpScheduled({
+          leadName:    clientLead.name,
+          leadPhone:   clientLead.phone,
+          projectName: clientLead.project_name,
+        });
+        await pool.query(
+          `UPDATE tasks SET whatsapp_followup_sent = true WHERE id = $1`, [task.id]
+        );
+      } catch (waErr) {
+        console.error("[WhatsApp] createTask follow-up message failed:", waErr.message);
       }
     });
     // ─────────────────────────────────────────────────────────────────────────

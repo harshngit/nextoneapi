@@ -15,6 +15,7 @@ const { pool }        = require("../config/db");
 const { sendSuccess, paginate } = require("../utils/response");
 const AppError        = require("../utils/AppError");
 const emailService    = require("../utils/emailService");
+const whatsappService = require("../utils/whatsappService");
 const { getTeamIds, ADMIN_ROLES, LEAF_ROLES } = require("../utils/teamUtils");
 const { createNotification, createBulkNotifications, notifyAdmins } = require("./notificationController");
 
@@ -348,6 +349,26 @@ const createLead = async (req, res, next) => {
     });
     // ─────────────────────────────────────────────────────────────────────────
 
+    // ── 📱 WhatsApp — welcome message to the client ──────────────────────────
+    setImmediate(async () => {
+      try {
+        if (lead.whatsapp_welcome_sent) return; // already sent (shouldn't happen on create, but safe)
+        await whatsappService.sendLeadWelcome({
+          leadName:    lead.name,
+          leadPhone:   lead.phone,
+          projectName: lead.project_id ? (await pool.query(
+            `SELECT name FROM projects WHERE id = $1`, [lead.project_id]
+          )).rows[0]?.name : null,
+        });
+        await pool.query(
+          `UPDATE leads SET whatsapp_welcome_sent = true WHERE id = $1`, [lead.id]
+        );
+      } catch (waErr) {
+        console.error("[WhatsApp] createLead welcome message failed:", waErr.message);
+      }
+    });
+    // ─────────────────────────────────────────────────────────────────────────
+
     return sendSuccess(res, "Lead created", {
       ...lead,
       call_recordings: savedRecordings,
@@ -600,6 +621,47 @@ const updateLeadStatus = async (req, res, next) => {
         console.error("[Email] updateLeadStatus notification failed:", emailErr.message);
       }
     });
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── 📱 WhatsApp — only for the two client-meaningful statuses below.
+    // 'site_visit_scheduled' and 'booked' are deliberately NOT covered here —
+    // they're handled by the dedicated Site Visit / Closure WhatsApp messages
+    // instead, to avoid sending the client two messages for the same event.
+    // 'lost' is deliberately NOT covered — kept internal-only.
+    if (['interested', 'negotiation'].includes(status)) {
+      setImmediate(async () => {
+        try {
+          const fullLead = await fetchLeadWithProject(id);
+          if (!fullLead) return;
+
+          const sentFlagCol = status === 'interested' ? 'whatsapp_interested_sent' : 'whatsapp_negotiation_sent';
+          const alreadySentRow = await pool.query(
+            `SELECT ${sentFlagCol} AS sent FROM leads WHERE id = $1`, [id]
+          );
+          if (alreadySentRow.rows[0]?.sent) return; // already sent for this status once before
+
+          if (status === 'interested') {
+            await whatsappService.sendLeadStatusInterested({
+              leadName:    fullLead.name,
+              leadPhone:   fullLead.phone,
+              projectName: fullLead.project_name,
+            });
+          } else {
+            await whatsappService.sendLeadStatusNegotiation({
+              leadName:    fullLead.name,
+              leadPhone:   fullLead.phone,
+              projectName: fullLead.project_name,
+            });
+          }
+
+          await pool.query(
+            `UPDATE leads SET ${sentFlagCol} = true WHERE id = $1`, [id]
+          );
+        } catch (waErr) {
+          console.error("[WhatsApp] updateLeadStatus message failed:", waErr.message);
+        }
+      });
+    }
     // ─────────────────────────────────────────────────────────────────────────
 
     return sendSuccess(res, `Lead status updated to ${status}`, result.rows[0]);
@@ -973,17 +1035,19 @@ const getLeadSources = async (req, res, next) => {
 
 /**
  * POST /api/v1/leads/:id/send-whatsapp
- * Logs a WhatsApp activity on the lead.
- * If WHATSAPP_API_URL is configured, triggers an actual message send.
+ * Sends a project details WhatsApp message to the lead's phone number via
+ * Meta's WhatsApp Cloud API (same provider/credentials as whatsappService.js —
+ * NOT a generic free-text API; uses the approved 'lead_project_details' template).
+ * Mirrors sendLeadEmail's structure and logs an identical activity entry.
  */
 const sendLeadWhatsapp = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { project_id, message } = req.body;
+    const { project_id } = req.body;
     const { role, id: callerId } = req.user;
 
     const leadResult = await pool.query(
-      `SELECT l.id, l.name, l.phone, l.email, l.assigned_to,
+      `SELECT l.id, l.name, l.phone, l.assigned_to,
               p.name AS project_name, p.city AS project_city,
               p.locality AS project_locality, p.price_range, p.configurations
        FROM leads l
@@ -999,49 +1063,44 @@ const sendLeadWhatsapp = async (req, res, next) => {
       return next(new AppError("Access denied", 403));
     }
 
-    // Build message text
-    const waMessage = message || [
-      `Hi ${lead.name},`,
-      `Thank you for your interest in Next One Realty.`,
-      lead.project_name ? `We'd love to share details about *${lead.project_name}*${lead.project_city ? ` in ${lead.project_city}` : ""}.` : "",
-      lead.price_range  ? `Price Range: ${lead.price_range}` : "",
-      `Our team will be in touch with you shortly. Feel free to reach out for any queries!`,
-      `— Next One Realty`,
-    ].filter(Boolean).join("\n");
-
-    // Log the activity first (always happens regardless of external API)
-    await pool.query(
-      `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, 'whatsapp', $2, $3)`,
-      [id, waMessage, callerId]
-    );
-
-    // ── Optional: fire actual WhatsApp send if env is configured ─────────────
-    // Currently logs the attempt; plug in WATI / Twilio / any provider here.
-    // Example env vars: WHATSAPP_API_URL, WHATSAPP_API_TOKEN
-    let whatsappSent = false;
-    if (process.env.WHATSAPP_API_URL && process.env.WHATSAPP_API_TOKEN) {
-      try {
-        const fetch = require("node-fetch");
-        const waRes = await fetch(process.env.WHATSAPP_API_URL, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${process.env.WHATSAPP_API_TOKEN}`,
-          },
-          body: JSON.stringify({ phone: lead.phone, message: waMessage }),
-        });
-        whatsappSent = waRes.ok;
-        if (!waRes.ok) console.warn("[WhatsApp] API responded with:", waRes.status);
-      } catch (waErr) {
-        console.error("[WhatsApp] Send failed (activity still logged):", waErr.message);
-      }
+    if (!lead.phone) {
+      return next(new AppError("This lead does not have a phone number on record", 400));
     }
 
-    return sendSuccess(res, "WhatsApp details sent and activity logged", {
-      lead_id:       id,
-      phone:         lead.phone,
-      message:       waMessage,
-      whatsapp_sent: whatsappSent,
+    // Send via the real Meta WhatsApp Cloud API (approved template — not free text)
+    let whatsappSent = false;
+    let sendError    = null;
+    try {
+      const result = await whatsappService.sendLeadProjectDetailsWhatsapp({
+        leadName:    lead.name,
+        leadPhone:   lead.phone,
+        projectName: lead.project_name,
+        projectCity: lead.project_city,
+        priceRange:  lead.price_range,
+      });
+      whatsappSent = !!result; // null means credentials weren't configured, or the API call failed silently above the catch
+    } catch (waErr) {
+      sendError = waErr.message;
+      console.error("[WhatsApp] sendLeadWhatsapp failed:", waErr.message);
+    }
+
+    // Log the activity regardless of send outcome — same pattern as sendLeadEmail
+    const activityNote = whatsappSent
+      ? `Project details WhatsApp message sent${lead.project_name ? ` for ${lead.project_name}` : ""}`
+      : `Project details WhatsApp message attempted but failed${sendError ? ` (${sendError})` : ""}`;
+
+    await pool.query(
+      `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, 'whatsapp', $2, $3)`,
+      [id, activityNote, callerId]
+    );
+
+    return sendSuccess(res, whatsappSent
+      ? "Project details sent via WhatsApp and activity logged"
+      : "WhatsApp send failed, but the attempt was logged", {
+      lead_id:         id,
+      phone:           lead.phone,
+      project:         lead.project_name || null,
+      whatsapp_sent:   whatsappSent,
       activity_logged: true,
     });
   } catch (err) {

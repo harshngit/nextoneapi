@@ -9,9 +9,19 @@
  *   WHATSAPP_PHONE_ID  — Phone Number ID from WhatsApp dashboard (not the number)
  *
  * Template names (must be approved in Meta Business Manager):
- *   site_visit_confirmation   — on site visit creation
- *   site_visit_reminder_1day  — sent 1 day before visit
- *   site_visit_reminder_today — sent morning of visit day
+ *   site_visit_confirmation     — on site visit creation
+ *   site_visit_reminder_1day    — sent 1 day before visit
+ *   site_visit_reminder_today   — sent morning of visit day
+ *   lead_welcome                — on lead creation
+ *   lead_status_interested      — lead status → interested
+ *   lead_status_negotiation     — lead status → negotiation
+ *   lead_project_details        — "send project details" action (mirrors the email version)
+ *   revisit_confirmation        — on re-visit creation
+ *   revisit_reminder_1day       — sent 1 day before re-visit
+ *   revisit_reminder_2hour      — sent 2 hours before re-visit
+ *   booking_confirmed           — on closure created (status confirmed)
+ *   booking_cancelled           — closure status → cancelled or on_hold
+ *   followup_scheduled          — on follow-up task creation (client-facing)
  */
 
 const https = require('https');
@@ -133,6 +143,14 @@ const fmtTime = (timeStr) => {
   return `${displayHour}:${m} ${suffix}`;
 };
 
+// ── Format currency for WhatsApp message (Indian numbering: ₹12,34,567) ──────
+const fmtCurrency = (amount) => {
+  if (amount === null || amount === undefined || amount === '') return null;
+  const n = Number(amount);
+  if (Number.isNaN(n)) return null;
+  return `₹${n.toLocaleString('en-IN')}`;
+};
+
 // ════════════════════════════════════════════════════════════════════════════
 // 1. SITE VISIT CONFIRMATION — send when visit is created
 //
@@ -190,10 +208,214 @@ const sendSiteVisitReminderToday = async ({ leadName, leadPhone, projectName, vi
   });
 };
 
+// ════════════════════════════════════════════════════════════════════════════
+// 4. LEAD — Welcome message (on lead creation)
+//
+// Template: lead_welcome
+// Body: "Hi {{1}}, thank you for your interest in Next One Realty! 🏠\nOur team will reach out to you shortly regarding {{2}}."
+// ════════════════════════════════════════════════════════════════════════════
+const sendLeadWelcome = async ({ leadName, leadPhone, projectName }) => {
+  console.log('[WhatsApp] Sending lead welcome to', leadPhone);
+  return sendTemplate({
+    phone:        leadPhone,
+    templateName: 'lead_welcome',
+    parameters:   [leadName, projectName || 'our projects'],
+  });
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// 5. LEAD — Status changed to "Interested"
+//
+// Template: lead_status_interested
+// Body: "Hi {{1}}, great to know you're interested in {{2}}! Our team will share more details with you shortly."
+// ════════════════════════════════════════════════════════════════════════════
+const sendLeadStatusInterested = async ({ leadName, leadPhone, projectName }) => {
+  console.log('[WhatsApp] Sending "interested" status update to', leadPhone);
+  return sendTemplate({
+    phone:        leadPhone,
+    templateName: 'lead_status_interested',
+    parameters:   [leadName, projectName || 'the project'],
+  });
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// 6. LEAD — Status changed to "Negotiation"
+//
+// Template: lead_status_negotiation
+// Body: "Hi {{1}}, your discussion for {{2}} has moved to the negotiation stage. Our team will be in touch shortly to finalize details."
+// ════════════════════════════════════════════════════════════════════════════
+const sendLeadStatusNegotiation = async ({ leadName, leadPhone, projectName }) => {
+  console.log('[WhatsApp] Sending "negotiation" status update to', leadPhone);
+  return sendTemplate({
+    phone:        leadPhone,
+    templateName: 'lead_status_negotiation',
+    parameters:   [leadName, projectName || 'the project'],
+  });
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// 7. LEAD — Project details (mirrors the existing project-details EMAIL)
+//
+// Template: lead_project_details
+// Body: "Hi {{1}}, thank you for your interest in Next One Realty.\nWe'd love to share details about {{2}} in {{3}}.\nPrice Range: {{4}}\nOur team will be in touch with you shortly."
+// ════════════════════════════════════════════════════════════════════════════
+const sendLeadProjectDetailsWhatsapp = async ({ leadName, leadPhone, projectName, projectCity, priceRange }) => {
+  console.log('[WhatsApp] Sending project details to', leadPhone);
+  return sendTemplate({
+    phone:        leadPhone,
+    templateName: 'lead_project_details',
+    parameters:   [
+      leadName,
+      projectName || 'our project',
+      projectCity || '',
+      priceRange  || 'Contact us for pricing',
+    ],
+  });
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// 8. RE-VISIT — Confirmation (on re-visit creation)
+//
+// Template: revisit_confirmation
+// Body: "Hi {{1}}, your re-visit is confirmed! 🏠\nProject: {{2}}\nDate: {{3}}\nTime: {{4}}"
+// ════════════════════════════════════════════════════════════════════════════
+const sendRevisitConfirmation = async ({ leadName, leadPhone, projectName, visitDate, visitTime }) => {
+  console.log('[WhatsApp] Sending re-visit confirmation to', leadPhone);
+  return sendTemplate({
+    phone:        leadPhone,
+    templateName: 'revisit_confirmation',
+    parameters:   [leadName, projectName, fmtDate(visitDate), fmtTime(visitTime)],
+  });
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// 9. RE-VISIT — 1 day before reminder
+//
+// Template: revisit_reminder_1day
+// Body: "Reminder: Your re-visit is tomorrow! 🗓️\nProject: {{1}}\nDate: {{2}}\nTime: {{3}}"
+// ════════════════════════════════════════════════════════════════════════════
+const sendRevisitReminder1Day = async ({ leadPhone, projectName, visitDate, visitTime }) => {
+  console.log('[WhatsApp] Sending re-visit 1-day reminder to', leadPhone);
+  return sendTemplate({
+    phone:        leadPhone,
+    templateName: 'revisit_reminder_1day',
+    parameters:   [projectName, fmtDate(visitDate), fmtTime(visitTime)],
+  });
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// 10. RE-VISIT — 2 hours before reminder
+//
+// Template: revisit_reminder_2hour
+// Body: "Reminder: Your re-visit is in 2 hours! ⏰\nProject: {{1}}\nTime: {{2}}"
+// ════════════════════════════════════════════════════════════════════════════
+const sendRevisitReminder2Hour = async ({ leadPhone, projectName, visitTime }) => {
+  console.log('[WhatsApp] Sending re-visit 2-hour reminder to', leadPhone);
+  return sendTemplate({
+    phone:        leadPhone,
+    templateName: 'revisit_reminder_2hour',
+    parameters:   [projectName, fmtTime(visitTime)],
+  });
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// 11. CLOSURE — Booking confirmed
+//
+// Template: booking_confirmed
+// Body: "Congratulations {{1}}! 🎉\nYour booking for {{2}} at {{3}} is confirmed.\nUnit: {{4}}\nBooking Date: {{5}}"
+// ════════════════════════════════════════════════════════════════════════════
+const sendBookingConfirmed = async ({ leadName, leadPhone, projectName, unitDesc, bookingDate }) => {
+  console.log('[WhatsApp] Sending booking confirmation to', leadPhone);
+  return sendTemplate({
+    phone:        leadPhone,
+    templateName: 'booking_confirmed',
+    parameters:   [
+      leadName,
+      'your unit',
+      projectName || 'the project',
+      unitDesc    || 'TBD',
+      fmtDate(bookingDate),
+    ],
+  });
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// 12. CLOSURE — Booking cancelled / on-hold
+//
+// Template: booking_cancelled
+// Body: "Hi {{1}}, your booking for {{2}} has been marked as {{3}}. Please contact us for more details."
+// ════════════════════════════════════════════════════════════════════════════
+const sendBookingCancelled = async ({ leadName, leadPhone, projectName, newStatus }) => {
+  console.log('[WhatsApp] Sending booking status update to', leadPhone);
+  return sendTemplate({
+    phone:        leadPhone,
+    templateName: 'booking_cancelled',
+    parameters:   [
+      leadName,
+      projectName || 'your booking',
+      newStatus === 'on_hold' ? 'on hold' : 'cancelled',
+    ],
+  });
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// 13. FOLLOW-UP — Scheduled (client-facing — "we'll be in touch")
+//
+// Template: followup_scheduled
+// Body: "Hi {{1}}, we'll be reaching out to you shortly regarding {{2}}. Thank you for your patience!"
+// ════════════════════════════════════════════════════════════════════════════
+const sendFollowUpScheduled = async ({ leadName, leadPhone, projectName }) => {
+  console.log('[WhatsApp] Sending follow-up scheduled message to', leadPhone);
+  return sendTemplate({
+    phone:        leadPhone,
+    templateName: 'followup_scheduled',
+    parameters:   [leadName, projectName || 'your enquiry'],
+  });
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// 14. DOCUMENT — Send a document (PDF, image, etc.) via WhatsApp
+//
+// Uses the WhatsApp Cloud API "document" message type with a public link.
+// ════════════════════════════════════════════════════════════════════════════
+const sendDocument = async ({ phone, documentLink, fileName, caption }) => {
+  const to = cleanPhone(phone);
+  if (!to) {
+    console.warn('[WhatsApp] Invalid phone number:', phone);
+    return null;
+  }
+
+  console.log('[WhatsApp] Sending document to', phone, '| File:', fileName);
+  const payload = {
+    messaging_product: 'whatsapp',
+    to,
+    type: 'document',
+    document: {
+      link:     documentLink,
+      filename: fileName,
+    },
+  };
+  if (caption) payload.document.caption = caption;
+
+  return callWhatsAppAPI(payload);
+};
+
 module.exports = {
   sendSiteVisitConfirmation,
   sendSiteVisitReminder1Day,
   sendSiteVisitReminderToday,
+  sendLeadWelcome,
+  sendLeadStatusInterested,
+  sendLeadStatusNegotiation,
+  sendLeadProjectDetailsWhatsapp,
+  sendRevisitConfirmation,
+  sendRevisitReminder1Day,
+  sendRevisitReminder2Hour,
+  sendBookingConfirmed,
+  sendBookingCancelled,
+  sendFollowUpScheduled,
+  sendDocument,
   sendTemplate,   // export for custom use
   cleanPhone,
+  fmtCurrency,
 };

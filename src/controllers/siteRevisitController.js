@@ -11,6 +11,7 @@ const { pool }        = require('../config/db');
 const { sendSuccess, paginate } = require('../utils/response');
 const AppError        = require('../utils/AppError');
 const emailService    = require('../utils/emailService');
+const whatsappService = require('../utils/whatsappService');
 const { createNotification, notifyAdmins } = require('./notificationController');
 const { getTeamIds, ADMIN_ROLES, LEAF_ROLES } = require('../utils/teamUtils');
 
@@ -211,6 +212,26 @@ const createRevisit = async (req, res, next) => {
           });
         }
       } catch (e) { console.error('[Email] createRevisit notification failed:', e.message); }
+    });
+
+    // ── 📱 WhatsApp — re-visit confirmation to the client ─────────────────────
+    setImmediate(async () => {
+      try {
+        const revisitId = result.rows[0].id;
+        if (!orig.lead_phone) return;
+        await whatsappService.sendRevisitConfirmation({
+          leadName:    orig.lead_name,
+          leadPhone:   orig.lead_phone,
+          projectName: orig.project_name || 'the project',
+          visitDate:   visit_date,
+          visitTime:   visit_time,
+        });
+        await pool.query(
+          `UPDATE site_revisits SET whatsapp_confirmation_sent = true WHERE id = $1`, [revisitId]
+        );
+      } catch (waErr) {
+        console.error('[WhatsApp] createRevisit confirmation failed:', waErr.message);
+      }
     });
 
     return sendSuccess(res, 'Re-visit scheduled successfully', result.rows[0], 201);
