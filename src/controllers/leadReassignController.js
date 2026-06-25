@@ -72,18 +72,20 @@ const reassignLead = async (req, res, next) => {
 
     const newAssignee = newAssigneeCheck.rows[0];
 
-    // Permission check - admins, super_admins, sales_managers, and team_leaders can reassign
-    if (!['admin', 'super_admin', 'sales_manager', 'team_leader'].includes(role)) {
+    // Permission check — all hierarchy roles (rank 1–8) can reassign
+    const REASSIGN_DENIED = ['external_caller', 'hr_admin', 'digital_marketing'];
+    if (REASSIGN_DENIED.includes(role)) {
       await client.query('ROLLBACK');
-      return next(new AppError('Access denied. Only admins, managers, and team leaders can reassign leads', 403));
+      return next(new AppError('Access denied. You do not have permission to reassign leads', 403));
     }
 
-    // Team leaders can only reassign to users within their team
-    if (role === 'team_leader') {
-      const teamIds = await require('../utils/teamUtils').getTeamIds(performedBy);
+    // Non-admin roles can only reassign within their team
+    if (!['admin', 'super_admin'].includes(role)) {
+      const { getTeamIds } = require('../utils/teamUtils');
+      const teamIds = await getTeamIds(performedBy);
       if (!teamIds.includes(assigned_to)) {
         await client.query('ROLLBACK');
-        return next(new AppError('Team leaders can only reassign leads to members within their team', 403));
+        return next(new AppError('You can only reassign leads to members within your team', 403));
       }
     }
 
@@ -248,19 +250,21 @@ const bulkReassignLeads = async (req, res, next) => {
       return next(new AppError('Cannot reassign more than 100 leads at once', 400));
     }
 
-    // Permission check
-    if (!['admin', 'super_admin', 'sales_manager', 'team_leader'].includes(role)) {
-      return next(new AppError('Access denied. Only admins, managers, and team leaders can reassign leads', 403));
+    // Permission check — all hierarchy roles (rank 1–8) can reassign
+    const REASSIGN_DENIED = ['external_caller', 'hr_admin', 'digital_marketing'];
+    if (REASSIGN_DENIED.includes(role)) {
+      return next(new AppError('Access denied. You do not have permission to reassign leads', 403));
     }
 
     await client.query('BEGIN');
 
-    // Team leaders can only reassign to users within their team
-    if (role === 'team_leader') {
-      const teamIds = await require('../utils/teamUtils').getTeamIds(req.user.id);
+    // Non-admin roles can only reassign within their team
+    if (!['admin', 'super_admin'].includes(role)) {
+      const { getTeamIds } = require('../utils/teamUtils');
+      const teamIds = await getTeamIds(req.user.id);
       if (!teamIds.includes(assigned_to)) {
         await client.query('ROLLBACK');
-        return next(new AppError('Team leaders can only reassign leads to members within their team', 403));
+        return next(new AppError('You can only reassign leads to members within your team', 403));
       }
     }
 
