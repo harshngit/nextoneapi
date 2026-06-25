@@ -72,16 +72,25 @@ const reassignLead = async (req, res, next) => {
 
     const newAssignee = newAssigneeCheck.rows[0];
 
-    // Permission check - only admins, super_admins, and sales_managers can reassign
-    if (!['admin', 'super_admin', 'sales_manager'].includes(role)) {
+    // Permission check - admins, super_admins, sales_managers, and team_leaders can reassign
+    if (!['admin', 'super_admin', 'sales_manager', 'team_leader'].includes(role)) {
       await client.query('ROLLBACK');
-      return next(new AppError('Access denied. Only admins and managers can reassign leads', 403));
+      return next(new AppError('Access denied. Only admins, managers, and team leaders can reassign leads', 403));
+    }
+
+    // Team leaders can only reassign to users within their team
+    if (role === 'team_leader') {
+      const teamIds = await require('../utils/teamUtils').getTeamIds(performedBy);
+      if (!teamIds.includes(assigned_to)) {
+        await client.query('ROLLBACK');
+        return next(new AppError('Team leaders can only reassign leads to members within their team', 403));
+      }
     }
 
     // Update lead assignment
     await client.query(
-      `UPDATE leads 
-       SET assigned_to = $1, updated_at = NOW() 
+      `UPDATE leads
+       SET assigned_to = $1, updated_at = NOW()
        WHERE id = $2`,
       [assigned_to, leadId]
     );
@@ -240,16 +249,25 @@ const bulkReassignLeads = async (req, res, next) => {
     }
 
     // Permission check
-    if (!['admin', 'super_admin', 'sales_manager'].includes(role)) {
-      return next(new AppError('Access denied. Only admins and managers can reassign leads', 403));
+    if (!['admin', 'super_admin', 'sales_manager', 'team_leader'].includes(role)) {
+      return next(new AppError('Access denied. Only admins, managers, and team leaders can reassign leads', 403));
     }
 
     await client.query('BEGIN');
 
+    // Team leaders can only reassign to users within their team
+    if (role === 'team_leader') {
+      const teamIds = await require('../utils/teamUtils').getTeamIds(req.user.id);
+      if (!teamIds.includes(assigned_to)) {
+        await client.query('ROLLBACK');
+        return next(new AppError('Team leaders can only reassign leads to members within their team', 403));
+      }
+    }
+
     // Verify new assignee exists and is active
     const newAssigneeCheck = await client.query(
-      `SELECT id, first_name, last_name, email, role 
-       FROM users 
+      `SELECT id, first_name, last_name, email, role
+       FROM users
        WHERE id = $1 AND is_active = true`,
       [assigned_to]
     );
