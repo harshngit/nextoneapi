@@ -280,6 +280,7 @@ const changePassword = async (req, res, next) => {
 
 /**
  * POST /api/v1/auth/forgot-password
+ * Verifies email exists and returns a reset token directly (no email sent).
  */
 const forgotPassword = async (req, res, next) => {
   try {
@@ -287,25 +288,29 @@ const forgotPassword = async (req, res, next) => {
     if (!email) return next(new AppError("Email is required", 400));
 
     const result = await pool.query(
-      "SELECT id FROM users WHERE email = $1 AND is_active = true",
+      "SELECT id, email FROM users WHERE email = $1 AND is_active = true",
       [email.toLowerCase()]
     );
 
-    if (result.rows.length > 0) {
-      const token = generateResetToken();
-      const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
-
-      await pool.query(
-        `INSERT INTO password_reset_tokens (user_id, token, expires_at)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (user_id) DO UPDATE SET token = $2, expires_at = $3`,
-        [result.rows[0].id, token, expiresAt]
-      );
-
-      console.log(`[DEV] Password reset token for ${email}: ${token}`);
+    if (result.rows.length === 0) {
+      return next(new AppError("No account found with this email address", 404));
     }
 
-    return sendSuccess(res, "If this email is registered, a reset link has been sent.");
+    const token = generateResetToken();
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+
+    await pool.query(
+      `INSERT INTO password_reset_tokens (user_id, token, expires_at)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (user_id) DO UPDATE SET token = $2, expires_at = $3`,
+      [result.rows[0].id, token, expiresAt]
+    );
+
+    return sendSuccess(res, "Email verified. Use the token to reset your password.", {
+      token,
+      email: result.rows[0].email,
+      expires_in: "15 minutes",
+    });
   } catch (err) {
     next(err);
   }

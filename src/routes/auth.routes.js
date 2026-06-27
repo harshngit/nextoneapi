@@ -545,10 +545,11 @@ router.post("/refresh-token", authController.refreshToken);
  * @swagger
  * /api/v1/auth/forgot-password:
  *   post:
- *     summary: Send password reset link to email
+ *     summary: Verify email and get password reset token
  *     description: >
- *       Always returns 200 even if email is not found — prevents email enumeration.
- *       Reset token is valid for 15 minutes.
+ *       Step 1 of password reset flow. Checks if email exists in the database.
+ *       If found, returns a reset token directly (valid for 15 minutes).
+ *       Returns 404 if email is not registered.
  *     tags: [Auth]
  *     security: []
  *     requestBody:
@@ -556,17 +557,33 @@ router.post("/refresh-token", authController.refreshToken);
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/ForgotPasswordRequest'
+ *             type: object
+ *             required: [email]
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
  *           example:
  *             email: "shubhamshinde@gmail.com"
  *     responses:
  *       200:
- *         description: Always 200 for security
+ *         description: Email verified, reset token returned
  *         content:
  *           application/json:
  *             example:
  *               success: true
- *               message: "If this email is registered, a reset link has been sent."
+ *               message: "Email verified. Use the token to reset your password."
+ *               data:
+ *                 token: "a1b2c3d4e5f6..."
+ *                 email: "shubhamshinde@gmail.com"
+ *                 expires_in: "15 minutes"
+ *       404:
+ *         description: Email not found
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: false
+ *               message: "No account found with this email address"
  */
 router.post("/forgot-password", authController.forgotPassword);
 
@@ -574,10 +591,11 @@ router.post("/forgot-password", authController.forgotPassword);
  * @swagger
  * /api/v1/auth/reset-password:
  *   post:
- *     summary: Reset password using token from email
+ *     summary: Reset password using token
  *     description: >
- *       Single-use token valid for 15 minutes. All sessions are
- *       invalidated after a successful reset.
+ *       Step 2 of password reset flow. Uses the token from forgot-password
+ *       to set a new password. Token is single-use and valid for 15 minutes.
+ *       All sessions are invalidated after a successful reset.
  *     tags: [Auth]
  *     security: []
  *     requestBody:
@@ -585,7 +603,16 @@ router.post("/forgot-password", authController.forgotPassword);
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/ResetPasswordRequest'
+ *             type: object
+ *             required: [token, new_password]
+ *             properties:
+ *               token:
+ *                 type: string
+ *                 description: Reset token from forgot-password API
+ *               new_password:
+ *                 type: string
+ *                 minLength: 8
+ *                 description: New password (minimum 8 characters)
  *           example:
  *             token: "a1b2c3d4e5f6g7h8i9j0..."
  *             new_password: "NewSecurePass@789"
