@@ -135,6 +135,16 @@ const createTask = async (req, res, next) => {
       });
     }
 
+    // Notify all admins and super_admins
+    await notifyAdmins({
+      type:           "follow_up_created",
+      title:          "New Follow-Up Task Created",
+      message:        `${lead.rows[0]?.name || "A lead"}: "${task.title}" — due ${new Date(task.due_date).toLocaleDateString()}`,
+      reference_id:   task.id,
+      reference_type: "task",
+      metadata:       { lead_name: lead.rows[0]?.name, priority: task.priority },
+    });
+
     // ── ✉ Email after successful DB insert ───────────────────────────────────
     setImmediate(async () => {
       try {
