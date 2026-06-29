@@ -557,6 +557,68 @@ router.get('/user/:user_id', authenticate, authorize(...HIERARCHY), ctrl.getByUs
 
 /**
  * @swagger
+ * /api/v1/attendance/user/{user_id}/history:
+ *   get:
+ *     summary: Full attendance history for a user with photos and location
+ *     description: >
+ *       Returns complete attendance history for a specific user including
+ *       check-in/check-out photos (full URLs), geo-location coordinates and addresses,
+ *       device info, IP addresses, manual entry details, and summary statistics.
+ *       Filterable by date range and status.
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: user_id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - { in: query, name: from, schema: { type: string, format: date }, description: "Start date (default: 1st of current month)" }
+ *       - { in: query, name: to, schema: { type: string, format: date }, description: "End date (default: today)" }
+ *       - in: query
+ *         name: status
+ *         schema: { type: string, enum: [present, absent, leave, late] }
+ *       - { in: query, name: page, schema: { type: integer, default: 1 } }
+ *       - { in: query, name: per_page, schema: { type: integer, default: 30 } }
+ *     responses:
+ *       200:
+ *         description: User attendance history with full details
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 - id: "att-uuid"
+ *                   date: "2026-06-28"
+ *                   status: "present"
+ *                   check_in_time: "2026-06-28T04:25:00Z"
+ *                   check_out_time: "2026-06-28T13:00:00Z"
+ *                   working_hours: 8.58
+ *                   checkin_photo: "https://api.nextonerealty.in/uploads/attendance/checkin/photo.jpg"
+ *                   checkout_photo: "https://api.nextonerealty.in/uploads/attendance/checkout/photo.jpg"
+ *                   checkin_location: { latitude: 19.076, longitude: 72.877, address: "Andheri West, Mumbai" }
+ *                   checkout_location: { latitude: 19.076, longitude: 72.877, address: "Andheri West, Mumbai" }
+ *               user:
+ *                 id: "user-uuid"
+ *                 full_name: "Rahul Sharma"
+ *                 role: "sales_executive"
+ *                 email: "rahul@example.com"
+ *                 phone: "9876543210"
+ *               summary:
+ *                 present: 22
+ *                 absent: 3
+ *                 late: 2
+ *                 leave: 1
+ *                 total_working_hours: 185.5
+ *                 avg_working_hours: 8.43
+ *               period: { from: "2026-06-01", to: "2026-06-28" }
+ *       404:
+ *         description: User not found
+ */
+router.get('/user/:user_id/history', authenticate, authorize(...HIERARCHY), ctrl.getUserHistory)
+
+/**
+ * @swagger
  * /api/v1/attendance:
  *   get:
  *     summary: All attendance records (admin, filterable + paginated)
