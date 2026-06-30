@@ -1621,10 +1621,12 @@ const getUserHistory = async (req, res, next) => {
   try {
     const { user_id } = req.params
     const { from, to, status, page = 1, per_page = 30 } = req.query
-    const offset = (parseInt(page) - 1) * parseInt(per_page)
-    const now = new Date()
-    const start = from || new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]
-    const end = to || now.toISOString().split('T')[0]
+    const pageNum  = parseInt(page)
+    const perPage  = parseInt(per_page)
+    const now      = new Date()
+    const todayStr = toISTDateStr(now)
+    const start    = from || new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]
+    const end      = to   || todayStr
 
     const userRes = await pool.query(
       `SELECT id, first_name, last_name, role, email, phone_number, created_at
@@ -1632,45 +1634,83 @@ const getUserHistory = async (req, res, next) => {
     )
     if (!userRes.rows.length) return next(new AppError('User not found', 404))
     const u = userRes.rows[0]
+    const joinDateStr = u.created_at ? toISTDateStr(u.created_at) : null
 
-    const conds = ['a.user_id = $1', 'a.date BETWEEN $2 AND $3']
-    const params = [user_id, start, end]
-    let idx = 4
-    if (status) { conds.push(`a.status = $${idx++}`); params.push(status) }
-    const where = `WHERE ${conds.join(' AND ')}`
+    // Fetch all actual attendance records for the range (no status filter yet — we need
+    // them all to know which days are absent)
+    const dataRes = await pool.query(
+      `SELECT a.id, a.date, a.status, a.check_in_time, a.check_out_time,
+              a.working_hours, a.late_by_minutes, a.leave_type,
+              a.checkin_photo, a.checkout_photo,
+              a.checkin_latitude, a.checkin_longitude, a.checkin_address,
+              a.checkout_latitude, a.checkout_longitude, a.checkout_address,
+              a.checkin_ip, a.checkin_device, a.checkout_ip, a.checkout_device,
+              a.is_manual_entry, a.manual_reason, a.reason, a.notes,
+              CONCAT(m.first_name, ' ', m.last_name) AS manual_by_name
+       FROM attendance a
+       LEFT JOIN users m ON m.id = a.manual_by
+       WHERE a.user_id = $1 AND a.date BETWEEN $2 AND $3`,
+      [user_id, start, end]
+    )
 
-    const [cnt, data, sum] = await Promise.all([
-      pool.query(`SELECT COUNT(*) FROM attendance a ${where}`, params),
-      pool.query(
-        `SELECT a.id, a.date, a.status, a.check_in_time, a.check_out_time,
-                a.working_hours, a.late_by_minutes, a.leave_type,
-                a.checkin_photo, a.checkout_photo,
-                a.checkin_latitude, a.checkin_longitude, a.checkin_address,
-                a.checkout_latitude, a.checkout_longitude, a.checkout_address,
-                a.checkin_ip, a.checkin_device, a.checkout_ip, a.checkout_device,
-                a.is_manual_entry, a.manual_reason, a.reason, a.notes,
-                CONCAT(m.first_name, ' ', m.last_name) AS manual_by_name
-         FROM attendance a
-         LEFT JOIN users m ON m.id = a.manual_by
-         ${where}
-         ORDER BY a.date DESC
-         LIMIT $${idx++} OFFSET $${idx++}`,
-        [...params, parseInt(per_page), offset]
-      ),
-      pool.query(
-        `SELECT
-           COUNT(*) FILTER (WHERE status IN ('present','late')) AS present,
-           COUNT(*) FILTER (WHERE status = 'absent') AS absent,
-           COUNT(*) FILTER (WHERE status = 'leave') AS leave,
-           COUNT(*) FILTER (WHERE status = 'late') AS late,
-           COUNT(*) FILTER (WHERE status = 'leave' AND leave_type = 'half_day') AS half_day,
-           COALESCE(SUM(working_hours), 0) AS total_working_hours,
-           COALESCE(AVG(working_hours) FILTER (WHERE working_hours > 0), 0) AS avg_working_hours
-         FROM attendance a ${where}`, params
-      ),
-    ])
+    // Build a map of date-string → record
+    const recordMap = {}
+    for (const r of dataRes.rows) {
+      recordMap[toDateStr(r.date)] = r
+    }
 
-    const records = data.rows.map(r => ({
+    // Walk every calendar day in range; absent = day with no DB row, not future, not pre-join
+    const allRecords = []
+    const cur     = new Date(start)
+    const endDate = new Date(end)
+    while (cur <= endDate) {
+      const ds = cur.toISOString().split('T')[0]
+      if (!isBeforeJoinDate(ds, joinDateStr) && ds <= todayStr) {
+        if (recordMap[ds]) {
+          allRecords.push(recordMap[ds])
+        } else {
+          allRecords.push({
+            id: null, date: ds, status: 'absent',
+            check_in_time: null, check_out_time: null,
+            working_hours: null, late_by_minutes: null, leave_type: null,
+            checkin_photo: null, checkout_photo: null,
+            checkin_latitude: null, checkin_longitude: null, checkin_address: null,
+            checkout_latitude: null, checkout_longitude: null, checkout_address: null,
+            checkin_ip: null, checkin_device: null, checkout_ip: null, checkout_device: null,
+            is_manual_entry: false, manual_by_name: null,
+            manual_reason: null, reason: null, notes: null,
+          })
+        }
+      }
+      cur.setDate(cur.getDate() + 1)
+    }
+
+    // Sort DESC (we iterated ASC)
+    allRecords.sort((a, b) => String(b.date).localeCompare(String(a.date)))
+
+    // Apply optional status filter
+    const filtered = status ? allRecords.filter(r => r.status === status) : allRecords
+
+    // Summary over the full filtered set
+    const withHours = filtered.filter(r => r.working_hours > 0)
+    const summary = {
+      present:             filtered.filter(r => ['present', 'late'].includes(r.status)).length,
+      absent:              filtered.filter(r => r.status === 'absent').length,
+      late:                filtered.filter(r => r.status === 'late').length,
+      leave:               filtered.filter(r => r.status === 'leave').length,
+      half_day:            filtered.filter(r => r.status === 'leave' && r.leave_type === 'half_day').length,
+      total_working_hours: parseFloat(filtered.reduce((s, r) => s + (parseFloat(r.working_hours) || 0), 0).toFixed(2)),
+      avg_working_hours:   withHours.length
+        ? parseFloat((withHours.reduce((s, r) => s + parseFloat(r.working_hours), 0) / withHours.length).toFixed(2))
+        : 0,
+    }
+
+    // Paginate in memory
+    const total    = filtered.length
+    const offset   = (pageNum - 1) * perPage
+    const pageRows = filtered.slice(offset, offset + perPage)
+
+    const records = pageRows.map(r => ({
       id:              r.id,
       date:            r.date,
       status:          r.status,
@@ -1702,26 +1742,17 @@ const getUserHistory = async (req, res, next) => {
       notes:           r.notes,
     }))
 
-    const s = sum.rows[0]
     return res.json({
-      ...paginate(records, parseInt(cnt.rows[0].count), parseInt(page), parseInt(per_page)),
+      ...paginate(records, total, pageNum, perPage),
       user: {
-        id:         u.id,
-        full_name:  `${u.first_name} ${u.last_name || ''}`.trim(),
-        role:       u.role,
-        email:      u.email,
-        phone:      u.phone_number,
-        joined:     u.created_at,
+        id:        u.id,
+        full_name: `${u.first_name} ${u.last_name || ''}`.trim(),
+        role:      u.role,
+        email:     u.email,
+        phone:     u.phone_number,
+        joined:    u.created_at,
       },
-      summary: {
-        present:             parseInt(s.present),
-        absent:              parseInt(s.absent),
-        late:                parseInt(s.late),
-        leave:               parseInt(s.leave),
-        half_day:            parseInt(s.half_day) || 0,
-        total_working_hours: parseFloat(parseFloat(s.total_working_hours).toFixed(2)),
-        avg_working_hours:   parseFloat(parseFloat(s.avg_working_hours).toFixed(2)),
-      },
+      summary,
       period: { from: start, to: end },
     })
   } catch (err) { next(err) }
