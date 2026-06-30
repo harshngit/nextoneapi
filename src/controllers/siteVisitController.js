@@ -12,7 +12,7 @@ const AppError        = require('../utils/AppError');
 const emailService    = require('../utils/emailService');
 const { createNotification, notifyAdmins } = require('./notificationController');
 const { getTeamIds, ADMIN_ROLES, LEAF_ROLES } = require('../utils/teamUtils');
-const { resolveProjectId } = require('../utils/projectResolver');
+const { resolveProjectId, resolveProjectName } = require('../utils/projectResolver');
 
 const VALID_STATUSES   = ['scheduled', 'done', 'cancelled', 'rescheduled', 'no_show'];
 const VALID_REACTIONS  = ['very_positive', 'positive', 'neutral', 'negative', 'not_interested'];
@@ -419,18 +419,28 @@ const createSiteVisitWithLead = async (req, res, next) => {
       assigned_to: lead_assigned_to, budget, location_preference, configuration,
       lead_notes, callback_time, next_followup_time,
       // Site visit fields
-      project_id, visit_date, visit_time,
+      project_id, project_name, visit_date, visit_time,
       assigned_to: visit_assigned_to, notes, transport_arranged,
     } = req.body;
-
-    // Resolve project_id (accepts UUID or name)
-    const resolvedProjectId = await resolveProjectId(project_id);
 
     if (!name || !phone) {
       return next(new AppError('name and phone are required for lead', 400));
     }
-    if (!project_id || !visit_date || !visit_time) {
-      return next(new AppError('project_id, visit_date, and visit_time are required for site visit', 400));
+    if ((!project_id && !project_name) || !visit_date || !visit_time) {
+      return next(new AppError('project_id (or project_name), visit_date, and visit_time are required for site visit', 400));
+    }
+
+    // A site visit must reference a real project — project_id takes precedence,
+    // project_name is resolved by name but must match an existing project.
+    let resolvedProjectId;
+    if (project_id) {
+      resolvedProjectId = await resolveProjectId(project_id);
+    } else {
+      const resolved = await resolveProjectName(project_name);
+      if (!resolved.projectId) {
+        return next(new AppError(`Project not found with name: ${project_name}`, 404));
+      }
+      resolvedProjectId = resolved.projectId;
     }
 
     await client.query('BEGIN');
@@ -498,7 +508,7 @@ const createSiteVisitWithLead = async (req, res, next) => {
       try {
         const { createNotification, notifyAdmins } = require('./notificationController');
         // Get project name
-        const projectRes = await pool.query('SELECT name FROM projects WHERE id = $1', [project_id]);
+        const projectRes = await pool.query('SELECT name FROM projects WHERE id = $1', [resolvedProjectId]);
         const projectName = projectRes.rows[0]?.name || 'project';
 
         if (execId) {

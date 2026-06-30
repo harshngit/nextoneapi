@@ -314,7 +314,6 @@ router.post('/:id/feedback', authenticate, ctrl.submitSiteVisitFeedback);
  *             required:
  *               - name
  *               - phone
- *               - project_id
  *               - visit_date
  *               - visit_time
  *             properties:
@@ -334,7 +333,18 @@ router.post('/:id/feedback', authenticate, ctrl.submitSiteVisitFeedback);
  *                 type: string
  *               project_id:
  *                 type: string
- *                 description: Project UUID or project name
+ *                 format: uuid
+ *                 description: >
+ *                   Project UUID. Either project_id or project_name is required
+ *                   (project_id takes precedence if both are sent). Must resolve
+ *                   to an existing project — a site visit cannot be scheduled for
+ *                   a project that doesn't exist.
+ *               project_name:
+ *                 type: string
+ *                 description: >
+ *                   Project name, used when the user typed a name instead of
+ *                   picking from the dropdown. Looked up case-insensitively;
+ *                   returns 404 if no matching project is found.
  *               assigned_to:
  *                 type: string
  *                 format: uuid

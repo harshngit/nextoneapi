@@ -13,6 +13,7 @@ const emailService   = require("../utils/emailService");
 const whatsappService = require("../utils/whatsappService");
 const { getTeamIds, ADMIN_ROLES, LEAF_ROLES } = require("../utils/teamUtils");
 const { createNotification, createBulkNotifications, notifyAdmins } = require("./notificationController");
+const { resolveProjectId, resolveProjectName } = require("../utils/projectResolver");
 
 const VALID_PRIORITIES = ["low", "medium", "high"];
 
@@ -453,7 +454,7 @@ const createTaskWithLead = async (req, res, next) => {
     // Extract lead data and task data from request body
     const {
       // Lead fields
-      name, phone, alternate_phone_number, email, source, project_id,
+      name, phone, alternate_phone_number, email, source, project_id, project_name,
       assigned_to: lead_assigned_to, budget, location_preference, configuration,
       lead_notes, callback_time, next_followup_time,
       // Task fields
@@ -465,6 +466,17 @@ const createTaskWithLead = async (req, res, next) => {
     }
     if (!title || !due_date) {
       return next(new AppError('title and due_date are required for task', 400));
+    }
+
+    // project_id takes precedence over project_name
+    let resolvedProjectId = null;
+    let resolvedProjectNameText = null;
+    if (project_id) {
+      resolvedProjectId = await resolveProjectId(project_id);
+    } else if (project_name) {
+      const resolved = await resolveProjectName(project_name);
+      resolvedProjectId = resolved.projectId;
+      resolvedProjectNameText = resolved.projectNameText;
     }
 
     await client.query('BEGIN');
@@ -487,12 +499,12 @@ const createTaskWithLead = async (req, res, next) => {
     const leadResult = await client.query(
       `INSERT INTO leads (
         name, phone, alternate_phone_number, email, source,
-        project_id, assigned_to, budget, location_preference, configuration,
+        project_id, project_name_text, assigned_to, budget, location_preference, configuration,
         callback_time, next_followup_time, status, created_by
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'follow_up',$13) RETURNING *`,
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'follow_up',$14) RETURNING *`,
       [
         name.trim(), phone, alternate_phone_number || null, email || null, source || null,
-        project_id || null, lead_assigned_to || null, budget || null,
+        resolvedProjectId || null, resolvedProjectNameText || null, lead_assigned_to || null, budget || null,
         location_preference || null, configuration || null, callback_time || null,
         next_followup_time || null, req.user.id
       ]

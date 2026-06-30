@@ -452,7 +452,17 @@ router.get("/lead/:leadId", authenticate, taskController.getTasksByLead);
  *                 type: string
  *               project_id:
  *                 type: string
- *                 description: Project UUID or project name
+ *                 format: uuid
+ *                 description: >
+ *                   Project UUID, from the dropdown selection. Optional —
+ *                   takes precedence over project_name if both are sent.
+ *               project_name:
+ *                 type: string
+ *                 description: >
+ *                   Free-text project name, used when the user typed a name
+ *                   instead of picking from the dropdown. Looked up
+ *                   case-insensitively; if no matching project exists, the
+ *                   raw text is stored on the lead instead of erroring.
  *               assigned_to:
  *                 type: string
  *                 format: uuid
