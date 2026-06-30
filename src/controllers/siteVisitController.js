@@ -257,7 +257,7 @@ const updateSiteVisitStatus = async (req, res, next) => {
   const client = await pool.connect();
   try {
     const { id }     = req.params;
-    const { status, note } = req.body;
+    const { status, note, closing_manager } = req.body;
 
     if (!status || !VALID_STATUSES.includes(status)) {
       return next(new AppError(`Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}`, 400));
@@ -267,9 +267,18 @@ const updateSiteVisitStatus = async (req, res, next) => {
     if (!existing.rows.length) return next(new AppError('Site visit not found', 404));
 
     await client.query('BEGIN');
-    await client.query(
-      `UPDATE site_visits SET status = $1, updated_at = NOW() WHERE id = $2`, [status, id]
-    );
+    
+    const updateParams = [status];
+    let updateQuery = `UPDATE site_visits SET status = $1, updated_at = NOW()`;
+    
+    if (closing_manager !== undefined) {
+      updateParams.push(closing_manager);
+      updateQuery += `, closing_manager = $${updateParams.length}`;
+    }
+    
+    updateParams.push(id);
+    updateQuery += ` WHERE id = $${updateParams.length}`;
+    await client.query(updateQuery, updateParams);
 
     if (status === 'done') {
       await client.query(
