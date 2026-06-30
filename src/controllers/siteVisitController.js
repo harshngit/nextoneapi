@@ -55,6 +55,7 @@ const getAllSiteVisits = async (req, res, next) => {
     const dataRes = await pool.query(
       `SELECT sv.id, sv.lead_id, sv.visit_date, sv.visit_time,
               sv.status, sv.transport_arranged, sv.notes, sv.created_at,
+              sv.closing_person, sv.closing_manager,
               l.name AS lead_name, l.phone AS lead_phone,
               p.name AS project_name, p.city AS project_city,
               CONCAT(u.first_name,' ',u.last_name) AS assigned_to_name,
@@ -257,7 +258,7 @@ const updateSiteVisitStatus = async (req, res, next) => {
   const client = await pool.connect();
   try {
     const { id }     = req.params;
-    const { status, note, closing_manager } = req.body;
+    const { status, note, closing_manager, closing_person } = req.body;
 
     if (!status || !VALID_STATUSES.includes(status)) {
       return next(new AppError(`Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}`, 400));
@@ -267,15 +268,19 @@ const updateSiteVisitStatus = async (req, res, next) => {
     if (!existing.rows.length) return next(new AppError('Site visit not found', 404));
 
     await client.query('BEGIN');
-    
+
     const updateParams = [status];
     let updateQuery = `UPDATE site_visits SET status = $1, updated_at = NOW()`;
-    
+
     if (closing_manager !== undefined) {
       updateParams.push(closing_manager);
       updateQuery += `, closing_manager = $${updateParams.length}`;
     }
-    
+    if (closing_person !== undefined) {
+      updateParams.push(closing_person);
+      updateQuery += `, closing_person = $${updateParams.length}`;
+    }
+
     updateParams.push(id);
     updateQuery += ` WHERE id = $${updateParams.length}`;
     await client.query(updateQuery, updateParams);

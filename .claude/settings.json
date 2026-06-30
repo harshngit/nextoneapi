@@ -4,7 +4,9 @@
       "Bash(node -e \"try { require\\('./src/routes/attendanceRoutes'\\); console.log\\('OK'\\); } catch\\(e\\) { console.error\\('ERROR:', e.message\\); }\")",
       "Bash(node -e \"require\\('./src/controllers/attendanceController'\\); console.log\\('OK'\\)\")",
       "Bash(node -e \"require\\('./src/routes/siteRevisitRoutes'\\); console.log\\('OK'\\)\")",
-      "Bash(node -e \"require\\('./src/routes/siteVisitRoutes'\\); console.log\\('OK'\\)\")"
+      "Bash(node -e \"require\\('./src/routes/siteVisitRoutes'\\); console.log\\('OK'\\)\")",
+      "Bash(node -e \"require\\('./src/routes/siteVisitRoutes'\\); require\\('./src/routes/siteRevisitRoutes'\\); console.log\\('OK'\\)\")",
+      "Bash(node -e \"require\\('./src/controllers/siteVisitController'\\); require\\('./src/controllers/siteRevisitController'\\); console.log\\('OK'\\)\")"
     ]
   }
 }

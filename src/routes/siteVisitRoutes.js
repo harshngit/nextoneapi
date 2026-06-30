@@ -230,7 +230,14 @@ router.put('/:id', authenticate, ctrl.updateSiteVisit);
  *             properties:
  *               status: { type: string, enum: [scheduled, done, cancelled, rescheduled, no_show] }
  *               note: { type: string }
- *               closing_manager: { type: string, format: uuid, description: 'UUID of the manager closing the visit' }
+ *               closing_manager:
+ *                 type: string
+ *                 format: uuid
+ *                 description: UUID of the manager closing the visit (from users table)
+ *               closing_person:
+ *                 type: string
+ *                 description: Free-text name of the person who closed the visit (not linked to users table)
+ *                 example: "Rajesh Kumar"
  *     responses:
  *       200:
  *         description: Status updated

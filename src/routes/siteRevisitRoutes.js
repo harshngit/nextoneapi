@@ -322,10 +322,15 @@ router.put('/:id', authenticate, ctrl.updateRevisit);
  *               closing_manager:
  *                 type: string
  *                 format: uuid
- *                 description: UUID of the manager closing the re-visit
+ *                 description: UUID of the manager closing the re-visit (from users table)
+ *               closing_person:
+ *                 type: string
+ *                 description: Free-text name of the person who closed the re-visit (not linked to users table)
+ *                 example: "Rajesh Kumar"
  *           example:
  *             status: "done"
  *             note: "Client visited, very positive reaction"
+ *             closing_person: "Rajesh Kumar"
  *     responses:
  *       200:
  *         description: Status updated

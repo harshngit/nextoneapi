@@ -58,6 +58,7 @@ const getAllRevisits = async (req, res, next) => {
     const dataRes = await pool.query(
       `SELECT sr.id, sr.lead_id, sr.original_visit_id, sr.visit_date, sr.visit_time,
               sr.status, sr.transport_arranged, sr.reason, sr.notes, sr.created_at,
+              sr.closing_person, sr.closing_manager,
               l.name AS lead_name, l.phone AS lead_phone,
               p.name AS project_name, p.city AS project_city,
               CONCAT(u.first_name,' ',u.last_name) AS assigned_to_name,
@@ -267,6 +268,8 @@ const getRevisitById = async (req, res, next) => {
       id: r.id, visit_date: r.visit_date, visit_time: r.visit_time,
       status: r.status, transport_arranged: r.transport_arranged,
       reason: r.reason, notes: r.notes, created_at: r.created_at,
+      closing_person: r.closing_person,
+      closing_manager: r.closing_manager,
       original_visit: {
         id: r.original_visit_id,
         visit_date: r.original_visit_date,
@@ -335,7 +338,7 @@ const updateRevisitStatus = async (req, res, next) => {
   const client = await pool.connect();
   try {
     const { id }     = req.params;
-    const { status, note, closing_manager } = req.body;
+    const { status, note, closing_manager, closing_person } = req.body;
 
     if (!status || !VALID_STATUSES.includes(status)) {
       return next(new AppError(`Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}`, 400));
@@ -373,7 +376,11 @@ const updateRevisitStatus = async (req, res, next) => {
       updateParams.push(closing_manager);
       updateQuery += `, closing_manager = $${updateParams.length}`;
     }
-    
+    if (closing_person !== undefined) {
+      updateParams.push(closing_person);
+      updateQuery += `, closing_person = $${updateParams.length}`;
+    }
+
     updateParams.push(id);
     updateQuery += ` WHERE id = $${updateParams.length}`;
     await client.query(updateQuery, updateParams);
