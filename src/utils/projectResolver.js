@@ -40,6 +40,30 @@ const resolveProjectId = async (projectIdentifier) => {
   throw new AppError(`Project not found with identifier: ${projectIdentifier}`, 404);
 };
 
+/**
+ * Resolves a free-text project name to a project ID if one exists,
+ * otherwise returns the raw string for storage.
+ * Never throws — callers decide what to do with an unmatched name.
+ *
+ * @param {string} projectName - Free-text name typed by the user
+ * @returns {Promise<{ projectId: string|null, projectNameText: string|null }>}
+ */
+const resolveProjectName = async (projectName) => {
+  if (!projectName || typeof projectName !== 'string' || !projectName.trim()) {
+    return { projectId: null, projectNameText: null };
+  }
+  const trimmed = projectName.trim();
+  const result = await pool.query(
+    'SELECT id FROM projects WHERE LOWER(name) = LOWER($1)',
+    [trimmed]
+  );
+  if (result.rows.length > 0) {
+    return { projectId: result.rows[0].id, projectNameText: null };
+  }
+  return { projectId: null, projectNameText: trimmed };
+};
+
 module.exports = {
-  resolveProjectId
+  resolveProjectId,
+  resolveProjectName,
 };
