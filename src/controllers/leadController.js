@@ -17,6 +17,7 @@ const AppError        = require("../utils/AppError");
 const emailService    = require("../utils/emailService");
 const whatsappService = require("../utils/whatsappService");
 const { getTeamIds, ADMIN_ROLES, LEAF_ROLES } = require("../utils/teamUtils");
+const { resolveProjectId } = require("../utils/projectResolver");
 const { createNotification, createBulkNotifications, notifyAdmins } = require("./notificationController");
 
 const VALID_STATUSES = [
@@ -139,7 +140,11 @@ const getAllLeads = async (req, res, next) => {
     if (status)      { conditions.push(`l.status = $${idx++}`);             params.push(status); }
     if (source)      { conditions.push(`l.source ILIKE $${idx++}`);         params.push(source); }
     if (assigned_to) { conditions.push(`l.assigned_to = $${idx++}`);        params.push(assigned_to); }
-    if (project_id)  { conditions.push(`l.project_id = $${idx++}`);         params.push(project_id); }
+    if (project_id)  { 
+      const resolvedProjectId = await resolveProjectId(project_id);
+      conditions.push(`l.project_id = $${idx++}`);         
+      params.push(resolvedProjectId); 
+    }
     if (from)        { conditions.push(`l.created_at::date >= $${idx++}`);  params.push(from); }
     if (to)          { conditions.push(`l.created_at::date <= $${idx++}`);  params.push(to); }
     if (search) {
@@ -210,6 +215,9 @@ const createLead = async (req, res, next) => {
             callback_time, next_followup_time,
             call_recordings } = req.body;
 
+    // Resolve project_id if provided (accepts UUID or name)
+    const resolvedProjectId = await resolveProjectId(project_id);
+
     if (!name || !phone) return next(new AppError("name and phone are required", 400));
 
     // Validate call_recordings if provided
@@ -239,7 +247,7 @@ const createLead = async (req, res, next) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'new',$13)
        RETURNING *`,
       [name.trim(), phone, alternate_phone_number || null, email || null, source || null,
-       project_id || null, assigned_to || null, budget || null, location_preference || null,
+       resolvedProjectId || null, assigned_to || null, budget || null, location_preference || null,
        configuration || null, callback_time || null, next_followup_time || null,
        req.user.id]
     );
@@ -435,6 +443,9 @@ const updateLead = async (req, res, next) => {
     const { name, phone, alternate_phone_number, email, source, project_id, budget, location_preference, configuration,
             callback_time, next_followup_time } = req.body;
 
+    // Resolve project_id if provided (accepts UUID or name)
+    const resolvedProjectId = project_id !== undefined ? await resolveProjectId(project_id) : undefined;
+
     const existing = await pool.query(
       "SELECT id, assigned_to, phone FROM leads WHERE id = $1 AND is_archived = false", [id]
     );
@@ -460,7 +471,7 @@ const updateLead = async (req, res, next) => {
     if (alternate_phone_number !== undefined) { updates.push(`alternate_phone_number = $${idx++}`); params.push(alternate_phone_number); }
     if (email !== undefined)          { updates.push(`email = $${idx++}`);               params.push(email); }
     if (source)                       { updates.push(`source = $${idx++}`);              params.push(source); }
-    if (project_id !== undefined)     { updates.push(`project_id = $${idx++}`);          params.push(project_id); }
+    if (resolvedProjectId !== undefined) { updates.push(`project_id = $${idx++}`);          params.push(resolvedProjectId); }
     if (budget)                       { updates.push(`budget = $${idx++}`);              params.push(budget); }
     if (location_preference)          { updates.push(`location_preference = $${idx++}`); params.push(location_preference); }
     if (configuration !== undefined)  { updates.push(`configuration = $${idx++}`);       params.push(configuration || null); }
@@ -809,6 +820,9 @@ const convertLead = async (req, res, next) => {
     const { id } = req.params;
     const { note, booking_amount, project_id: overrideProjectId } = req.body;
 
+    // Resolve project_id if provided (accepts UUID or name)
+    const resolvedProjectId = overrideProjectId !== undefined ? await resolveProjectId(overrideProjectId) : undefined;
+
     const leadRow = await pool.query(
       `SELECT
          l.id, l.status, l.assigned_to, l.is_converted,
@@ -836,11 +850,10 @@ const convertLead = async (req, res, next) => {
       return next(new AppError("Access denied", 403));
     }
 
-    const finalProjectId = overrideProjectId || lead.project_id || null;
-    const oldStatus      = lead.status;
+    const oldStatus = lead.status;
 
     await client.query("BEGIN");
-
+    
     await client.query(
       `UPDATE leads
        SET status       = 'booked',

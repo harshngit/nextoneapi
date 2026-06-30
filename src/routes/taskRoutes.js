@@ -452,7 +452,7 @@ router.get("/lead/:leadId", authenticate, taskController.getTasksByLead);
  *                 type: string
  *               project_id:
  *                 type: string
- *                 format: uuid
+ *                 description: Project UUID or project name
  *               assigned_to:
  *                 type: string
  *                 format: uuid

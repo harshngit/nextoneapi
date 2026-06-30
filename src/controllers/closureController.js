@@ -13,6 +13,7 @@ const AppError     = require('../utils/AppError');
 const emailService = require('../utils/emailService');
 const whatsappService = require('../utils/whatsappService');
 const { getTeamIds, ADMIN_ROLES, LEAF_ROLES } = require('../utils/teamUtils');
+const { resolveProjectId } = require('../utils/projectResolver');
 
 const VALID_STATUSES = ['confirmed', 'cancelled', 'on_hold'];
 
@@ -37,7 +38,11 @@ const getAllClosures = async (req, res, next) => {
     }
 
     if (status)          { conditions.push(`lc.status = $${idx++}`);            params.push(status); }
-    if (project_id)      { conditions.push(`lc.project_id = $${idx++}`);        params.push(project_id); }
+    if (project_id)      { 
+      const resolvedProjectId = await resolveProjectId(project_id);
+      conditions.push(`lc.project_id = $${idx++}`);  
+      params.push(resolvedProjectId); 
+    }
     if (closed_by)       { conditions.push(`lc.closed_by = $${idx++}`);         params.push(closed_by); }
     if (commission_paid) { conditions.push(`lc.commission_paid = $${idx++}`);   params.push(commission_paid === 'true'); }
     if (from)            { conditions.push(`lc.booking_date >= $${idx++}`);     params.push(from); }
@@ -82,6 +87,9 @@ const createClosure = async (req, res, next) => {
       closed_by_manager, closure_notes,
     } = req.body;
 
+    // Resolve project_id if provided (accepts UUID or name)
+    const resolvedProjectId = project_id !== undefined ? await resolveProjectId(project_id) : undefined;
+
     if (!lead_id || !booking_date) {
       return next(new AppError('lead_id and booking_date are required', 400));
     }
@@ -109,9 +117,9 @@ const createClosure = async (req, res, next) => {
       ));
     }
 
-    const lead       = leadRes.rows[0];
-    const closedBy   = req.user.id;
-    const projId     = project_id || lead.project_id;
+    const lead = leadRes.rows[0];
+    const closedBy = req.user.id;
+    const projId = resolvedProjectId !== undefined ? resolvedProjectId : lead.project_id;
 
     // Normalize closed_by_manager to array (accept single UUID or array)
     let managerIds = null;
@@ -322,6 +330,9 @@ const updateClosure = async (req, res, next) => {
       closed_by_manager, closure_notes,
     } = req.body;
 
+    // Resolve project_id if provided (accepts UUID or name)
+    const resolvedProjectId = project_id !== undefined ? await resolveProjectId(project_id) : undefined;
+
     const existing = await pool.query('SELECT * FROM lead_closures WHERE id = $1', [id]);
     if (!existing.rows.length) return next(new AppError('Closure not found', 404));
 
@@ -344,7 +355,7 @@ const updateClosure = async (req, res, next) => {
     }
 
     const fields = {
-      project_id, site_visit_id,
+      project_id: resolvedProjectId, site_visit_id,
       booking_date, unit_number, tower_block, floor_number, unit_type,
       carpet_area_sqft, super_area_sqft,
       agreed_price, booking_amount, payment_plan,
@@ -499,7 +510,11 @@ const getClosureSummary = async (req, res, next) => {
     }
     if (from)       { conditions.push(`lc.booking_date >= $${idx++}`); params.push(from); }
     if (to)         { conditions.push(`lc.booking_date <= $${idx++}`); params.push(to); }
-    if (project_id) { conditions.push(`lc.project_id = $${idx++}`);   params.push(project_id); }
+    if (project_id) { 
+      const resolvedProjectId = await resolveProjectId(project_id);
+      conditions.push(`lc.project_id = $${idx++}`);  
+      params.push(resolvedProjectId); 
+    }
 
     const where = `WHERE ${conditions.join(' AND ')}`;
 

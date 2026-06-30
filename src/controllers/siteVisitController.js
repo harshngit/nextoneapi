@@ -12,6 +12,7 @@ const AppError        = require('../utils/AppError');
 const emailService    = require('../utils/emailService');
 const { createNotification, notifyAdmins } = require('./notificationController');
 const { getTeamIds, ADMIN_ROLES, LEAF_ROLES } = require('../utils/teamUtils');
+const { resolveProjectId } = require('../utils/projectResolver');
 
 const VALID_STATUSES   = ['scheduled', 'done', 'cancelled', 'rescheduled', 'no_show'];
 const VALID_REACTIONS  = ['very_positive', 'positive', 'neutral', 'negative', 'not_interested'];
@@ -39,7 +40,11 @@ const getAllSiteVisits = async (req, res, next) => {
 
     if (status)      { conditions.push(`sv.status = $${idx++}`);      params.push(status); }
     if (lead_id)     { conditions.push(`sv.lead_id = $${idx++}`);     params.push(lead_id); }
-    if (project_id)  { conditions.push(`sv.project_id = $${idx++}`);  params.push(project_id); }
+    if (project_id)  { 
+      const resolvedProjectId = await resolveProjectId(project_id);
+      conditions.push(`sv.project_id = $${idx++}`);  
+      params.push(resolvedProjectId); 
+    }
     if (assigned_to) { conditions.push(`sv.assigned_to = $${idx++}`); params.push(assigned_to); }
     if (from)        { conditions.push(`sv.visit_date >= $${idx++}`); params.push(from); }
     if (to)          { conditions.push(`sv.visit_date <= $${idx++}`); params.push(to); }
@@ -82,6 +87,9 @@ const createSiteVisit = async (req, res, next) => {
     const { lead_id, project_id, visit_date, visit_time, assigned_to,
             notes, transport_arranged } = req.body;
 
+    // Resolve project_id (accepts UUID or name)
+    const resolvedProjectId = await resolveProjectId(project_id);
+
     if (!lead_id || !project_id || !visit_date || !visit_time) {
       return next(new AppError('lead_id, project_id, visit_date, and visit_time are required', 400));
     }
@@ -95,7 +103,7 @@ const createSiteVisit = async (req, res, next) => {
     );
     if (!leadRes.rows.length) return next(new AppError('Lead not found', 404));
 
-    const projectRes = await pool.query('SELECT name FROM projects WHERE id = $1', [project_id]);
+    const projectRes = await pool.query('SELECT name FROM projects WHERE id = $1', [resolvedProjectId]);
     if (!projectRes.rows.length) return next(new AppError('Project not found', 404));
 
     const lead = leadRes.rows[0];
@@ -107,15 +115,15 @@ const createSiteVisit = async (req, res, next) => {
       `INSERT INTO site_visits
          (lead_id, project_id, visit_date, visit_time, assigned_to,
           status, transport_arranged, notes, created_by)
-       VALUES ($1, $2, $3, $4, $5, 'scheduled', $6, $7, $8)
+       VALUES ($1,$2,$3,$4,$5,'scheduled',$6,$7,$8)
        RETURNING *`,
-      [lead_id, project_id, visit_date, visit_time, execId, transport_arranged || false, notes || null, req.user.id]
+      [lead_id, resolvedProjectId, visit_date, visit_time, execId, transport_arranged || false, notes || null, req.user.id]
     );
 
     // Update lead status
     await client.query(
       `UPDATE leads SET status = 'site_visit_scheduled', project_id = $1, updated_at = NOW() WHERE id = $2`,
-      [project_id, lead_id]
+      [resolvedProjectId, lead_id]
     );
 
     // Log activity
@@ -415,6 +423,9 @@ const createSiteVisitWithLead = async (req, res, next) => {
       assigned_to: visit_assigned_to, notes, transport_arranged,
     } = req.body;
 
+    // Resolve project_id (accepts UUID or name)
+    const resolvedProjectId = await resolveProjectId(project_id);
+
     if (!name || !phone) {
       return next(new AppError('name and phone are required for lead', 400));
     }
@@ -447,7 +458,7 @@ const createSiteVisitWithLead = async (req, res, next) => {
       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'site_visit_scheduled',$13) RETURNING *`,
       [
         name.trim(), phone, alternate_phone_number || null, email || null, source || null,
-        project_id || null, lead_assigned_to || null, budget || null,
+        resolvedProjectId || null, lead_assigned_to || null, budget || null,
         location_preference || null, configuration || null, callback_time || null,
         next_followup_time || null, req.user.id
       ]
@@ -468,7 +479,7 @@ const createSiteVisitWithLead = async (req, res, next) => {
         status, transport_arranged, notes, created_by
       ) VALUES ($1,$2,$3,$4,$5,'scheduled',$6,$7,$8) RETURNING *`,
       [
-        lead.id, project_id, visit_date, visit_time, execId,
+        lead.id, resolvedProjectId, visit_date, visit_time, execId,
         transport_arranged || false, notes || null, req.user.id
       ]
     );
@@ -477,7 +488,7 @@ const createSiteVisitWithLead = async (req, res, next) => {
     // Update lead's project_id
     await client.query(
       `UPDATE leads SET project_id = $1, updated_at = NOW() WHERE id = $2`,
-      [project_id, lead.id]
+      [resolvedProjectId, lead.id]
     );
 
     await client.query('COMMIT');

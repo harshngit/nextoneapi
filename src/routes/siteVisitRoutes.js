@@ -30,7 +30,8 @@ const MANAGER = ['super_admin', 'admin', 'sales_manager'];
  *         schema: { type: string, format: uuid }
  *       - in: query
  *         name: project_id
- *         schema: { type: string, format: uuid }
+ *         schema: { type: string }
+ *         description: Project UUID or project name
  *       - in: query
  *         name: assigned_to
  *         schema: { type: string, format: uuid }
@@ -73,7 +74,7 @@ router.get('/', authenticate, ctrl.getAllSiteVisits);
  *                 format: uuid
  *               project_id:
  *                 type: string
- *                 format: uuid
+ *                 description: Project UUID or project name
  *               visit_date:
  *                 type: string
  *                 format: date
@@ -165,7 +166,7 @@ router.get('/:id', authenticate, ctrl.getSiteVisitById);
  *                 format: uuid
  *               project_id:
  *                 type: string
- *                 format: uuid
+ *                 description: Project UUID or project name
  *               visit_date:
  *                 type: string
  *                 format: date
@@ -333,7 +334,7 @@ router.post('/:id/feedback', authenticate, ctrl.submitSiteVisitFeedback);
  *                 type: string
  *               project_id:
  *                 type: string
- *                 format: uuid
+ *                 description: Project UUID or project name
  *               assigned_to:
  *                 type: string
  *                 format: uuid

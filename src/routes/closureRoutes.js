@@ -35,7 +35,8 @@ const MANAGER = ['super_admin', 'admin', 'sales_manager'];
  *         example: "2026-05-31"
  *       - in: query
  *         name: project_id
- *         schema: { type: string, format: uuid }
+ *         schema: { type: string }
+ *         description: Project UUID or project name
  *     responses:
  *       200:
  *         description: Summary stats
@@ -98,7 +99,8 @@ router.get('/lead/:leadId', authenticate, ctrl.getClosureByLead);
  *         schema: { type: string, enum: [confirmed, cancelled, on_hold] }
  *       - in: query
  *         name: project_id
- *         schema: { type: string, format: uuid }
+ *         schema: { type: string }
+ *         description: Project UUID or project name
  *       - in: query
  *         name: closed_by
  *         schema: { type: string, format: uuid }
@@ -172,8 +174,7 @@ router.get('/', authenticate, ctrl.getAllClosures);
  *                 description: The lead being booked (required)
  *               project_id:
  *                 type: string
- *                 format: uuid
- *                 description: Override project. Defaults to lead's assigned project
+ *                 description: Override project. Defaults to lead's assigned project (accepts project UUID or name)
  *               booking_date:
  *                 type: string
  *                 format: date
@@ -450,8 +451,7 @@ router.get('/:id', authenticate, ctrl.getClosureById);
  *             properties:
  *               project_id:
  *                 type: string
- *                 format: uuid
- *                 description: Override the project linked to this closure
+ *                 description: Override the project linked to this closure (accepts project UUID or name)
  *               site_visit_id:
  *                 type: string
  *                 format: uuid

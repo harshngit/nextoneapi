@@ -14,6 +14,7 @@ const emailService    = require('../utils/emailService');
 const whatsappService = require('../utils/whatsappService');
 const { createNotification, notifyAdmins } = require('./notificationController');
 const { getTeamIds, ADMIN_ROLES, LEAF_ROLES } = require('../utils/teamUtils');
+const { resolveProjectId } = require('../utils/projectResolver');
 
 const VALID_STATUSES   = ['scheduled', 'done', 'cancelled', 'rescheduled', 'no_show'];
 const VALID_REACTIONS  = ['very_positive', 'positive', 'neutral', 'negative', 'not_interested'];
@@ -41,7 +42,11 @@ const getAllRevisits = async (req, res, next) => {
 
     if (status)            { conditions.push(`sr.status = $${idx++}`);           params.push(status); }
     if (lead_id)           { conditions.push(`sr.lead_id = $${idx++}`);          params.push(lead_id); }
-    if (project_id)        { conditions.push(`sr.project_id = $${idx++}`);       params.push(project_id); }
+    if (project_id)        { 
+      const resolvedProjectId = await resolveProjectId(project_id);
+      conditions.push(`sr.project_id = $${idx++}`);  
+      params.push(resolvedProjectId); 
+    }
     if (assigned_to)       { conditions.push(`sr.assigned_to = $${idx++}`);      params.push(assigned_to); }
     if (original_visit_id) { conditions.push(`sr.original_visit_id = $${idx++}`); params.push(original_visit_id); }
     if (from)              { conditions.push(`sr.visit_date >= $${idx++}`);      params.push(from); }

@@ -49,8 +49,7 @@ const { authenticate, authorize } = require("../middleware/auth");
  *         name: project_id
  *         schema:
  *           type: string
- *           format: uuid
- *         description: Filter leads mapped to a specific project
+ *         description: Filter leads mapped to a specific project (accepts project UUID or name)
  *       - in: query
  *         name: from
  *         schema:
@@ -203,7 +202,7 @@ router.post(
  *                 example: "Facebook"
  *               project_id:
  *                 type: string
- *                 format: uuid
+ *                 description: Project UUID or project name
  *               assigned_to:
  *                 type: string
  *                 format: uuid
@@ -389,7 +388,7 @@ router.get("/:id", authenticate, leadController.getLeadById);
  *                 example: "Facebook"
  *               project_id:
  *                 type: string
- *                 format: uuid
+ *                 description: Project UUID or project name
  *               assigned_to:
  *                 type: string
  *                 format: uuid
@@ -739,7 +738,7 @@ router.post("/:id/activity", authenticate, leadController.addLeadActivity);
  *                 example: "95L"
  *               project_id:
  *                 type: string
- *                 format: uuid
+ *                 description: Project UUID or project name
  *               note:
  *                 type: string
  *                 example: "Booked 2BHK in Tower A"
@@ -784,8 +783,7 @@ router.patch("/:id/convert", authenticate, authorize("super_admin", "admin", "sa
  *             properties:
  *               project_id:
  *                 type: string
- *                 format: uuid
- *                 description: Override project to share details for (defaults to lead's assigned project)
+ *                 description: Override project to share details for (defaults to lead's assigned project) (accepts project UUID or name)
  *           example:
  *             project_id: "proj-uuid-001"
  *     responses:
@@ -838,7 +836,7 @@ router.post("/:id/send-whatsapp", authenticate, leadController.sendLeadWhatsapp)
  *             properties:
  *               project_id:
  *                 type: string
- *                 format: uuid
+ *                 description: Project UUID or project name
  *               message:
  *                 type: string
  *     responses:
@@ -1107,8 +1105,7 @@ router.delete("/:id/call-recordings/:rid", authenticate, leadController.deleteCa
  *             properties:
  *               project_id:
  *                 type: string
- *                 format: uuid
- *                 description: Override project to share details for (defaults to lead's assigned project)
+ *                 description: Override project to share details for (defaults to lead's assigned project) (accepts project UUID or name)
  *               message:
  *                 type: string
  *                 description: Custom intro message in the email body
