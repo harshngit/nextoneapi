@@ -446,7 +446,119 @@ const getTasksByLead = async (req, res, next) => {
   }
 };
 
+// ─── POST /api/v1/tasks/create-with-lead ───────────────────────────────────────
+const createTaskWithLead = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    // Extract lead data and task data from request body
+    const {
+      // Lead fields
+      name, phone, alternate_phone_number, email, source, project_id,
+      assigned_to: lead_assigned_to, budget, location_preference, configuration,
+      lead_notes, callback_time, next_followup_time,
+      // Task fields
+      title, due_date, priority, notes,
+    } = req.body;
+
+    if (!name || !phone) {
+      return next(new AppError('name and phone are required for lead', 400));
+    }
+    if (!title || !due_date) {
+      return next(new AppError('title and due_date are required for task', 400));
+    }
+
+    await client.query('BEGIN');
+
+    // First check how many leads already use this phone
+    const phoneUsage = await client.query(
+      "SELECT COUNT(*) FROM leads WHERE phone = $1 AND is_archived = false",
+      [phone]
+    );
+    const MAX_LEADS_PER_PHONE = 3;
+    if (parseInt(phoneUsage.rows[0].count, 10) >= MAX_LEADS_PER_PHONE) {
+      await client.query('ROLLBACK');
+      return next(new AppError(
+        `This phone number has already been used for ${MAX_LEADS_PER_PHONE} leads.`,
+        400
+      ));
+    }
+
+    // Create the lead first
+    const leadResult = await client.query(
+      `INSERT INTO leads (
+        name, phone, alternate_phone_number, email, source,
+        project_id, assigned_to, budget, location_preference, configuration,
+        callback_time, next_followup_time, status, created_by
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'follow_up',$13) RETURNING *`,
+      [
+        name.trim(), phone, alternate_phone_number || null, email || null, source || null,
+        project_id || null, lead_assigned_to || null, budget || null,
+        location_preference || null, configuration || null, callback_time || null,
+        next_followup_time || null, req.user.id
+      ]
+    );
+    const lead = leadResult.rows[0];
+
+    // Log lead creation activity
+    await client.query(
+      `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1,'note',$2,$3)`,
+      [lead.id, lead_notes || 'Lead created with follow-up task', req.user.id]
+    );
+
+    // Now create the task
+    const execId = lead_assigned_to || lead.assigned_to || req.user.id;
+    const taskResult = await client.query(
+      `INSERT INTO tasks (
+        title, lead_id, due_date, assigned_to, priority, notes, created_by
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [title.trim(), lead.id, due_date, execId, priority || 'medium', notes || null, req.user.id]
+    );
+    const task = taskResult.rows[0];
+
+    await client.query('COMMIT');
+
+    // Send notifications (similar to createTask and createLead)
+    setImmediate(async () => {
+      try {
+        // Notify assigned user
+        if (execId) {
+          const { createNotification, notifyAdmins } = require('./notificationController');
+          await createNotification(execId, {
+            type: 'follow_up_created',
+            title: 'New Lead + Follow-Up Task Assigned',
+            message: `New lead "${name}" with follow-up task: "${title}"`,
+            reference_id: task.id,
+            reference_type: 'task',
+            metadata: { lead_id: lead.id, task_id: task.id },
+          });
+        }
+        await notifyAdmins({
+          type: 'follow_up_created',
+          title: 'New Lead + Follow-Up Created',
+          message: `New lead "${name}" with follow-up task: "${title}"`,
+          reference_id: lead.id,
+          reference_type: 'lead',
+          metadata: { lead_id: lead.id, task_id: task.id },
+        });
+      } catch (notifErr) {
+        console.error('[Notification] createTaskWithLead failed:', notifErr.message);
+      }
+    });
+
+    return sendSuccess(res, 'Lead and follow-up task created successfully', {
+      lead,
+      task,
+    }, 201);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   getAllTasks, createTask, getTodayTasks, getTaskById,
   updateTask, deleteTask, completeTask, getTasksByLead,
+  createTaskWithLead,
 };

@@ -400,7 +400,148 @@ const submitSiteVisitFeedback = async (req, res, next) => {
   } finally { client.release(); }
 };
 
+// ─── POST /api/v1/site-visits/create-with-lead ────────────────────────────────
+const createSiteVisitWithLead = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    // Extract lead data and site visit data from request body
+    const {
+      // Lead fields
+      name, phone, alternate_phone_number, email, source,
+      assigned_to: lead_assigned_to, budget, location_preference, configuration,
+      lead_notes, callback_time, next_followup_time,
+      // Site visit fields
+      project_id, visit_date, visit_time,
+      assigned_to: visit_assigned_to, notes, transport_arranged,
+    } = req.body;
+
+    if (!name || !phone) {
+      return next(new AppError('name and phone are required for lead', 400));
+    }
+    if (!project_id || !visit_date || !visit_time) {
+      return next(new AppError('project_id, visit_date, and visit_time are required for site visit', 400));
+    }
+
+    await client.query('BEGIN');
+
+    // First check how many leads already use this phone
+    const phoneUsage = await client.query(
+      "SELECT COUNT(*) FROM leads WHERE phone = $1 AND is_archived = false",
+      [phone]
+    );
+    const MAX_LEADS_PER_PHONE = 3;
+    if (parseInt(phoneUsage.rows[0].count, 10) >= MAX_LEADS_PER_PHONE) {
+      await client.query('ROLLBACK');
+      return next(new AppError(
+        `This phone number has already been used for ${MAX_LEADS_PER_PHONE} leads.`,
+        400
+      ));
+    }
+
+    // Create the lead first
+    const leadResult = await client.query(
+      `INSERT INTO leads (
+        name, phone, alternate_phone_number, email, source,
+        project_id, assigned_to, budget, location_preference, configuration,
+        callback_time, next_followup_time, status, created_by
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'site_visit_scheduled',$13) RETURNING *`,
+      [
+        name.trim(), phone, alternate_phone_number || null, email || null, source || null,
+        project_id || null, lead_assigned_to || null, budget || null,
+        location_preference || null, configuration || null, callback_time || null,
+        next_followup_time || null, req.user.id
+      ]
+    );
+    const lead = leadResult.rows[0];
+
+    // Log lead creation activity
+    await client.query(
+      `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1,'note',$2,$3)`,
+      [lead.id, lead_notes || 'Lead created with site visit', req.user.id]
+    );
+
+    // Now create the site visit
+    const execId = visit_assigned_to || lead_assigned_to || lead.assigned_to || req.user.id;
+    const siteVisitResult = await client.query(
+      `INSERT INTO site_visits (
+        lead_id, project_id, visit_date, visit_time, assigned_to,
+        status, transport_arranged, notes, created_by
+      ) VALUES ($1,$2,$3,$4,$5,'scheduled',$6,$7,$8) RETURNING *`,
+      [
+        lead.id, project_id, visit_date, visit_time, execId,
+        transport_arranged || false, notes || null, req.user.id
+      ]
+    );
+    const siteVisit = siteVisitResult.rows[0];
+
+    // Update lead's project_id
+    await client.query(
+      `UPDATE leads SET project_id = $1, updated_at = NOW() WHERE id = $2`,
+      [project_id, lead.id]
+    );
+
+    await client.query('COMMIT');
+
+    // Send notifications (similar to createSiteVisit and createLead)
+    setImmediate(async () => {
+      try {
+        const { createNotification, notifyAdmins } = require('./notificationController');
+        // Get project name
+        const projectRes = await pool.query('SELECT name FROM projects WHERE id = $1', [project_id]);
+        const projectName = projectRes.rows[0]?.name || 'project';
+
+        if (execId) {
+          await createNotification(execId, {
+            type: 'visit_scheduled',
+            title: 'New Lead + Site Visit Scheduled',
+            message: `New lead "${name}" with site visit on ${visit_date} at ${visit_time}`,
+            reference_id: siteVisit.id,
+            reference_type: 'site_visit',
+            metadata: { lead_id: lead.id, site_visit_id: siteVisit.id },
+          });
+
+          const mgrRow = await pool.query(
+            `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [execId]
+          );
+          if (mgrRow.rows.length) {
+            await createNotification(mgrRow.rows[0].manager_id, {
+              type: 'visit_scheduled',
+              title: 'New Lead + Site Visit Scheduled for Your Team',
+              message: `New lead "${name}" with site visit on ${visit_date}`,
+              reference_id: siteVisit.id,
+              reference_type: 'site_visit',
+              metadata: { lead_id: lead.id, project: projectName },
+            });
+          }
+        }
+
+        await notifyAdmins({
+          type: 'visit_scheduled',
+          title: 'New Lead + Site Visit Scheduled',
+          message: `New lead "${name}" with site visit on ${visit_date} at ${visit_time}`,
+          reference_id: siteVisit.id,
+          reference_type: 'site_visit',
+          metadata: { lead_id: lead.id, site_visit_id: siteVisit.id },
+        });
+      } catch (notifErr) {
+        console.error('[Notification] createSiteVisitWithLead failed:', notifErr.message);
+      }
+    });
+
+    return sendSuccess(res, 'Lead and site visit created successfully', {
+      lead,
+      siteVisit,
+    }, 201);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   getAllSiteVisits, createSiteVisit, getSiteVisitById, updateSiteVisit,
-  updateSiteVisitStatus, deleteSiteVisit, submitSiteVisitFeedback
+  updateSiteVisitStatus, deleteSiteVisit, submitSiteVisitFeedback,
+  createSiteVisitWithLead,
 };

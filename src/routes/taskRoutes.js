@@ -415,4 +415,80 @@ router.patch("/:id/complete", authenticate, taskController.completeTask);
  */
 router.get("/lead/:leadId", authenticate, taskController.getTasksByLead);
 
+/**
+ * @swagger
+ * /api/v1/tasks/create-with-lead:
+ *   post:
+ *     summary: Create a new lead along with a follow-up task
+ *     description: Creates a new lead with status "follow_up" and a linked follow-up task in a single request
+ *     tags: [Follow-Up & Task Management]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - phone
+ *               - title
+ *               - due_date
+ *             properties:
+ *               # Lead fields
+ *               name:
+ *                 type: string
+ *                 description: Lead name
+ *               phone:
+ *                 type: string
+ *                 description: Lead phone number
+ *               alternate_phone_number:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *                 format: email
+ *               source:
+ *                 type: string
+ *               project_id:
+ *                 type: string
+ *                 format: uuid
+ *               assigned_to:
+ *                 type: string
+ *                 format: uuid
+ *                 description: User to assign both lead and task to
+ *               budget:
+ *                 type: string
+ *               location_preference:
+ *                 type: string
+ *               configuration:
+ *                 type: string
+ *               lead_notes:
+ *                 type: string
+ *                 description: Notes for lead activity
+ *               callback_time:
+ *                 type: string
+ *                 format: date-time
+ *               next_followup_time:
+ *                 type: string
+ *                 format: date-time
+ *               # Task fields
+ *               title:
+ *                 type: string
+ *                 description: Task title
+ *               due_date:
+ *                 type: string
+ *                 format: date-time
+ *               priority:
+ *                 type: string
+ *                 enum: [low, medium, high]
+ *               notes:
+ *                 type: string
+ *                 description: Task notes
+ *     responses:
+ *       201:
+ *         description: Lead and task created successfully
+ */
+router.post("/create-with-lead", authenticate, taskController.createTaskWithLead);
+
 module.exports = router;

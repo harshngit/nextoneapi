@@ -295,4 +295,78 @@ router.delete('/:id', authenticate, authorize(...ADMIN), ctrl.deleteSiteVisit);
  */
 router.post('/:id/feedback', authenticate, ctrl.submitSiteVisitFeedback);
 
+/**
+ * @swagger
+ * /api/v1/site-visits/create-with-lead:
+ *   post:
+ *     summary: Create a new lead along with a site visit
+ *     description: Creates a new lead with status "site_visit_scheduled" and a linked site visit in a single request
+ *     tags: [Site Visits]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - phone
+ *               - project_id
+ *               - visit_date
+ *               - visit_time
+ *             properties:
+ *               # Lead fields
+ *               name:
+ *                 type: string
+ *                 description: Lead name
+ *               phone:
+ *                 type: string
+ *                 description: Lead phone number
+ *               alternate_phone_number:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *                 format: email
+ *               source:
+ *                 type: string
+ *               project_id:
+ *                 type: string
+ *                 format: uuid
+ *               assigned_to:
+ *                 type: string
+ *                 format: uuid
+ *                 description: User to assign both lead and site visit to
+ *               budget:
+ *                 type: string
+ *               location_preference:
+ *                 type: string
+ *               configuration:
+ *                 type: string
+ *               lead_notes:
+ *                 type: string
+ *                 description: Notes for lead activity
+ *               callback_time:
+ *                 type: string
+ *                 format: date-time
+ *               next_followup_time:
+ *                 type: string
+ *                 format: date-time
+ *               # Site visit fields
+ *               visit_date:
+ *                 type: string
+ *                 format: date
+ *               visit_time:
+ *                 type: string
+ *               notes:
+ *                 type: string
+ *               transport_arranged:
+ *                 type: boolean
+ *     responses:
+ *       201:
+ *         description: Lead and site visit created successfully
+ */
+router.post('/create-with-lead', authenticate, ctrl.createSiteVisitWithLead);
+
 module.exports = router;
