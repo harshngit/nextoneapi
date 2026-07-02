@@ -8,9 +8,11 @@ let io;
 // Production custom domain + local dev — no env vars needed
 const ALLOWED_ORIGINS = [
   "https://api.nextonerealty.in",
-  "https://nextonecrm.asynk.in",  // production custom domain
-  "http://localhost:5173",         // Vite local dev
-  "http://localhost:3000",         // fallback local dev
+  "https://dashboard.nextonerealty.in", // production dashboard
+  "https://nextonecrm.asynk.in",        // production custom domain
+  "http://localhost:5173",               // Vite local dev
+  "http://localhost:3000",               // fallback local dev
+  "http://localhost:5000",               // fallback local dev
 ];
 
 const initSocket = (httpServer) => {
