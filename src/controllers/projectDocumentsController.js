@@ -16,6 +16,13 @@ const { promisify } = require('util');
 const fs = require('fs');
 const path = require('path');
 
+const BACKEND_URL = (process.env.BACKEND_URL || '').replace(/\/+$/, '');
+const toFullUrl = (relativePath) => {
+  if (!relativePath) return relativePath;
+  if (/^https?:\/\//i.test(relativePath)) return relativePath;
+  return `${BACKEND_URL}${relativePath.startsWith('/') ? '' : '/'}${relativePath}`;
+};
+
 /**
  * POST /api/v1/projects/:id/documents
  * Upload unit plans and creatives for a project
@@ -63,7 +70,7 @@ const uploadProjectDocuments = async (req, res, next) => {
         );
         uploadedDocs.push({
           ...result.rows[0],
-          url: `/api/v1/projects/${projectId}/documents/${result.rows[0].id}/download`,
+          url: toFullUrl(`/api/v1/projects/${projectId}/documents/${result.rows[0].id}/download`),
         });
       }
     }
@@ -88,7 +95,7 @@ const uploadProjectDocuments = async (req, res, next) => {
         );
         uploadedDocs.push({
           ...result.rows[0],
-          url: `/api/v1/projects/${projectId}/documents/${result.rows[0].id}/download`,
+          url: toFullUrl(`/api/v1/projects/${projectId}/documents/${result.rows[0].id}/download`),
         });
       }
     }
@@ -113,7 +120,7 @@ const uploadProjectDocuments = async (req, res, next) => {
         );
         uploadedDocs.push({
           ...result.rows[0],
-          url: `/api/v1/projects/${projectId}/documents/${result.rows[0].id}/download`,
+          url: toFullUrl(`/api/v1/projects/${projectId}/documents/${result.rows[0].id}/download`),
         });
       }
     }
@@ -138,7 +145,7 @@ const uploadProjectDocuments = async (req, res, next) => {
         );
         uploadedDocs.push({
           ...result.rows[0],
-          url: `/api/v1/projects/${projectId}/documents/${result.rows[0].id}/download`,
+          url: toFullUrl(`/api/v1/projects/${projectId}/documents/${result.rows[0].id}/download`),
         });
       }
     }
@@ -227,7 +234,7 @@ const getProjectDocuments = async (req, res, next) => {
 
     const documents = result.rows.map((doc) => ({
       ...doc,
-      download_url: `/api/v1/projects/${projectId}/documents/${doc.id}/download`,
+      download_url: toFullUrl(`/api/v1/projects/${projectId}/documents/${doc.id}/download`),
       file_size_mb: (doc.file_size / (1024 * 1024)).toFixed(2),
     }));
 
@@ -510,7 +517,7 @@ const uploadStandaloneUnitPlan = async (req, res, next) => {
       file_path: file.path.replace(/\\/g, '/'),
       file_size: file.size,
       mime_type: file.mimetype,
-      url: `/uploads/projects/temp/unit_plans/${file.filename}`,
+      url: toFullUrl(`/uploads/projects/temp/unit_plans/${file.filename}`),
       document_type: 'unit_plan'
     };
 
@@ -536,7 +543,7 @@ const uploadStandaloneCreative = async (req, res, next) => {
       file_path: file.path.replace(/\\/g, '/'),
       file_size: file.size,
       mime_type: file.mimetype,
-      url: `/uploads/projects/temp/creatives/${file.filename}`,
+      url: toFullUrl(`/uploads/projects/temp/creatives/${file.filename}`),
       document_type: 'creative'
     };
 
@@ -562,7 +569,7 @@ const uploadStandalonePaymentPlan = async (req, res, next) => {
       file_path: file.path.replace(/\\/g, '/'),
       file_size: file.size,
       mime_type: file.mimetype,
-      url: `/uploads/projects/temp/payment_plans/${file.filename}`,
+      url: toFullUrl(`/uploads/projects/temp/payment_plans/${file.filename}`),
       document_type: 'payment_plan'
     };
 
@@ -588,7 +595,7 @@ const uploadStandaloneVideo = async (req, res, next) => {
       file_path: file.path.replace(/\\/g, '/'),
       file_size: file.size,
       mime_type: file.mimetype,
-      url: `/uploads/projects/temp/videos/${file.filename}`,
+      url: toFullUrl(`/uploads/projects/temp/videos/${file.filename}`),
       document_type: 'video'
     };
 

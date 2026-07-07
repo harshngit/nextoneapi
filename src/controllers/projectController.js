@@ -6,6 +6,13 @@ const path     = require("path");
 
 const VALID_STATUSES = ["active", "inactive", "upcoming", "completed"];
 
+const BACKEND_URL = (process.env.BACKEND_URL || "").replace(/\/+$/, "");
+const toFullUrl = (relativePath) => {
+  if (!relativePath) return relativePath;
+  if (/^https?:\/\//i.test(relativePath)) return relativePath;
+  return `${BACKEND_URL}${relativePath.startsWith("/") ? "" : "/"}${relativePath}`;
+};
+
 /**
  * GET /api/v1/projects
  */
@@ -46,19 +53,19 @@ const getAllProjects = async (req, res, next) => {
       if (row.documents) {
         row.unit_plans = row.documents.filter(d => d.document_type === 'unit_plan').map(d => ({
           ...d,
-          url: `/api/v1/projects/${row.id}/documents/${d.id}/download`
+          url: toFullUrl(`/api/v1/projects/${row.id}/documents/${d.id}/download`)
         }));
         row.creatives = row.documents.filter(d => d.document_type === 'creative').map(d => ({
           ...d,
-          url: `/api/v1/projects/${row.id}/documents/${d.id}/download`
+          url: toFullUrl(`/api/v1/projects/${row.id}/documents/${d.id}/download`)
         }));
         row.payment_plans = row.documents.filter(d => d.document_type === 'payment_plan').map(d => ({
           ...d,
-          url: `/api/v1/projects/${row.id}/documents/${d.id}/download`
+          url: toFullUrl(`/api/v1/projects/${row.id}/documents/${d.id}/download`)
         }));
         row.videos = row.documents.filter(d => d.document_type === 'video').map(d => ({
           ...d,
-          url: `/api/v1/projects/${row.id}/documents/${d.id}/download`
+          url: toFullUrl(`/api/v1/projects/${row.id}/documents/${d.id}/download`)
         }));
         delete row.documents;
       } else {
@@ -67,6 +74,9 @@ const getAllProjects = async (req, res, next) => {
         row.payment_plans = [];
         row.videos = [];
       }
+      row.brochure_url = toFullUrl(row.brochure_url);
+      row.video_url = toFullUrl(row.video_url);
+      row.payment_plan = toFullUrl(row.payment_plan);
       return row;
     });
 
@@ -86,9 +96,11 @@ const createProject = async (req, res, next) => {
       name, developer, city, locality, address, configurations,
         price_range, total_units, possession_date, rera_number,
         amenities, status = "active", brochure_url, description,
-        video_url, payment_plan, home_loan_info,
+        video_url, payment_plan, payment_plan_url, home_loan_info,
         unit_plans, creatives, payment_plans, videos, // Arrays of document objects from JSON body
     } = req.body;
+
+    const resolvedPaymentPlan = payment_plan !== undefined ? payment_plan : payment_plan_url;
 
     if (!name || !city) return next(new AppError("name and city are required", 400));
 
@@ -107,7 +119,7 @@ const createProject = async (req, res, next) => {
         JSON.stringify(configurations || []), price_range || null, total_units || null,
         possession_date || null, rera_number || null, JSON.stringify(amenities || []),
         status, brochure_url || null, description || null,
-        video_url || null, payment_plan || null, home_loan_info || null,
+        video_url || null, resolvedPaymentPlan || null, home_loan_info || null,
         req.user.id,
       ]
     );
@@ -136,7 +148,7 @@ const createProject = async (req, res, next) => {
         );
         savedDocs.push({
           ...docResult.rows[0],
-          url: `/api/v1/projects/${project.id}/documents/${docResult.rows[0].id}/download`,
+          url: toFullUrl(`/api/v1/projects/${project.id}/documents/${docResult.rows[0].id}/download`),
         });
       }
     };
@@ -155,6 +167,10 @@ const createProject = async (req, res, next) => {
     }
 
     await client.query("COMMIT");
+
+    project.brochure_url = toFullUrl(project.brochure_url);
+    project.video_url = toFullUrl(project.video_url);
+    project.payment_plan = toFullUrl(project.payment_plan);
 
     return sendSuccess(res, "Project created successfully", {
       ...project,
@@ -197,19 +213,19 @@ const getProjectById = async (req, res, next) => {
     if (project.documents) {
       project.unit_plans = project.documents.filter(d => d.document_type === 'unit_plan').map(d => ({
         ...d,
-        url: `/api/v1/projects/${project.id}/documents/${d.id}/download`
+        url: toFullUrl(`/api/v1/projects/${project.id}/documents/${d.id}/download`)
       }));
       project.creatives = project.documents.filter(d => d.document_type === 'creative').map(d => ({
         ...d,
-        url: `/api/v1/projects/${project.id}/documents/${d.id}/download`
+        url: toFullUrl(`/api/v1/projects/${project.id}/documents/${d.id}/download`)
       }));
       project.payment_plans = project.documents.filter(d => d.document_type === 'payment_plan').map(d => ({
         ...d,
-        url: `/api/v1/projects/${project.id}/documents/${d.id}/download`
+        url: toFullUrl(`/api/v1/projects/${project.id}/documents/${d.id}/download`)
       }));
       project.videos = project.documents.filter(d => d.document_type === 'video').map(d => ({
         ...d,
-        url: `/api/v1/projects/${project.id}/documents/${d.id}/download`
+        url: toFullUrl(`/api/v1/projects/${project.id}/documents/${d.id}/download`)
       }));
       delete project.documents;
     } else {
@@ -218,6 +234,9 @@ const getProjectById = async (req, res, next) => {
       project.payment_plans = [];
       project.videos = [];
     }
+    project.brochure_url = toFullUrl(project.brochure_url);
+    project.video_url = toFullUrl(project.video_url);
+    project.payment_plan = toFullUrl(project.payment_plan);
 
     return sendSuccess(res, "Project fetched successfully", project);
   } catch (err) {
@@ -229,10 +248,13 @@ const getProjectById = async (req, res, next) => {
  * PUT /api/v1/projects/:id
  */
 const updateProject = async (req, res, next) => {
+  const client = await pool.connect();
   try {
     const { id } = req.params;
-    const existing = await pool.query("SELECT id FROM projects WHERE id = $1", [id]);
+    const existing = await client.query("SELECT id FROM projects WHERE id = $1", [id]);
     if (existing.rows.length === 0) return next(new AppError("Project not found", 404));
+
+    const { unit_plans, creatives, payment_plans, videos, payment_plan_url } = req.body;
 
     const fields = ["name", "developer", "city", "locality", "address", "price_range",
                     "total_units", "possession_date", "rera_number", "brochure_url", "description",
@@ -247,6 +269,11 @@ const updateProject = async (req, res, next) => {
         params.push(req.body[field]);
       }
     }
+    // `payment_plan_url` is accepted as an alias for the `payment_plan` column
+    if (req.body.payment_plan === undefined && payment_plan_url !== undefined) {
+      updates.push(`payment_plan = $${idx++}`);
+      params.push(payment_plan_url);
+    }
     for (const field of jsonFields) {
       if (req.body[field] !== undefined) {
         updates.push(`${field} = $${idx++}`);
@@ -254,17 +281,72 @@ const updateProject = async (req, res, next) => {
       }
     }
 
-    if (updates.length === 0) return next(new AppError("No fields to update", 400));
-    updates.push(`updated_at = NOW()`);
-    params.push(id);
+    await client.query("BEGIN");
 
-    const result = await pool.query(
-      `UPDATE projects SET ${updates.join(", ")} WHERE id = $${idx} RETURNING *`,
-      params
-    );
-    return sendSuccess(res, "Project updated successfully", result.rows[0]);
+    let project;
+    if (updates.length > 0) {
+      updates.push(`updated_at = NOW()`);
+      params.push(id);
+      const result = await client.query(
+        `UPDATE projects SET ${updates.join(", ")} WHERE id = $${idx} RETURNING *`,
+        params
+      );
+      project = result.rows[0];
+    } else {
+      const result = await client.query("SELECT * FROM projects WHERE id = $1", [id]);
+      project = result.rows[0];
+    }
+
+    // ── Insert new documents (unit plans/creatives/payment plans/videos) from JSON body ──
+    const savedDocs = [];
+    const processDocuments = async (docs, docType) => {
+      for (const doc of (docs || [])) {
+        const docResult = await client.query(
+          `INSERT INTO project_documents
+             (project_id, document_type, file_name, file_path, file_size, mime_type, uploaded_by)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)
+           RETURNING *`,
+          [id, docType, doc.file_name, doc.file_path, doc.file_size || 0,
+           doc.mime_type || 'application/octet-stream', req.user.id]
+        );
+        savedDocs.push({
+          ...docResult.rows[0],
+          url: toFullUrl(`/api/v1/projects/${id}/documents/${docResult.rows[0].id}/download`),
+        });
+      }
+    };
+
+    if (unit_plans && Array.isArray(unit_plans)) await processDocuments(unit_plans, "unit_plan");
+    if (creatives && Array.isArray(creatives)) await processDocuments(creatives, "creative");
+    if (payment_plans && Array.isArray(payment_plans)) await processDocuments(payment_plans, "payment_plan");
+    if (videos && Array.isArray(videos)) await processDocuments(videos, "video");
+
+    if (updates.length === 0 && savedDocs.length === 0) {
+      await client.query("ROLLBACK");
+      return next(new AppError("No fields to update", 400));
+    }
+
+    await client.query("COMMIT");
+
+    project.brochure_url = toFullUrl(project.brochure_url);
+    project.video_url = toFullUrl(project.video_url);
+    project.payment_plan = toFullUrl(project.payment_plan);
+
+    return sendSuccess(res, "Project updated successfully", {
+      ...project,
+      documents: savedDocs.length > 0 ? {
+        count: savedDocs.length,
+        unit_plans: savedDocs.filter(d => d.document_type === "unit_plan"),
+        creatives: savedDocs.filter(d => d.document_type === "creative"),
+        payment_plans: savedDocs.filter(d => d.document_type === "payment_plan"),
+        videos: savedDocs.filter(d => d.document_type === "video"),
+      } : null,
+    });
   } catch (err) {
+    await client.query("ROLLBACK");
     next(err);
+  } finally {
+    client.release();
   }
 };
 
