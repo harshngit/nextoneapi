@@ -59,8 +59,9 @@ const getAllClosures = async (req, res, next) => {
     const dataRes = await pool.query(
       `SELECT lc.*,
               l.name  AS lead_name,  l.phone AS lead_phone,  l.email AS lead_email,
-              p.name  AS project_name, p.city AS project_city,
-              CONCAT(cb.first_name,' ',cb.last_name) AS closed_by_name
+              COALESCE(p.name, lc.project_name_text) AS project_name, p.city AS project_city,
+              CONCAT(cb.first_name,' ',cb.last_name) AS closed_by_name,
+              (SELECT COUNT(*) FROM closure_documents cd WHERE cd.closure_id = lc.id) AS documents_count
        FROM lead_closures lc
        LEFT JOIN leads    l  ON l.id  = lc.lead_id
        LEFT JOIN projects p  ON p.id  = lc.project_id
@@ -70,6 +71,8 @@ const getAllClosures = async (req, res, next) => {
        LIMIT $${idx++} OFFSET $${idx++}`,
       [...params, parseInt(per_page), offset]
     );
+
+    dataRes.rows.forEach(r => { r.documents_count = parseInt(r.documents_count) || 0; });
 
     return res.json(paginate(dataRes.rows, total, parseInt(page), parseInt(per_page)));
   } catch (err) { next(err); }
@@ -90,8 +93,21 @@ const createClosure = async (req, res, next) => {
       closed_by_manager, closure_notes, documents,
     } = req.body;
 
-    // Resolve project_id if provided (accepts UUID or name)
-    const resolvedProjectId = project_id !== undefined ? await resolveProjectId(project_id) : undefined;
+    // Resolve project_id if provided — accepts a project UUID, an existing
+    // project's name, or any free-text project name that doesn't exist yet.
+    // If it doesn't match a real project, the text is stored as-is
+    // (project_name_text) instead of rejecting the request.
+    let resolvedProjectId = undefined;
+    let resolvedProjectNameText = undefined;
+    if (project_id !== undefined) {
+      try {
+        resolvedProjectId = await resolveProjectId(project_id);
+        resolvedProjectNameText = null;
+      } catch (e) {
+        resolvedProjectId = null;
+        resolvedProjectNameText = String(project_id).trim();
+      }
+    }
 
     // Validate documents (cost sheet / payment proof) if provided
     let docItems = [];
@@ -135,6 +151,7 @@ const createClosure = async (req, res, next) => {
     const lead = leadRes.rows[0];
     const closedBy = req.user.id;
     const projId = resolvedProjectId !== undefined ? resolvedProjectId : lead.project_id;
+    const projNameText = resolvedProjectNameText !== undefined ? resolvedProjectNameText : lead.project_name_text;
 
     // Normalize closed_by_manager to array (accept single UUID or array)
     let managerIds = null;
@@ -155,7 +172,7 @@ const createClosure = async (req, res, next) => {
 
     const result = await client.query(
       `INSERT INTO lead_closures (
-         lead_id, project_id, site_visit_id,
+         lead_id, project_id, project_name_text, site_visit_id,
          booking_date, unit_number, tower_block, floor_number, unit_type,
          carpet_area_sqft, super_area_sqft,
          agreed_price, booking_amount, payment_plan,
@@ -167,10 +184,10 @@ const createClosure = async (req, res, next) => {
        ) VALUES (
          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
          $11,$12,$13,$14,$15,$16,$17,$18,$19,
-         $20,$21,$22,'confirmed'
+         $20,$21,$22,$23,'confirmed'
        ) RETURNING *`,
       [
-        lead_id, projId, site_visit_id || null,
+        lead_id, projId, projNameText || null, site_visit_id || null,
         booking_date,
         unit_number || null, tower_block || null, floor_number || null, unit_type || null,
         carpet_area_sqft || null, super_area_sqft || null,
@@ -284,11 +301,13 @@ const getClosureById = async (req, res, next) => {
       `SELECT lc.*,
               l.name  AS lead_name,  l.phone AS lead_phone,  l.email AS lead_email,
               l.budget AS lead_budget, l.source AS lead_source,
-              p.name  AS project_name, p.city AS project_city,
+              COALESCE(p.name, lc.project_name_text) AS project_name, p.city AS project_city,
               p.developer AS project_developer, p.price_range,
               CONCAT(cb.first_name,' ',cb.last_name) AS closed_by_name,
               cb.email AS closed_by_email,
-              sv.visit_date AS site_visit_date, sv.visit_time AS site_visit_time
+              sv.visit_date AS site_visit_date, sv.visit_time AS site_visit_time,
+              (SELECT COALESCE(json_agg(cd.* ORDER BY cd.created_at DESC), '[]')
+               FROM closure_documents cd WHERE cd.closure_id = lc.id) AS documents
        FROM lead_closures lc
        LEFT JOIN leads        l  ON l.id  = lc.lead_id
        LEFT JOIN projects     p  ON p.id  = lc.project_id
@@ -341,6 +360,7 @@ const getClosureById = async (req, res, next) => {
       closed_by: { id: c.closed_by, name: c.closed_by_name, email: c.closed_by_email },
       closed_by_manager: closedByManagers,   // ← now an array of {id, name, role}
       site_visit: c.site_visit_id ? { id: c.site_visit_id, visit_date: c.site_visit_date, visit_time: c.site_visit_time } : null,
+      documents: c.documents || [],
       closure_notes: c.closure_notes, created_at: c.created_at, updated_at: c.updated_at,
       managers: managersRes.rows.map(m => ({ id: m.id, name: m.name, role: m.role })),
     });
@@ -363,8 +383,21 @@ const updateClosure = async (req, res, next) => {
       closed_by_manager, closure_notes, documents,
     } = req.body;
 
-    // Resolve project_id if provided (accepts UUID or name)
-    const resolvedProjectId = project_id !== undefined ? await resolveProjectId(project_id) : undefined;
+    // Resolve project_id if provided — accepts a project UUID, an existing
+    // project's name, or any free-text project name that doesn't exist yet.
+    // If it doesn't match a real project, the text is stored as-is
+    // (project_name_text) instead of rejecting the request.
+    let resolvedProjectId = undefined;
+    let resolvedProjectNameText = undefined;
+    if (project_id !== undefined) {
+      try {
+        resolvedProjectId = await resolveProjectId(project_id);
+        resolvedProjectNameText = null;
+      } catch (e) {
+        resolvedProjectId = null;
+        resolvedProjectNameText = String(project_id).trim();
+      }
+    }
 
     // Validate documents (cost sheet / payment proof) if provided
     let docItems = [];
@@ -400,7 +433,7 @@ const updateClosure = async (req, res, next) => {
     }
 
     const fields = {
-      project_id: resolvedProjectId, site_visit_id,
+      project_id: resolvedProjectId, project_name_text: resolvedProjectNameText, site_visit_id,
       booking_date, unit_number, tower_block, floor_number, unit_type,
       carpet_area_sqft, super_area_sqft,
       agreed_price, booking_amount, payment_plan,
@@ -551,8 +584,10 @@ const getClosureByLead = async (req, res, next) => {
     const { leadId } = req.params;
     const result = await pool.query(
       `SELECT lc.*,
-              p.name AS project_name, p.city AS project_city,
-              CONCAT(cb.first_name,' ',cb.last_name) AS closed_by_name
+              COALESCE(p.name, lc.project_name_text) AS project_name, p.city AS project_city,
+              CONCAT(cb.first_name,' ',cb.last_name) AS closed_by_name,
+              (SELECT COALESCE(json_agg(cd.* ORDER BY cd.created_at DESC), '[]')
+               FROM closure_documents cd WHERE cd.closure_id = lc.id) AS documents
        FROM lead_closures lc
        LEFT JOIN projects p  ON p.id  = lc.project_id
        LEFT JOIN users    cb ON cb.id = lc.closed_by

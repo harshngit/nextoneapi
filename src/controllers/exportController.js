@@ -942,7 +942,7 @@ const buildClosuresSheet = async (wb, user, start, end, projectId) => {
   const rows = await pool.query(
     `SELECT lc.*,
             l.name AS lead_name, l.phone AS lead_phone,
-            p.name AS project_name, p.city AS project_city,
+            COALESCE(p.name, lc.project_name_text) AS project_name, p.city AS project_city,
             CONCAT(cb.first_name,' ',cb.last_name) AS closed_by_name
      FROM lead_closures lc
      LEFT JOIN leads    l  ON l.id  = lc.lead_id

@@ -776,6 +776,7 @@ CREATE TABLE IF NOT EXISTS lead_closures (
   id                    UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
   lead_id               UUID        NOT NULL UNIQUE REFERENCES leads(id) ON DELETE CASCADE,
   project_id            UUID        REFERENCES projects(id) ON DELETE SET NULL,
+  project_name_text     TEXT,
   site_visit_id         UUID        REFERENCES site_visits(id) ON DELETE SET NULL,
   booking_date          DATE        NOT NULL,
   unit_number           VARCHAR(100),

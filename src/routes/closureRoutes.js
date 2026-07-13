@@ -175,7 +175,11 @@ router.get('/', authenticate, ctrl.getAllClosures);
  *                 description: The lead being booked (required)
  *               project_id:
  *                 type: string
- *                 description: Override project. Defaults to lead's assigned project (accepts project UUID or name)
+ *                 description: >
+ *                   Override project. Defaults to lead's assigned project. Accepts a
+ *                   project UUID, an existing project's name, or any free-text project
+ *                   name — it does NOT have to already exist; unmatched text is stored
+ *                   as-is (project_name_text) instead of being rejected.
  *               booking_date:
  *                 type: string
  *                 format: date
@@ -717,7 +721,10 @@ router.get('/:id', authenticate, ctrl.getClosureById);
  *             properties:
  *               project_id:
  *                 type: string
- *                 description: Override the project linked to this closure (accepts project UUID or name)
+ *                 description: >
+ *                   Override the project linked to this closure. Accepts a project UUID,
+ *                   an existing project's name, or any free-text project name — it does
+ *                   NOT have to already exist.
  *               site_visit_id:
  *                 type: string
  *                 format: uuid
