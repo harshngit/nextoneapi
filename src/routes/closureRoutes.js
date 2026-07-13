@@ -2,6 +2,7 @@ const express = require('express');
 const router  = express.Router();
 const ctrl    = require('../controllers/closureController');
 const { authenticate, authorize } = require('../middleware/auth');
+const { uploadClosureDocFile } = require('../middleware/uploadMiddleware');
 
 const ADMIN   = ['super_admin', 'admin'];
 const MANAGER = ['super_admin', 'admin', 'sales_manager'];
@@ -239,6 +240,28 @@ router.get('/', authenticate, ctrl.getAllClosures);
  *                 type: string
  *                 format: uuid
  *                 description: Optional link to site visit that led to this booking
+ *               documents:
+ *                 type: array
+ *                 description: >
+ *                   Optional. Cost sheet and/or payment proof — get the url from
+ *                   POST /api/v1/closures/upload-document first, then pass it here.
+ *                   Accepts images (JPEG/PNG/WEBP) or PDF.
+ *                 items:
+ *                   type: object
+ *                   required: [url, document_type]
+ *                   properties:
+ *                     url:
+ *                       type: string
+ *                       description: File url returned from upload-document endpoint
+ *                       example: "/uploads/closures/documents/closure_doc_costsheet_123.pdf"
+ *                     document_type:
+ *                       type: string
+ *                       enum: [cost_sheet, payment_proof]
+ *                       example: "cost_sheet"
+ *                     name:
+ *                       type: string
+ *                       description: Label for this document
+ *                       example: "Cost Sheet - Tower B"
  *           example:
  *             lead_id: "lead-uuid-001"
  *             project_id: "proj-uuid-001"
@@ -261,6 +284,10 @@ router.get('/', authenticate, ctrl.getAllClosures);
  *             closed_by_manager:
  *               - "manager-uuid-001"
  *               - "manager-uuid-002"
+ *             documents:
+ *               - url: "/uploads/closures/documents/closure_doc_costsheet_123.pdf"
+ *                 document_type: "cost_sheet"
+ *                 name: "Cost Sheet - Tower B"
  *     responses:
  *       201:
  *         description: Lead closed/booked successfully. Response includes managers array for Reporting Manager dropdown.
@@ -302,6 +329,13 @@ router.get('/', authenticate, ctrl.getAllClosures);
  *                   closure_notes: "Client opted for construction linked plan. Home loan through HDFC."
  *                   status: "confirmed"
  *                   created_at: "2026-05-20T10:00:00Z"
+ *                 documents:
+ *                   - id: "doc-uuid-001"
+ *                     closure_id: "closure-uuid-001"
+ *                     document_type: "cost_sheet"
+ *                     url: "/uploads/closures/documents/closure_doc_costsheet_123.pdf"
+ *                     name: "Cost Sheet - Tower B"
+ *                     created_at: "2026-05-20T10:00:00Z"
  *                 managers:
  *                   - id: "manager-uuid-001"
  *                     name: "Rahul Sharma"
@@ -350,6 +384,238 @@ router.get('/', authenticate, ctrl.getAllClosures);
 router.get('/managers', authenticate, ctrl.getManagers);
 
 router.post('/', authenticate, ctrl.createClosure);
+
+/**
+ * @swagger
+ * /api/v1/closures/upload-document:
+ *   post:
+ *     summary: Upload a closure document (cost sheet / payment proof) — returns url to use in closure body
+ *     description: >
+ *       Full URL: POST https://api.nextonerealty.in/api/v1/closures/upload-document
+ *
+ *       Step 1 of the 2-step document flow (same pattern as lead payment proof / photos).
+ *       Upload a file here first — the API returns a url.
+ *       Then pass that url inside the documents array when creating or updating a closure,
+ *       or attach it directly via POST /api/v1/closures/{id}/documents.
+ *       Supported formats: PDF, JPEG, PNG, WEBP. Max 10 MB.
+ *       Field name must be document.
+ *     tags: [Lead Closures]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [document]
+ *             properties:
+ *               document:
+ *                 type: string
+ *                 format: binary
+ *                 description: Cost sheet / payment proof — PDF, JPEG, PNG, or WEBP, max 10 MB
+ *     responses:
+ *       201:
+ *         description: File uploaded — use the returned url in documents
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "File uploaded successfully"
+ *               data:
+ *                 url: "/uploads/closures/documents/closure_doc_costsheet_1234567890.pdf"
+ *                 filename: "cost_sheet.pdf"
+ *                 size: 204800
+ *       400:
+ *         description: No file uploaded, or unsupported file type
+ */
+router.post('/upload-document', authenticate, uploadClosureDocFile, ctrl.uploadDocumentFile);
+
+/**
+ * @swagger
+ * /api/v1/closures/{id}/documents:
+ *   post:
+ *     summary: Add a document (cost sheet / payment proof) to a closure
+ *     description: >
+ *       Two modes supported (same pattern as lead payment proof / photos):
+ *
+ *       **Mode 1 — File Upload** (multipart/form-data):
+ *       Upload a file directly. Field name must be `document`.
+ *       `document_type` is required as a form field (cost_sheet or payment_proof).
+ *       Optionally include `name`. Supported formats: PDF, JPEG, PNG, WEBP. Max 10 MB.
+ *
+ *       **Mode 2 — JSON URL Array** (application/json):
+ *       Pass `documents` as an array (or single object) of documents that already
+ *       exist at a URL (e.g. from POST /api/v1/closures/upload-document).
+ *       Each item must have a `url` and `document_type`. `name` is optional.
+ *     tags: [Lead Closures]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [document, document_type]
+ *             properties:
+ *               document:
+ *                 type: string
+ *                 format: binary
+ *                 description: Cost sheet / payment proof (PDF, JPEG, PNG, WEBP, max 10 MB)
+ *               document_type:
+ *                 type: string
+ *                 enum: [cost_sheet, payment_proof]
+ *               name:
+ *                 type: string
+ *                 example: "Cost Sheet - Tower B"
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [documents]
+ *             properties:
+ *               documents:
+ *                 description: Single object or array of documents
+ *                 oneOf:
+ *                   - type: array
+ *                     items:
+ *                       type: object
+ *                       required: [url, document_type]
+ *                       properties:
+ *                         url: { type: string, example: "/uploads/closures/documents/closure_doc_costsheet_123.pdf" }
+ *                         document_type: { type: string, enum: [cost_sheet, payment_proof] }
+ *                         name: { type: string, example: "Cost Sheet - Tower B" }
+ *                   - type: object
+ *                     required: [url, document_type]
+ *                     properties:
+ *                       url: { type: string }
+ *                       document_type: { type: string, enum: [cost_sheet, payment_proof] }
+ *                       name: { type: string }
+ *           example:
+ *             documents:
+ *               - url: "/uploads/closures/documents/closure_doc_costsheet_123.pdf"
+ *                 document_type: "cost_sheet"
+ *                 name: "Cost Sheet - Tower B"
+ *     responses:
+ *       201:
+ *         description: Document(s) saved
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "1 document(s) saved"
+ *               data:
+ *                 closure_id: "closure-uuid-001"
+ *                 documents:
+ *                   - id: "doc-uuid-001"
+ *                     closure_id: "closure-uuid-001"
+ *                     document_type: "cost_sheet"
+ *                     url: "/uploads/closures/documents/closure_doc_costsheet_123.pdf"
+ *                     name: "Cost Sheet - Tower B"
+ *                     created_at: "2026-06-01T10:35:00Z"
+ *       400:
+ *         description: No file or documents provided
+ *       404:
+ *         description: Closure not found
+ */
+router.post('/:id/documents', authenticate, uploadClosureDocFile, ctrl.addClosureDocument);
+
+/**
+ * @swagger
+ * /api/v1/closures/{id}/documents:
+ *   get:
+ *     summary: Get all documents for a closure
+ *     tags: [Lead Closures]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Documents list
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 closure_id: "closure-uuid-001"
+ *                 total: 1
+ *                 documents:
+ *                   - id: "doc-uuid-001"
+ *                     document_type: "cost_sheet"
+ *                     url: "/uploads/closures/documents/closure_doc_costsheet_123.pdf"
+ *                     name: "Cost Sheet - Tower B"
+ *                     uploaded_by_name: "Rahul Sharma"
+ *                     created_at: "2026-06-01T10:35:00Z"
+ */
+router.get('/:id/documents', authenticate, ctrl.getClosureDocuments);
+
+/**
+ * @swagger
+ * /api/v1/closures/{id}/documents/{did}:
+ *   patch:
+ *     summary: Update a closure document's name
+ *     tags: [Lead Closures]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: path
+ *         name: did
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *         description: Document ID
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name: { type: string, example: "Updated cost sheet label" }
+ *     responses:
+ *       200:
+ *         description: Document updated
+ *       404:
+ *         description: Document not found
+ */
+router.patch('/:id/documents/:did', authenticate, ctrl.updateClosureDocument);
+
+/**
+ * @swagger
+ * /api/v1/closures/{id}/documents/{did}:
+ *   delete:
+ *     summary: Delete a closure document
+ *     description: Deletes the document record and removes the file from disk if it was uploaded locally.
+ *     tags: [Lead Closures]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - in: path
+ *         name: did
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *         description: Document ID
+ *     responses:
+ *       200:
+ *         description: Document deleted
+ *       404:
+ *         description: Document not found
+ */
+router.delete('/:id/documents/:did', authenticate, ctrl.deleteClosureDocument);
 
 /**
  * @swagger

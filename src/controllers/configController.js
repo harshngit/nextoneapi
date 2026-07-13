@@ -702,7 +702,7 @@ const getLeadStatuses = async (req, res, next) => {
     const { include_inactive } = req.query;
     const where = include_inactive === 'true' ? '' : 'WHERE is_active = true';
     const result = await pool.query(
-      `SELECT id, key, label, color, sort_order, is_active, is_system, created_at
+      `SELECT id, key, label, color, sort_order, is_active, is_system, created_at, updated_at
        FROM lead_statuses ${where} ORDER BY sort_order ASC, label ASC`
     );
     return sendSuccess(res, 'Lead statuses fetched', result.rows);

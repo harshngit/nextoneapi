@@ -187,6 +187,39 @@ const uploadLeadPhotoFile = multer({
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB max
 }).single('photo');
 
+// ── Storage engine for closure documents (cost sheet, payment proof) ──────────
+const closureDocStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(process.cwd(), 'uploads', 'closures', 'documents');
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const timestamp = Date.now();
+    const ext = path.extname(file.originalname).toLowerCase();
+    const sanitized = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9._-]/g, '_');
+    cb(null, `closure_doc_${sanitized}_${timestamp}${ext}`);
+  },
+});
+
+const closureDocFilter = (req, file, cb) => {
+  const allowed = [
+    'application/pdf',
+    'image/jpeg', 'image/jpg', 'image/png', 'image/webp',
+  ];
+  if (allowed.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new AppError('Only PDF, JPEG, PNG, or WEBP files are allowed for closure documents', 400), false);
+  }
+};
+
+const uploadClosureDocFile = multer({
+  storage: closureDocStorage,
+  fileFilter: closureDocFilter,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB max
+}).single('document');
+
 // ── Generic storage for one-off uploads ──────────────────────────────────────
 const genericStorage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -274,6 +307,7 @@ module.exports = {
   uploadLeadVoice,
   uploadPaymentProofFile,
   uploadLeadPhotoFile,
+  uploadClosureDocFile,
   uploadSingleFile,
   uploadMultipleFiles,
 };

@@ -814,6 +814,24 @@ COMMENT ON COLUMN lead_closures.booking_amount    IS 'Initial token/booking amou
 COMMENT ON COLUMN lead_closures.closed_by_manager IS 'Array of manager UUIDs who supervised this closure';
 
 -- ============================================================
+-- TABLE: closure_documents  (migration 049 — cost sheet, payment proof)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS closure_documents (
+  id            UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  closure_id    UUID        NOT NULL REFERENCES lead_closures(id) ON DELETE CASCADE,
+  document_type VARCHAR(20) NOT NULL CHECK (document_type IN ('cost_sheet','payment_proof')),
+  url           TEXT        NOT NULL,
+  name          VARCHAR(255),
+  file_size     BIGINT,
+  mime_type     VARCHAR(100),
+  uploaded_by   UUID        REFERENCES users(id) ON DELETE SET NULL,
+  created_at    TIMESTAMPTZ DEFAULT NOW(),
+  updated_at    TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_closure_documents_closure ON closure_documents(closure_id);
+
+-- ============================================================
 -- TABLE: tasks  (follow-ups)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS tasks (

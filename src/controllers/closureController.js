@@ -7,6 +7,8 @@
  * Base path: /api/v1/closures
  */
 
+const path         = require('path');
+const fs           = require('fs');
 const { pool }     = require('../config/db');
 const { sendSuccess, paginate } = require('../utils/response');
 const AppError     = require('../utils/AppError');
@@ -15,7 +17,8 @@ const whatsappService = require('../utils/whatsappService');
 const { getTeamIds, ADMIN_ROLES, LEAF_ROLES } = require('../utils/teamUtils');
 const { resolveProjectId } = require('../utils/projectResolver');
 
-const VALID_STATUSES = ['confirmed', 'cancelled', 'on_hold'];
+const VALID_STATUSES  = ['confirmed', 'cancelled', 'on_hold'];
+const VALID_DOC_TYPES = ['cost_sheet', 'payment_proof'];
 
 // ── GET /api/v1/closures ──────────────────────────────────────────────────────
 const getAllClosures = async (req, res, next) => {
@@ -84,11 +87,23 @@ const createClosure = async (req, res, next) => {
       loan_required, loan_bank,
       commission_amount, commission_percent,
       commission_paid, commission_paid_date,
-      closed_by_manager, closure_notes,
+      closed_by_manager, closure_notes, documents,
     } = req.body;
 
     // Resolve project_id if provided (accepts UUID or name)
     const resolvedProjectId = project_id !== undefined ? await resolveProjectId(project_id) : undefined;
+
+    // Validate documents (cost sheet / payment proof) if provided
+    let docItems = [];
+    if (documents) {
+      docItems = Array.isArray(documents) ? documents : [documents];
+      for (const d of docItems) {
+        if (!d.url) return next(new AppError('Each document must have a url', 400));
+        if (!d.document_type || !VALID_DOC_TYPES.includes(d.document_type)) {
+          return next(new AppError(`Each document must have document_type one of: ${VALID_DOC_TYPES.join(', ')}`, 400));
+        }
+      }
+    }
 
     if (!lead_id || !booking_date) {
       return next(new AppError('lead_id and booking_date are required', 400));
@@ -181,6 +196,23 @@ const createClosure = async (req, res, next) => {
        closedBy]
     );
 
+    // Save cost sheet / payment proof documents
+    const savedDocs = [];
+    if (docItems.length > 0) {
+      for (const d of docItems) {
+        const docResult = await client.query(
+          `INSERT INTO closure_documents (closure_id, document_type, url, name, file_size, mime_type, uploaded_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+          [result.rows[0].id, d.document_type, d.url, d.name || null, d.file_size || null, d.mime_type || null, closedBy]
+        );
+        savedDocs.push(docResult.rows[0]);
+      }
+      await client.query(
+        `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1,'note',$2,$3)`,
+        [lead_id, `${docItems.length} closure document(s) attached`, closedBy]
+      );
+    }
+
     await client.query('COMMIT');
 
     // ── Email ──────────────────────────────────────────────────────────────────
@@ -238,6 +270,7 @@ const createClosure = async (req, res, next) => {
 
     return sendSuccess(res, 'Lead closed/booked successfully', {
       closure:  result.rows[0],
+      documents: savedDocs,
       managers: managersRes.rows.map(m => ({ id: m.id, name: m.name, role: m.role })),
     }, 201);
   } catch (err) {
@@ -577,8 +610,177 @@ const getManagers = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+/**
+ * ─── CLOSURE DOCUMENTS (cost sheet, payment proof) ─────────────────────────────
+ *
+ * Same shape/flow as lead payment proofs / photos — accepts images (jpeg/png/webp)
+ * or PDF.
+ *
+ * Endpoints:
+ *   POST   /api/v1/closures/upload-document       → upload file, get url (use in create/update)
+ *   POST   /api/v1/closures/:id/documents         → attach (file upload OR url array)
+ *   GET    /api/v1/closures/:id/documents         → list all documents for a closure
+ *   PATCH  /api/v1/closures/:id/documents/:did    → update name
+ *   DELETE /api/v1/closures/:id/documents/:did    → delete one document
+ */
+
+// ─── POST /api/v1/closures/upload-document ────────────────────────────────────
+// Standalone file upload — returns { url, filename, size }
+// Field name: document
+const uploadDocumentFile = async (req, res, next) => {
+  try {
+    if (!req.file) return next(new AppError('No file uploaded. Use field name: document', 400));
+
+    return sendSuccess(res, 'File uploaded successfully', {
+      url:      `/uploads/closures/documents/${req.file.filename}`,
+      filename: req.file.originalname,
+      size:     req.file.size || null,
+    }, 201);
+  } catch (err) { next(err); }
+};
+
+// ─── POST /api/v1/closures/:id/documents ──────────────────────────────────────
+// Mode 1 — File upload (multipart/form-data): field document (required),
+//          body: document_type (required: cost_sheet | payment_proof), name (optional)
+// Mode 2 — JSON body: { documents: [{ url, document_type, name }] } (single object also accepted)
+const addClosureDocument = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const callerId = req.user.id;
+
+    const closureChk = await pool.query('SELECT id FROM lead_closures WHERE id = $1', [id]);
+    if (!closureChk.rows.length) return next(new AppError('Closure not found', 404));
+
+    const inserted = [];
+
+    // ── Mode 1: File upload ──────────────────────────────────────────────────
+    if (req.file) {
+      const { document_type, name } = req.body;
+      if (!document_type || !VALID_DOC_TYPES.includes(document_type)) {
+        return next(new AppError(`document_type is required and must be one of: ${VALID_DOC_TYPES.join(', ')}`, 400));
+      }
+      const fileUrl  = `/uploads/closures/documents/${req.file.filename}`;
+      const fileName = name || req.file.originalname;
+
+      const result = await pool.query(
+        `INSERT INTO closure_documents (closure_id, document_type, url, name, file_size, mime_type, uploaded_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+        [id, document_type, fileUrl, fileName, req.file.size || null, req.file.mimetype || null, callerId]
+      );
+      inserted.push(result.rows[0]);
+    }
+
+    // ── Mode 2: JSON URL array ───────────────────────────────────────────────
+    else if (req.body.documents) {
+      let docs = req.body.documents;
+      if (!Array.isArray(docs)) docs = [docs];
+      if (!docs.length) return next(new AppError('documents array cannot be empty', 400));
+
+      for (const d of docs) {
+        if (!d.url) return next(new AppError('Each document must have a url', 400));
+        if (!d.document_type || !VALID_DOC_TYPES.includes(d.document_type)) {
+          return next(new AppError(`Each document must have document_type one of: ${VALID_DOC_TYPES.join(', ')}`, 400));
+        }
+        const result = await pool.query(
+          `INSERT INTO closure_documents (closure_id, document_type, url, name, file_size, mime_type, uploaded_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+          [id, d.document_type, d.url, d.name || null, d.file_size || null, d.mime_type || null, callerId]
+        );
+        inserted.push(result.rows[0]);
+      }
+    } else {
+      return next(new AppError('Provide either a document file or documents JSON', 400));
+    }
+
+    await pool.query(
+      `INSERT INTO lead_activities (lead_id, type, note, performed_by)
+       SELECT lead_id, 'note', $2, $3 FROM lead_closures WHERE id = $1`,
+      [id, `${inserted.length} closure document(s) added`, callerId]
+    );
+
+    return sendSuccess(res, `${inserted.length} document(s) saved`, {
+      closure_id: id, documents: inserted,
+    }, 201);
+  } catch (err) { next(err); }
+};
+
+// ─── GET /api/v1/closures/:id/documents ───────────────────────────────────────
+const getClosureDocuments = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    const closureChk = await pool.query('SELECT id FROM lead_closures WHERE id = $1', [id]);
+    if (!closureChk.rows.length) return next(new AppError('Closure not found', 404));
+
+    const result = await pool.query(
+      `SELECT cd.*, CONCAT(u.first_name,' ',u.last_name) AS uploaded_by_name
+       FROM closure_documents cd
+       LEFT JOIN users u ON u.id = cd.uploaded_by
+       WHERE cd.closure_id = $1
+       ORDER BY cd.created_at DESC`,
+      [id]
+    );
+
+    return sendSuccess(res, 'Closure documents fetched', {
+      closure_id: id, total: result.rows.length, documents: result.rows,
+    });
+  } catch (err) { next(err); }
+};
+
+// ─── PATCH /api/v1/closures/:id/documents/:did ───────────────────────────────
+const updateClosureDocument = async (req, res, next) => {
+  try {
+    const { id, did } = req.params;
+    const { name } = req.body;
+
+    const closureChk = await pool.query('SELECT id FROM lead_closures WHERE id = $1', [id]);
+    if (!closureChk.rows.length) return next(new AppError('Closure not found', 404));
+
+    const docChk = await pool.query(
+      'SELECT * FROM closure_documents WHERE id = $1 AND closure_id = $2', [did, id]
+    );
+    if (!docChk.rows.length) return next(new AppError('Document not found', 404));
+
+    if (name === undefined) return next(new AppError('Provide name to update', 400));
+
+    const result = await pool.query(
+      `UPDATE closure_documents SET name = $1, updated_at = NOW() WHERE id = $2 AND closure_id = $3 RETURNING *`,
+      [name, did, id]
+    );
+
+    return sendSuccess(res, 'Document updated', result.rows[0]);
+  } catch (err) { next(err); }
+};
+
+// ─── DELETE /api/v1/closures/:id/documents/:did ──────────────────────────────
+const deleteClosureDocument = async (req, res, next) => {
+  try {
+    const { id, did } = req.params;
+
+    const closureChk = await pool.query('SELECT id FROM lead_closures WHERE id = $1', [id]);
+    if (!closureChk.rows.length) return next(new AppError('Closure not found', 404));
+
+    const docChk = await pool.query(
+      'SELECT * FROM closure_documents WHERE id = $1 AND closure_id = $2', [did, id]
+    );
+    if (!docChk.rows.length) return next(new AppError('Document not found', 404));
+    const doc = docChk.rows[0];
+
+    if (doc.url && doc.url.startsWith('/uploads/')) {
+      const filePath = path.join(process.cwd(), doc.url);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    }
+
+    await pool.query('DELETE FROM closure_documents WHERE id = $1', [did]);
+
+    return sendSuccess(res, 'Document deleted');
+  } catch (err) { next(err); }
+};
+
 module.exports = {
   getAllClosures, createClosure, getClosureById, updateClosure,
   updateClosureStatus, getClosureByLead, getClosureSummary,
   getManagers,
+  uploadDocumentFile, addClosureDocument, getClosureDocuments,
+  updateClosureDocument, deleteClosureDocument,
 };

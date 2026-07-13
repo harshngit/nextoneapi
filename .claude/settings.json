@@ -16,7 +16,11 @@
       "Bash(node -c src/controllers/conversionController.js)",
       "Bash(node -c src/routes/conversionRoutes.js)",
       "Bash(node -c src/controllers/configController.js)",
-      "Bash(node -c src/routes/configRoutes.js)"
+      "Bash(node -c src/routes/configRoutes.js)",
+      "Bash(grep -n \"uploadLeadPhotoFile,$\" src/middleware/uploadMiddleware.js)",
+      "Bash(node -c src/controllers/closureController.js)",
+      "Bash(grep -n \"closed_by_manager:\\\\s*$\\\\|- \\\\\"manager-uuid-002\\\\\"\" src/routes/closureRoutes.js)",
+      "Bash(node -c src/routes/closureRoutes.js)"
     ]
   }
 }
