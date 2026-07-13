@@ -61,6 +61,8 @@ router.post("/multiple", authenticate, uploadMultipleFiles, uploadController.upl
  *   post:
  *     summary: Upload payment proof (receipt / screenshot / PDF) from the front-end form
  *     description: >
+ *       Full URL: POST https://api.nextonerealty.in/api/v1/upload/payment-proof
+ *
  *       Simple single-file upload for a booking/payment proof. Returns a url —
  *       save that url on the lead/booking record. Accepts PDF, JPEG, PNG, WEBP (max 10 MB).
  *       Field name must be payment_proof.

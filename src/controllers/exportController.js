@@ -374,14 +374,14 @@ const buildSiteVisitsSheet = async (wb, user, start, end, projectId) => {
             sv.created_at, sv.assigned_to,
             sv.closing_person,
             l.name  AS lead_name,  l.phone AS lead_phone, l.email AS lead_email,
-            p.name  AS project_name, p.city AS project_city, p.locality,
+            COALESCE(p.name, sv.project_name_text) AS project_name, p.city AS project_city, p.locality,
             CONCAT(u.first_name,' ',u.last_name)  AS assigned_to_name,
             CONCAT(c.first_name,' ',c.last_name)  AS created_by_name,
             CONCAT(cm.first_name,' ',cm.last_name) AS closing_manager_name,
             svf.client_reaction, svf.next_step, svf.remarks, svf.rating
      FROM site_visits sv
      JOIN    leads    l   ON l.id  = sv.lead_id
-     JOIN    projects p   ON p.id  = sv.project_id
+     LEFT JOIN projects p ON p.id  = sv.project_id
      LEFT JOIN users  u   ON u.id  = sv.assigned_to
      LEFT JOIN users  c   ON c.id  = sv.created_by
      LEFT JOIN users  cm  ON cm.id = sv.closing_manager

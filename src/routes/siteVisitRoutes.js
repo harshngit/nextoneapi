@@ -58,6 +58,13 @@ router.get('/', authenticate, ctrl.getAllSiteVisits);
  * /api/v1/site-visits:
  *   post:
  *     summary: Schedule a new site visit
+ *     description: >
+ *       project_id accepts a project UUID, an existing project's name, or any
+ *       free-text project name that doesn't exist yet in the system — it does
+ *       NOT have to match a real project. If it matches, the visit links to
+ *       that project. If it doesn't match, the text is stored as-is (same
+ *       fallback behavior as leads.project_name_text) instead of the request
+ *       being rejected.
  *     tags: [Site Visits]
  *     security:
  *       - BearerAuth: []
@@ -74,7 +81,9 @@ router.get('/', authenticate, ctrl.getAllSiteVisits);
  *                 format: uuid
  *               project_id:
  *                 type: string
- *                 description: Project UUID or project name
+ *                 description: >
+ *                   Project UUID, an existing project's name, or any free-text
+ *                   project name — does not have to already exist.
  *               visit_date:
  *                 type: string
  *                 format: date
@@ -333,18 +342,19 @@ router.post('/:id/feedback', authenticate, ctrl.submitSiteVisitFeedback);
  *                 type: string
  *               project_id:
  *                 type: string
- *                 format: uuid
  *                 description: >
- *                   Project UUID. Either project_id or project_name is required
- *                   (project_id takes precedence if both are sent). Must resolve
- *                   to an existing project — a site visit cannot be scheduled for
- *                   a project that doesn't exist.
+ *                   Project UUID, an existing project's name, or any free-text
+ *                   project name. Either project_id or project_name is required
+ *                   (project_id takes precedence if both are sent). Does NOT
+ *                   have to match an existing project — if it doesn't, the
+ *                   text is stored as-is (same fallback as leads.project_name_text)
+ *                   instead of the request being rejected.
  *               project_name:
  *                 type: string
  *                 description: >
  *                   Project name, used when the user typed a name instead of
  *                   picking from the dropdown. Looked up case-insensitively;
- *                   returns 404 if no matching project is found.
+ *                   falls back to free text if no matching project is found.
  *               assigned_to:
  *                 type: string
  *                 format: uuid

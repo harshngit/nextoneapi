@@ -62,7 +62,7 @@ const getAllSiteVisits = async (req, res, next) => {
               sv.status, sv.transport_arranged, sv.notes, sv.created_at,
               sv.closing_person, sv.closing_manager,
               l.name AS lead_name, l.phone AS lead_phone,
-              p.name AS project_name, p.city AS project_city,
+              COALESCE(p.name, sv.project_name_text) AS project_name, p.city AS project_city,
               CONCAT(u.first_name,' ',u.last_name) AS assigned_to_name,
               vf.rating, vf.client_reaction, vf.next_step
        FROM site_visits sv
@@ -87,14 +87,22 @@ const createSiteVisit = async (req, res, next) => {
     const { lead_id, project_id, visit_date, visit_time, assigned_to,
             notes, transport_arranged } = req.body;
 
-    // Resolve project_id (accepts UUID or name)
-    const resolvedProjectId = await resolveProjectId(project_id);
-
     if (!lead_id || !project_id || !visit_date || !visit_time) {
       return next(new AppError('lead_id, project_id, visit_date, and visit_time are required', 400));
     }
 
-    // Fetch lead and project details
+    // Resolve project_id — accepts an existing project's UUID or name.
+    // If it doesn't match any project, fall back to storing it as free text
+    // (mirrors leads.project_name_text) instead of rejecting the request.
+    let resolvedProjectId = null;
+    let resolvedProjectNameText = null;
+    try {
+      resolvedProjectId = await resolveProjectId(project_id);
+    } catch (e) {
+      resolvedProjectNameText = String(project_id).trim();
+    }
+
+    // Fetch lead details
     const leadRes = await pool.query(
       `SELECT l.name, l.phone, l.email, u.email AS assigned_email, CONCAT(u.first_name,' ',u.last_name) AS assigned_name
        FROM leads l
@@ -103,8 +111,11 @@ const createSiteVisit = async (req, res, next) => {
     );
     if (!leadRes.rows.length) return next(new AppError('Lead not found', 404));
 
-    const projectRes = await pool.query('SELECT name FROM projects WHERE id = $1', [resolvedProjectId]);
-    if (!projectRes.rows.length) return next(new AppError('Project not found', 404));
+    let projectDisplayName = resolvedProjectNameText;
+    if (resolvedProjectId) {
+      const projectRes = await pool.query('SELECT name FROM projects WHERE id = $1', [resolvedProjectId]);
+      projectDisplayName = projectRes.rows[0]?.name || projectDisplayName;
+    }
 
     const lead = leadRes.rows[0];
     const execId = assigned_to || lead.assigned_to;
@@ -113,23 +124,24 @@ const createSiteVisit = async (req, res, next) => {
 
     const result = await client.query(
       `INSERT INTO site_visits
-         (lead_id, project_id, visit_date, visit_time, assigned_to,
+         (lead_id, project_id, project_name_text, visit_date, visit_time, assigned_to,
           status, transport_arranged, notes, created_by)
-       VALUES ($1,$2,$3,$4,$5,'scheduled',$6,$7,$8)
+       VALUES ($1,$2,$3,$4,$5,$6,'scheduled',$7,$8,$9)
        RETURNING *`,
-      [lead_id, resolvedProjectId, visit_date, visit_time, execId, transport_arranged || false, notes || null, req.user.id]
+      [lead_id, resolvedProjectId, resolvedProjectNameText, visit_date, visit_time, execId,
+       transport_arranged || false, notes || null, req.user.id]
     );
 
-    // Update lead status
+    // Update lead status (only touch lead.project_id when we resolved a real project)
     await client.query(
-      `UPDATE leads SET status = 'site_visit_scheduled', project_id = $1, updated_at = NOW() WHERE id = $2`,
+      `UPDATE leads SET status = 'site_visit_scheduled', project_id = COALESCE($1, project_id), updated_at = NOW() WHERE id = $2`,
       [resolvedProjectId, lead_id]
     );
 
     // Log activity
     await client.query(
       `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1,'status_change',$2,$3)`,
-      [lead_id, `Site visit scheduled at ${projectRes.rows[0].name} on ${visit_date} at ${visit_time}`, req.user.id]
+      [lead_id, `Site visit scheduled at ${projectDisplayName || 'project'} on ${visit_date} at ${visit_time}`, req.user.id]
     );
 
     await client.query('COMMIT');
@@ -137,7 +149,7 @@ const createSiteVisit = async (req, res, next) => {
     // ── Push + in-app notifications ───────────────────────────────────────────
     setImmediate(async () => {
       try {
-        const projectName = projectRes.rows[0]?.name || 'project';
+        const projectName = projectDisplayName || 'project';
         if (execId) {
           await createNotification(execId, {
             type:           'visit_scheduled',
@@ -188,7 +200,7 @@ const createSiteVisit = async (req, res, next) => {
 
         await emailService.notifySiteVisitScheduled({
           lead:         { id: lead_id, name: lead.name, phone: lead.phone, email: lead.email },
-          project:      { id: project_id, name: projectRes.rows[0].name },
+          project:      { id: resolvedProjectId, name: projectDisplayName || 'project' },
           visit:        { visit_date, visit_time },
           assignedTo:   lead.assigned_name,
           scheduledBy:  scheduledByRow.rows[0]?.name || 'System',
@@ -211,7 +223,8 @@ const getSiteVisitById = async (req, res, next) => {
     const result = await pool.query(
       `SELECT sv.*,
               l.name AS lead_name, l.phone AS lead_phone, l.email AS lead_email,
-              p.name AS project_name, p.address AS project_address, p.city AS project_city,
+              COALESCE(p.name, sv.project_name_text) AS project_name,
+              p.address AS project_address, p.city AS project_city,
               CONCAT(u.first_name,' ',u.last_name) AS assigned_to_name,
               vf.rating, vf.client_reaction, vf.interested_in, vf.next_step, vf.remarks AS feedback_remarks
        FROM site_visits sv
@@ -430,17 +443,21 @@ const createSiteVisitWithLead = async (req, res, next) => {
       return next(new AppError('project_id (or project_name), visit_date, and visit_time are required for site visit', 400));
     }
 
-    // A site visit must reference a real project — project_id takes precedence,
-    // project_name is resolved by name but must match an existing project.
-    let resolvedProjectId;
+    // project_id takes precedence over project_name. Neither has to match an
+    // existing project — if it doesn't, it's stored as free text instead
+    // (mirrors leads.project_name_text).
+    let resolvedProjectId = null;
+    let resolvedProjectNameText = null;
     if (project_id) {
-      resolvedProjectId = await resolveProjectId(project_id);
+      try {
+        resolvedProjectId = await resolveProjectId(project_id);
+      } catch (e) {
+        resolvedProjectNameText = String(project_id).trim();
+      }
     } else {
       const resolved = await resolveProjectName(project_name);
-      if (!resolved.projectId) {
-        return next(new AppError(`Project not found with name: ${project_name}`, 404));
-      }
       resolvedProjectId = resolved.projectId;
+      resolvedProjectNameText = resolved.projectNameText;
     }
 
     await client.query('BEGIN');
@@ -463,12 +480,12 @@ const createSiteVisitWithLead = async (req, res, next) => {
     const leadResult = await client.query(
       `INSERT INTO leads (
         name, phone, alternate_phone_number, email, source,
-        project_id, assigned_to, budget, location_preference, configuration,
+        project_id, project_name_text, assigned_to, budget, location_preference, configuration,
         callback_time, next_followup_time, status, created_by
       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'site_visit_scheduled',$13) RETURNING *`,
       [
         name.trim(), phone, alternate_phone_number || null, email || null, source || null,
-        resolvedProjectId || null, lead_assigned_to || null, budget || null,
+        resolvedProjectId || null, resolvedProjectNameText || null, lead_assigned_to || null, budget || null,
         location_preference || null, configuration || null, callback_time || null,
         next_followup_time || null, req.user.id
       ]
@@ -485,19 +502,19 @@ const createSiteVisitWithLead = async (req, res, next) => {
     const execId = visit_assigned_to || lead_assigned_to || lead.assigned_to || req.user.id;
     const siteVisitResult = await client.query(
       `INSERT INTO site_visits (
-        lead_id, project_id, visit_date, visit_time, assigned_to,
+        lead_id, project_id, project_name_text, visit_date, visit_time, assigned_to,
         status, transport_arranged, notes, created_by
-      ) VALUES ($1,$2,$3,$4,$5,'scheduled',$6,$7,$8) RETURNING *`,
+      ) VALUES ($1,$2,$3,$4,$5,$6,'scheduled',$7,$8,$9) RETURNING *`,
       [
-        lead.id, resolvedProjectId, visit_date, visit_time, execId,
+        lead.id, resolvedProjectId, resolvedProjectNameText, visit_date, visit_time, execId,
         transport_arranged || false, notes || null, req.user.id
       ]
     );
     const siteVisit = siteVisitResult.rows[0];
 
-    // Update lead's project_id
+    // Update lead's project_id (only when we resolved a real project)
     await client.query(
-      `UPDATE leads SET project_id = $1, updated_at = NOW() WHERE id = $2`,
+      `UPDATE leads SET project_id = COALESCE($1, project_id), updated_at = NOW() WHERE id = $2`,
       [resolvedProjectId, lead.id]
     );
 
@@ -507,9 +524,12 @@ const createSiteVisitWithLead = async (req, res, next) => {
     setImmediate(async () => {
       try {
         const { createNotification, notifyAdmins } = require('./notificationController');
-        // Get project name
-        const projectRes = await pool.query('SELECT name FROM projects WHERE id = $1', [resolvedProjectId]);
-        const projectName = projectRes.rows[0]?.name || 'project';
+        // Get project name — fall back to the free-text name if no real project matched
+        let projectName = resolvedProjectNameText || 'project';
+        if (resolvedProjectId) {
+          const projectRes = await pool.query('SELECT name FROM projects WHERE id = $1', [resolvedProjectId]);
+          projectName = projectRes.rows[0]?.name || projectName;
+        }
 
         if (execId) {
           await createNotification(execId, {

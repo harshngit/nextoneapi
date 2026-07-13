@@ -114,6 +114,8 @@ router.get("/", authenticate, leadController.getAllLeads);
  *   post:
  *     summary: Upload a call recording file — returns url to use in lead body
  *     description: >
+ *       Full URL: POST https://api.nextonerealty.in/api/v1/leads/upload-recording
+ *
  *       Step 1 of the 2-step recording flow.
  *       Upload an audio file here first — the API returns a url.
  *       Then pass that url inside call_recordings array when creating or updating a lead.
@@ -1474,6 +1476,8 @@ router.delete("/:id/payment-proofs/:pid", authenticate, leadController.deletePay
  *   post:
  *     summary: Upload a lead photo — returns url to use in lead body
  *     description: >
+ *       Full URL: POST https://api.nextonerealty.in/api/v1/leads/upload-photo
+ *
  *       Step 1 of the 2-step photo flow (same pattern as call recordings).
  *       This is separate from payment proof — use this only for the front-page
  *       form photo. Upload a file here first — the API returns a url.

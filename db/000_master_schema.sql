@@ -669,7 +669,8 @@ CREATE INDEX IF NOT EXISTS idx_lead_photos_lead ON lead_photos(lead_id);
 CREATE TABLE IF NOT EXISTS site_visits (
   id                          UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
   lead_id                     UUID        NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
-  project_id                  UUID        NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  project_id                  UUID        REFERENCES projects(id) ON DELETE CASCADE,
+  project_name_text           TEXT,
   visit_date                  DATE        NOT NULL,
   visit_time                  TIME        NOT NULL,
   assigned_to                 UUID        REFERENCES users(id) ON DELETE SET NULL,
@@ -695,6 +696,8 @@ CREATE INDEX IF NOT EXISTS idx_site_visits_status        ON site_visits(status);
 CREATE INDEX IF NOT EXISTS idx_site_visits_visit_date    ON site_visits(visit_date);
 CREATE INDEX IF NOT EXISTS idx_site_visits_date_status   ON site_visits(visit_date, status);
 CREATE INDEX IF NOT EXISTS idx_site_visits_reminder_cron ON site_visits(visit_date, status, visit_reminder_sent);
+
+COMMENT ON COLUMN site_visits.project_name_text IS 'Free-text project name when no matching project record exists';
 
 -- ============================================================
 -- TABLE: site_visit_feedback
