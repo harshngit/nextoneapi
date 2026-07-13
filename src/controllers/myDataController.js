@@ -224,10 +224,15 @@ const getMyLeads = async (req, res, next) => {
       pool.query(
         `SELECT
            l.id, l.name, l.phone, l.alternate_phone_number, l.email,
-           l.status, l.source, l.budget, l.location_preference,
-           l.project_id, l.created_at, l.updated_at,
-           p.name  AS project_name,
-           p.city  AS project_city
+           l.status, l.source, l.budget, l.location_preference, l.configuration,
+           l.callback_time, l.next_followup_time,
+           l.project_id, l.project_name_text, l.is_converted, l.converted_at,
+           l.created_at, l.updated_at,
+           COALESCE(p.name, l.project_name_text) AS project_name,
+           p.city  AS project_city,
+           (SELECT COUNT(*) FROM call_recordings cr WHERE cr.lead_id = l.id) AS call_recordings_count,
+           (SELECT COUNT(*) FROM payment_proofs pp WHERE pp.lead_id = l.id)  AS payment_proofs_count,
+           (SELECT COUNT(*) FROM lead_photos ph WHERE ph.lead_id = l.id)    AS photos_count
          FROM leads l
          LEFT JOIN projects p ON p.id = l.project_id
          ${where}
@@ -236,6 +241,12 @@ const getMyLeads = async (req, res, next) => {
         [...params, per_page, offset]
       ),
     ]);
+
+    dataResult.rows.forEach(r => {
+      r.call_recordings_count = parseInt(r.call_recordings_count) || 0;
+      r.payment_proofs_count  = parseInt(r.payment_proofs_count)  || 0;
+      r.photos_count          = parseInt(r.photos_count)          || 0;
+    });
 
     return res.json(paginate(dataResult.rows, parseInt(countResult.rows[0].count), page, per_page));
   } catch (err) {

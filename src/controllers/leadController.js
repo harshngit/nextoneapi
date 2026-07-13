@@ -501,10 +501,17 @@ const getLeadById = async (req, res, next) => {
          l.id, l.name, l.phone, l.alternate_phone_number, l.email,
          l.status, l.source, l.budget, l.location_preference,
          l.callback_time, l.next_followup_time, l.configuration,
-         l.project_id, l.project_name_text, l.assigned_to, l.is_converted, l.converted_at, l.created_at,
+         l.project_id, l.project_name_text, l.assigned_to, l.is_converted, l.converted_at,
+         l.created_at, l.updated_at,
          p.name AS project_name, p.city AS project_city, p.locality AS project_locality,
          CONCAT(u.first_name, ' ', u.last_name) AS assigned_name,
-         u.phone_number AS assigned_phone
+         u.phone_number AS assigned_phone,
+         (SELECT COALESCE(json_agg(cr.* ORDER BY cr.created_at DESC), '[]')
+          FROM call_recordings cr WHERE cr.lead_id = l.id) AS call_recordings,
+         (SELECT COALESCE(json_agg(pp.* ORDER BY pp.created_at DESC), '[]')
+          FROM payment_proofs pp WHERE pp.lead_id = l.id) AS payment_proofs,
+         (SELECT COALESCE(json_agg(ph.* ORDER BY ph.created_at DESC), '[]')
+          FROM lead_photos ph WHERE ph.lead_id = l.id) AS photos
        FROM leads l
        LEFT JOIN projects p ON p.id = l.project_id
        LEFT JOIN users u ON u.id = l.assigned_to
