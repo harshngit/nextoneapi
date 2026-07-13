@@ -180,9 +180,14 @@ router.post('/lead/:leadId/to-follow-up', authenticate, ctrl.convertLeadToFollow
  *     summary: Convert a lead to a site visit
  *     description: >
  *       Creates a scheduled site visit for the lead and updates the lead status
- *       to "site_visit_scheduled". Also updates the lead's project_id if provided.
- *       An activity log entry is added. Cannot be used on leads with status
- *       "booked" or "lost".
+ *       to "site_visit_scheduled". Also updates the lead's project_id if a real
+ *       project was matched. An activity log entry is added. Cannot be used on
+ *       leads with status "booked" or "lost".
+ *
+ *       project_id accepts a project UUID, an existing project's name, or any
+ *       free-text project name that doesn't exist yet — it does NOT have to
+ *       match a real project. If it doesn't match, the text is stored as-is
+ *       (project_name_text) instead of the request being rejected.
  *     tags: [Conversions]
  *     security:
  *       - BearerAuth: []
@@ -201,7 +206,7 @@ router.post('/lead/:leadId/to-follow-up', authenticate, ctrl.convertLeadToFollow
  *             properties:
  *               project_id:
  *                 type: string
- *                 format: uuid
+ *                 description: Project UUID, an existing project's name, or any free-text project name
  *               visit_date:
  *                 type: string
  *                 format: date
@@ -292,6 +297,10 @@ router.get('/follow-up/:taskId/options', authenticate, ctrl.getFollowUpConversio
  *       / follow_up), it is updated to "site_visit_scheduled". An activity log
  *       entry is added. The follow-up must be linked to a lead and must not
  *       already be completed.
+ *
+ *       project_id accepts a project UUID, an existing project's name, or any
+ *       free-text project name that doesn't exist yet — it does NOT have to
+ *       match a real project.
  *     tags: [Conversions]
  *     security:
  *       - BearerAuth: []
@@ -310,7 +319,7 @@ router.get('/follow-up/:taskId/options', authenticate, ctrl.getFollowUpConversio
  *             properties:
  *               project_id:
  *                 type: string
- *                 format: uuid
+ *                 description: Project UUID, an existing project's name, or any free-text project name
  *               visit_date:
  *                 type: string
  *                 format: date

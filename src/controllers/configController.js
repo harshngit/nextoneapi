@@ -763,15 +763,18 @@ const createLeadStatus = async (req, res, next) => {
 
 /**
  * PUT /api/v1/config/lead-statuses/:id
- * Update label, color, sort_order, or is_active on any status.
- * Key cannot be changed (leads.status references it directly).
- * Body: { label?, color?, sort_order?, is_active? }
+ * Update key, label, color, sort_order, or is_active on any status.
+ * System statuses (is_system = true) cannot have their key changed — the app's
+ * business logic (WhatsApp triggers, notifications, exports, etc.) hardcodes
+ * those specific key strings. Custom statuses can freely rename their key;
+ * any leads already using the old key are migrated to the new key.
+ * Body: { key?, label?, color?, sort_order?, is_active? }
  */
 const updateLeadStatus = async (req, res, next) => {
   const client = await pool.connect();
   try {
     const { id } = req.params;
-    const { label, color, sort_order, is_active } = req.body;
+    const { key, label, color, sort_order, is_active } = req.body;
 
     const existing = await pool.query('SELECT * FROM lead_statuses WHERE id = $1', [id]);
     if (!existing.rows.length) return next(new AppError('Lead status not found', 404));
@@ -786,7 +789,22 @@ const updateLeadStatus = async (req, res, next) => {
       if (dupe.rows.length > 0) return next(new AppError(`Status label '${label}' already exists`, 400));
     }
 
+    let cleanKey = null;
+    if (key !== undefined && key !== status.key) {
+      if (status.is_system) {
+        return next(new AppError('The key of a system status cannot be changed', 400));
+      }
+      cleanKey = String(key).trim().toLowerCase().replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '');
+      if (!cleanKey) return next(new AppError('key must contain at least one letter or number', 400));
+      const dupeKey = await pool.query(
+        'SELECT id FROM lead_statuses WHERE key = $1 AND id != $2',
+        [cleanKey, id]
+      );
+      if (dupeKey.rows.length > 0) return next(new AppError(`Status key '${cleanKey}' already exists`, 400));
+    }
+
     const updates = []; const params = []; let idx = 1;
+    if (cleanKey   !== null)      { updates.push(`key = $${idx++}`);        params.push(cleanKey); }
     if (label      !== undefined) { updates.push(`label = $${idx++}`);      params.push(label.trim()); }
     if (color      !== undefined) { updates.push(`color = $${idx++}`);      params.push(color); }
     if (sort_order !== undefined) { updates.push(`sort_order = $${idx++}`); params.push(sort_order); }
@@ -800,11 +818,17 @@ const updateLeadStatus = async (req, res, next) => {
       `UPDATE lead_statuses SET ${updates.join(', ')} WHERE id = $${idx} RETURNING *`,
       params
     );
+
+    // Migrate any leads already using the old key so they don't get orphaned
+    if (cleanKey !== null) {
+      await client.query('UPDATE leads SET status = $1 WHERE status = $2', [cleanKey, status.key]);
+    }
+
     await writeAudit(client, {
       action:      'config_update',
       description: `Lead status updated: ${status.label}`,
       performed_by: req.user.id,
-      metadata:    { action: 'update', id, changes: req.body },
+      metadata:    { action: 'update', id, changes: req.body, old_key: status.key, new_key: cleanKey },
     });
     await client.query('COMMIT');
 

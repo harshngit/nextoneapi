@@ -279,8 +279,11 @@ router.post("/lead-statuses", authenticate, authorize(...ADMIN), ctrl.createLead
  *   put:
  *     summary: Update a lead status (Admin)
  *     description: >
- *       Update the label, color, sort_order or is_active of any status.
- *       The key cannot be changed as it is stored directly in the leads table.
+ *       Update the key, label, color, sort_order or is_active of any status.
+ *       The key of a SYSTEM status (is_system = true) cannot be changed — the
+ *       app's business logic (WhatsApp triggers, notifications, exports) hardcodes
+ *       those key strings. Custom statuses can freely rename their key; any leads
+ *       already using the old key are automatically migrated to the new key.
  *       To remove a status from the dropdown without deleting it, set is_active to false.
  *     tags: [Config]
  *     security:
@@ -298,6 +301,12 @@ router.post("/lead-statuses", authenticate, authorize(...ADMIN), ctrl.createLead
  *           schema:
  *             type: object
  *             properties:
+ *               key:
+ *                 type: string
+ *                 description: >
+ *                   Custom statuses only — renaming a system status's key is rejected.
+ *                   Lowercased, spaces become underscores, other characters stripped.
+ *                 example: "urgent_lead"
  *               label:
  *                 type: string
  *                 example: "Hot Lead"
@@ -312,6 +321,7 @@ router.post("/lead-statuses", authenticate, authorize(...ADMIN), ctrl.createLead
  *                 description: Set false to hide from dropdowns without deleting
  *                 example: false
  *           example:
+ *             key: "urgent_lead"
  *             label: "Hot Lead"
  *             color: "#ef4444"
  *             is_active: true
@@ -329,6 +339,8 @@ router.post("/lead-statuses", authenticate, authorize(...ADMIN), ctrl.createLead
  *                 color: "#ef4444"
  *                 sort_order: 3
  *                 is_active: true
+ *       400:
+ *         description: Key belongs to a system status, or the new key already exists
  *       404:
  *         description: Lead status not found
  */

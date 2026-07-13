@@ -32,6 +32,7 @@
 const { pool }   = require('../config/db')
 const { sendSuccess } = require('../utils/response')
 const AppError   = require('../utils/AppError')
+const { resolveProjectId } = require('../utils/projectResolver')
 
 // ─── Schema definitions returned by /options endpoints ────────────────────────
 // Tells the frontend exactly what fields to show in the modal, with type & validation
@@ -87,7 +88,7 @@ const SITE_VISIT_FIELDS = [
     label:       'Project',
     type:        'project_select',
     required:    true,
-    hint:        'Which project will the client visit?',
+    hint:        'Which project will the client visit? Pick from the list or type a new project name — it does not have to exist yet.',
   },
   {
     key:         'visit_date',
@@ -415,25 +416,37 @@ const convertLeadToSiteVisit = async (req, res, next) => {
       )
     }
 
-    // Verify project exists
-    const projectCheck = await pool.query(
-      `SELECT id, name FROM projects WHERE id = $1`,
-      [project_id]
-    )
-    if (!projectCheck.rows.length) throw new AppError('Project not found', 404)
+    // Resolve project — accepts a project UUID, an existing project's name, or
+    // any free-text project name that doesn't exist yet. If it doesn't match a
+    // real project, the text is stored as-is (project_name_text) instead of
+    // rejecting the request (mirrors leads.project_name_text / site_visits).
+    let resolvedProjectId = null
+    let resolvedProjectNameText = null
+    try {
+      resolvedProjectId = await resolveProjectId(project_id)
+    } catch (e) {
+      resolvedProjectNameText = String(project_id).trim()
+    }
+
+    let projectDisplayName = resolvedProjectNameText
+    if (resolvedProjectId) {
+      const projectRes = await pool.query('SELECT name FROM projects WHERE id = $1', [resolvedProjectId])
+      projectDisplayName = projectRes.rows[0]?.name || projectDisplayName
+    }
 
     await client.query('BEGIN')
 
     // 1. Create the site visit
     const svResult = await client.query(
       `INSERT INTO site_visits
-         (lead_id, project_id, visit_date, visit_time, assigned_to,
+         (lead_id, project_id, project_name_text, visit_date, visit_time, assigned_to,
           status, transport_arranged, notes)
-       VALUES ($1, $2, $3, $4, $5, 'scheduled', $6, $7)
+       VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', $7, $8)
        RETURNING *`,
       [
         leadId,
-        project_id,
+        resolvedProjectId,
+        resolvedProjectNameText,
         visit_date,
         visit_time,
         assigned_to || lead.assigned_to,
@@ -443,23 +456,23 @@ const convertLeadToSiteVisit = async (req, res, next) => {
     )
     const sv = svResult.rows[0]
 
-    // 2. Update lead status to site_visit_scheduled
+    // 2. Update lead status to site_visit_scheduled (only touch lead.project_id
+    //    when we resolved a real project)
     await client.query(
       `UPDATE leads
        SET status     = 'site_visit_scheduled',
            project_id = COALESCE($2, project_id),
            updated_at = NOW()
        WHERE id = $1`,
-      [leadId, project_id]
+      [leadId, resolvedProjectId]
     )
 
     // 3. Log activity
-    const proj = projectCheck.rows[0]
     await logActivity(
       client,
       leadId,
       'status_change',
-      `Site visit scheduled at ${proj.name} on ${visit_date} at ${visit_time}`,
+      `Site visit scheduled at ${projectDisplayName || 'project'} on ${visit_date} at ${visit_time}`,
       req.user.id
     )
 
@@ -476,7 +489,7 @@ const convertLeadToSiteVisit = async (req, res, next) => {
         id:                 sv.id,
         lead_id:            sv.lead_id,
         project_id:         sv.project_id,
-        project_name:       proj.name,
+        project_name:       projectDisplayName || sv.project_name_text,
         visit_date:         sv.visit_date,
         visit_time:         sv.visit_time,
         status:             sv.status,
@@ -525,12 +538,23 @@ const convertFollowUpToSiteVisit = async (req, res, next) => {
       throw new AppError('This follow-up is already completed', 422)
     }
 
-    // Verify project exists
-    const projectCheck = await pool.query(
-      `SELECT id, name FROM projects WHERE id = $1`,
-      [project_id]
-    )
-    if (!projectCheck.rows.length) throw new AppError('Project not found', 404)
+    // Resolve project — accepts a project UUID, an existing project's name, or
+    // any free-text project name that doesn't exist yet. If it doesn't match a
+    // real project, the text is stored as-is (project_name_text) instead of
+    // rejecting the request (mirrors leads.project_name_text / site_visits).
+    let resolvedProjectId = null
+    let resolvedProjectNameText = null
+    try {
+      resolvedProjectId = await resolveProjectId(project_id)
+    } catch (e) {
+      resolvedProjectNameText = String(project_id).trim()
+    }
+
+    let projectDisplayName = resolvedProjectNameText
+    if (resolvedProjectId) {
+      const projectRes = await pool.query('SELECT name FROM projects WHERE id = $1', [resolvedProjectId])
+      projectDisplayName = projectRes.rows[0]?.name || projectDisplayName
+    }
 
     await client.query('BEGIN')
 
@@ -547,13 +571,14 @@ const convertFollowUpToSiteVisit = async (req, res, next) => {
     // 2. Create the site visit
     const svResult = await client.query(
       `INSERT INTO site_visits
-         (lead_id, project_id, visit_date, visit_time, assigned_to,
+         (lead_id, project_id, project_name_text, visit_date, visit_time, assigned_to,
           status, transport_arranged, notes)
-       VALUES ($1, $2, $3, $4, $5, 'scheduled', $6, $7)
+       VALUES ($1, $2, $3, $4, $5, $6, 'scheduled', $7, $8)
        RETURNING *`,
       [
         task.lead_id,
-        project_id,
+        resolvedProjectId,
+        resolvedProjectNameText,
         visit_date,
         visit_time,
         assigned_to || task.assigned_to || task.lead_assigned_to,
@@ -563,7 +588,8 @@ const convertFollowUpToSiteVisit = async (req, res, next) => {
     )
     const sv = svResult.rows[0]
 
-    // 3. Update lead status to site_visit_scheduled
+    // 3. Update lead status to site_visit_scheduled (only touch lead.project_id
+    //    when we resolved a real project)
     const lead = await pool.query(
       `SELECT status FROM leads WHERE id = $1`,
       [task.lead_id]
@@ -577,17 +603,16 @@ const convertFollowUpToSiteVisit = async (req, res, next) => {
              project_id = COALESCE($2, project_id),
              updated_at = NOW()
          WHERE id = $1`,
-        [task.lead_id, project_id]
+        [task.lead_id, resolvedProjectId]
       )
     }
 
     // 4. Log activity on the lead
-    const proj = projectCheck.rows[0]
     await logActivity(
       client,
       task.lead_id,
       'status_change',
-      `Follow-up "${task.title}" converted to site visit at ${proj.name} on ${visit_date} at ${visit_time}`,
+      `Follow-up "${task.title}" converted to site visit at ${projectDisplayName || 'project'} on ${visit_date} at ${visit_time}`,
       req.user.id
     )
 
@@ -609,7 +634,7 @@ const convertFollowUpToSiteVisit = async (req, res, next) => {
         id:                 sv.id,
         lead_id:            sv.lead_id,
         project_id:         sv.project_id,
-        project_name:       proj.name,
+        project_name:       projectDisplayName || sv.project_name_text,
         visit_date:         sv.visit_date,
         visit_time:         sv.visit_time,
         status:             sv.status,

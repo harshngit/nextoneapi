@@ -468,11 +468,17 @@ const createTaskWithLead = async (req, res, next) => {
       return next(new AppError('title and due_date are required for task', 400));
     }
 
-    // project_id takes precedence over project_name
+    // project_id takes precedence over project_name. Neither has to match an
+    // existing project — if it doesn't, it's stored as free text instead
+    // (project_name_text) rather than rejecting the request.
     let resolvedProjectId = null;
     let resolvedProjectNameText = null;
     if (project_id) {
-      resolvedProjectId = await resolveProjectId(project_id);
+      try {
+        resolvedProjectId = await resolveProjectId(project_id);
+      } catch (e) {
+        resolvedProjectNameText = String(project_id).trim();
+      }
     } else if (project_name) {
       const resolved = await resolveProjectName(project_name);
       resolvedProjectId = resolved.projectId;

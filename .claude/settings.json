@@ -10,7 +10,13 @@
       "Bash(node -c src/controllers/projectDocumentsController.js)",
       "Bash(node -c src/routes/projectDocumentsRoutes.js)",
       "Bash(node -c src/routes/projectRoutes.js)",
-      "Bash(node -c src/controllers/salaryController.js)"
+      "Bash(node -c src/controllers/salaryController.js)",
+      "Bash(node -c src/controllers/taskController.js)",
+      "Bash(node -e ' *)",
+      "Bash(node -c src/controllers/conversionController.js)",
+      "Bash(node -c src/routes/conversionRoutes.js)",
+      "Bash(node -c src/controllers/configController.js)",
+      "Bash(node -c src/routes/configRoutes.js)"
     ]
   }
 }

@@ -513,11 +513,10 @@ CREATE TABLE IF NOT EXISTS leads (
   alternate_phone_number    VARCHAR(20),
   email                     VARCHAR(255),
   source                    VARCHAR(100),
-  status                    VARCHAR(50)  DEFAULT 'new' CHECK (status IN (
-                              'new','contacted','interested','follow_up',
-                              'site_visit_scheduled','site_visit_done',
-                              'negotiation','booked','lost'
-                            )),
+  status                    VARCHAR(50)  DEFAULT 'new',
+  -- No CHECK constraint: valid statuses are governed by the lead_statuses
+  -- table + app-level validation (isValidLeadStatus in leadController.js),
+  -- so admin-defined custom statuses (migration 048) can be saved here too.
   budget                    VARCHAR(100),
   location_preference       VARCHAR(255),
   configuration             VARCHAR(255),
