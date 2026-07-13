@@ -4,7 +4,10 @@ const AppError = require("../utils/AppError");
 const fs       = require("fs");
 const path     = require("path");
 
-const VALID_STATUSES = ["active", "inactive", "upcoming", "completed"];
+const VALID_STATUSES = [
+  "active", "inactive", "upcoming", "completed",
+  "under_construction", "pre_launch", "nearby_possession", "ready_to_move",
+];
 
 const BACKEND_URL = (process.env.BACKEND_URL || "").replace(/\/+$/, "");
 const toFullUrl = (relativePath) => {
@@ -67,12 +70,22 @@ const getAllProjects = async (req, res, next) => {
           ...d,
           url: toFullUrl(`/api/v1/projects/${row.id}/documents/${d.id}/download`)
         }));
+        row.photos = row.documents.filter(d => d.document_type === 'photo').map(d => ({
+          ...d,
+          url: toFullUrl(`/api/v1/projects/${row.id}/documents/${d.id}/download`)
+        }));
+        row.developer_logo = row.documents.filter(d => d.document_type === 'developer_logo').map(d => ({
+          ...d,
+          url: toFullUrl(`/api/v1/projects/${row.id}/documents/${d.id}/download`)
+        }))[0] || null;
         delete row.documents;
       } else {
         row.unit_plans = [];
         row.creatives = [];
         row.payment_plans = [];
         row.videos = [];
+        row.photos = [];
+        row.developer_logo = null;
       }
       row.brochure_url = toFullUrl(row.brochure_url);
       row.video_url = toFullUrl(row.video_url);
@@ -97,7 +110,7 @@ const createProject = async (req, res, next) => {
         price_range, total_units, possession_date, rera_number,
         amenities, status = "active", brochure_url, description,
         video_url, payment_plan, payment_plan_url, home_loan_info,
-        unit_plans, creatives, payment_plans, videos, // Arrays of document objects from JSON body
+        unit_plans, creatives, payment_plans, videos, photos, developer_logo, // Arrays of document objects from JSON body
     } = req.body;
 
     const resolvedPaymentPlan = payment_plan !== undefined ? payment_plan : payment_plan_url;
@@ -168,6 +181,12 @@ const createProject = async (req, res, next) => {
     if (videos && Array.isArray(videos)) {
       await processDocuments(videos, "video");
     }
+    if (photos && Array.isArray(photos)) {
+      await processDocuments(photos, "photo");
+    }
+    if (developer_logo) {
+      await processDocuments(Array.isArray(developer_logo) ? developer_logo : [developer_logo], "developer_logo");
+    }
 
     await client.query("COMMIT");
 
@@ -183,6 +202,8 @@ const createProject = async (req, res, next) => {
         creatives:  savedDocs.filter(d => d.document_type === "creative"),
         payment_plans: savedDocs.filter(d => d.document_type === "payment_plan"),
         videos: savedDocs.filter(d => d.document_type === "video"),
+        photos: savedDocs.filter(d => d.document_type === "photo"),
+        developer_logo: savedDocs.find(d => d.document_type === "developer_logo") || null,
       } : null,
     }, 201);
   } catch (err) {
@@ -230,12 +251,22 @@ const getProjectById = async (req, res, next) => {
         ...d,
         url: toFullUrl(`/api/v1/projects/${project.id}/documents/${d.id}/download`)
       }));
+      project.photos = project.documents.filter(d => d.document_type === 'photo').map(d => ({
+        ...d,
+        url: toFullUrl(`/api/v1/projects/${project.id}/documents/${d.id}/download`)
+      }));
+      project.developer_logo = project.documents.filter(d => d.document_type === 'developer_logo').map(d => ({
+        ...d,
+        url: toFullUrl(`/api/v1/projects/${project.id}/documents/${d.id}/download`)
+      }))[0] || null;
       delete project.documents;
     } else {
       project.unit_plans = [];
       project.creatives = [];
       project.payment_plans = [];
       project.videos = [];
+      project.photos = [];
+      project.developer_logo = null;
     }
     project.brochure_url = toFullUrl(project.brochure_url);
     project.video_url = toFullUrl(project.video_url);
@@ -257,7 +288,7 @@ const updateProject = async (req, res, next) => {
     const existing = await client.query("SELECT id FROM projects WHERE id = $1", [id]);
     if (existing.rows.length === 0) return next(new AppError("Project not found", 404));
 
-    const { unit_plans, creatives, payment_plans, videos, payment_plan_url } = req.body;
+    const { unit_plans, creatives, payment_plans, videos, photos, developer_logo, payment_plan_url } = req.body;
 
     const fields = ["name", "developer", "city", "locality", "address", "price_range",
                     "total_units", "possession_date", "rera_number", "brochure_url", "description",
@@ -326,6 +357,10 @@ const updateProject = async (req, res, next) => {
     if (creatives && Array.isArray(creatives)) await processDocuments(creatives, "creative");
     if (payment_plans && Array.isArray(payment_plans)) await processDocuments(payment_plans, "payment_plan");
     if (videos && Array.isArray(videos)) await processDocuments(videos, "video");
+    if (photos && Array.isArray(photos)) await processDocuments(photos, "photo");
+    if (developer_logo) {
+      await processDocuments(Array.isArray(developer_logo) ? developer_logo : [developer_logo], "developer_logo");
+    }
 
     if (updates.length === 0 && savedDocs.length === 0) {
       await client.query("ROLLBACK");
@@ -346,6 +381,8 @@ const updateProject = async (req, res, next) => {
         creatives: savedDocs.filter(d => d.document_type === "creative"),
         payment_plans: savedDocs.filter(d => d.document_type === "payment_plan"),
         videos: savedDocs.filter(d => d.document_type === "video"),
+        photos: savedDocs.filter(d => d.document_type === "photo"),
+        developer_logo: savedDocs.find(d => d.document_type === "developer_logo") || null,
       } : null,
     });
   } catch (err) {

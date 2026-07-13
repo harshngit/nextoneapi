@@ -41,7 +41,8 @@ const uploadProjectDocuments = async (req, res, next) => {
       return next(new AppError('Project not found', 404));
     }
 
-    if (!req.files || (!req.files.unit_plans && !req.files.creatives && !req.files.payment_plans && !req.files.videos)) {
+    if (!req.files || (!req.files.unit_plans && !req.files.creatives && !req.files.payment_plans
+        && !req.files.videos && !req.files.photos && !req.files.developer_logo)) {
       return next(new AppError('No files uploaded', 400));
     }
 
@@ -129,13 +130,63 @@ const uploadProjectDocuments = async (req, res, next) => {
     if (req.files.videos) {
       for (const file of req.files.videos) {
         const result = await client.query(
-          `INSERT INTO project_documents 
+          `INSERT INTO project_documents
             (project_id, document_type, file_name, file_path, file_size, mime_type, uploaded_by)
            VALUES ($1, $2, $3, $4, $5, $6, $7)
            RETURNING *`,
           [
             projectId,
             'video',
+            file.originalname,
+            file.path,
+            file.size,
+            file.mimetype,
+            uploadedBy,
+          ]
+        );
+        uploadedDocs.push({
+          ...result.rows[0],
+          url: toFullUrl(`/api/v1/projects/${projectId}/documents/${result.rows[0].id}/download`),
+        });
+      }
+    }
+
+    // Process photos
+    if (req.files.photos) {
+      for (const file of req.files.photos) {
+        const result = await client.query(
+          `INSERT INTO project_documents
+            (project_id, document_type, file_name, file_path, file_size, mime_type, uploaded_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           RETURNING *`,
+          [
+            projectId,
+            'photo',
+            file.originalname,
+            file.path,
+            file.size,
+            file.mimetype,
+            uploadedBy,
+          ]
+        );
+        uploadedDocs.push({
+          ...result.rows[0],
+          url: toFullUrl(`/api/v1/projects/${projectId}/documents/${result.rows[0].id}/download`),
+        });
+      }
+    }
+
+    // Process developer logo
+    if (req.files.developer_logo) {
+      for (const file of req.files.developer_logo) {
+        const result = await client.query(
+          `INSERT INTO project_documents
+            (project_id, document_type, file_name, file_path, file_size, mime_type, uploaded_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           RETURNING *`,
+          [
+            projectId,
+            'developer_logo',
             file.originalname,
             file.path,
             file.size,
@@ -182,6 +233,16 @@ const uploadProjectDocuments = async (req, res, next) => {
           if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
         });
       }
+      if (req.files.photos) {
+        req.files.photos.forEach((file) => {
+          if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+        });
+      }
+      if (req.files.developer_logo) {
+        req.files.developer_logo.forEach((file) => {
+          if (fs.existsSync(file.path)) fs.unlinkSync(file.path);
+        });
+      }
     }
     next(err);
   } finally {
@@ -223,7 +284,7 @@ const getProjectDocuments = async (req, res, next) => {
 
     const params = [projectId];
 
-    if (document_type && ['unit_plan', 'creative', 'payment_plan', 'video'].includes(document_type)) {
+    if (document_type && ['unit_plan', 'creative', 'payment_plan', 'video', 'photo', 'developer_logo'].includes(document_type)) {
       query += ' AND pd.document_type = $2';
       params.push(document_type);
     }
@@ -244,6 +305,8 @@ const getProjectDocuments = async (req, res, next) => {
       creatives: documents.filter((d) => d.document_type === 'creative'),
       payment_plans: documents.filter((d) => d.document_type === 'payment_plan'),
       videos: documents.filter((d) => d.document_type === 'video'),
+      photos: documents.filter((d) => d.document_type === 'photo'),
+      developer_logo: documents.find((d) => d.document_type === 'developer_logo') || null,
     };
 
     return sendSuccess(res, 'Documents fetched successfully', {
@@ -375,7 +438,7 @@ const downloadAllProjectDocuments = async (req, res, next) => {
     let query = 'SELECT * FROM project_documents WHERE project_id = $1';
     const params = [projectId];
 
-    if (document_type && ['unit_plan', 'creative', 'payment_plan', 'video'].includes(document_type)) {
+    if (document_type && ['unit_plan', 'creative', 'payment_plan', 'video', 'photo', 'developer_logo'].includes(document_type)) {
       query += ' AND document_type = $2';
       params.push(document_type);
     }
@@ -404,9 +467,11 @@ const downloadAllProjectDocuments = async (req, res, next) => {
     let addedCount = 0;
     for (const doc of docsResult.rows) {
       if (fs.existsSync(doc.file_path)) {
-        const folderName = doc.document_type === 'unit_plan' ? 'Unit Plans' 
-        : doc.document_type === 'creative' ? 'Creatives' 
-        : doc.document_type === 'payment_plan' ? 'Payment Plans' 
+        const folderName = doc.document_type === 'unit_plan' ? 'Unit Plans'
+        : doc.document_type === 'creative' ? 'Creatives'
+        : doc.document_type === 'payment_plan' ? 'Payment Plans'
+        : doc.document_type === 'photo' ? 'Photos'
+        : doc.document_type === 'developer_logo' ? 'Developer Logo'
         : 'Videos';
         archive.file(doc.file_path, { name: `${folderName}/${doc.file_name}` });
         addedCount++;
@@ -605,6 +670,58 @@ const uploadStandaloneVideo = async (req, res, next) => {
   }
 };
 
+/**
+ * POST /api/v1/projects/upload-photo
+ * Upload a single project photo (no project ID required)
+ */
+const uploadStandalonePhoto = async (req, res, next) => {
+  try {
+    const file = req.file || (req.files && req.files[0]);
+    if (!file) {
+      return next(new AppError('No photo file uploaded', 400));
+    }
+
+    const fileData = {
+      file_name: file.originalname,
+      file_path: file.path.replace(/\\/g, '/'),
+      file_size: file.size,
+      mime_type: file.mimetype,
+      url: toFullUrl(`/uploads/projects/temp/photos/${file.filename}`),
+      document_type: 'photo'
+    };
+
+    return sendSuccess(res, 'Photo uploaded successfully', fileData, 201);
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * POST /api/v1/projects/upload-developer-logo
+ * Upload a developer logo (no project ID required)
+ */
+const uploadStandaloneDeveloperLogo = async (req, res, next) => {
+  try {
+    const file = req.file || (req.files && req.files[0]);
+    if (!file) {
+      return next(new AppError('No developer logo file uploaded', 400));
+    }
+
+    const fileData = {
+      file_name: file.originalname,
+      file_path: file.path.replace(/\\/g, '/'),
+      file_size: file.size,
+      mime_type: file.mimetype,
+      url: toFullUrl(`/uploads/projects/temp/developer_logo/${file.filename}`),
+      document_type: 'developer_logo'
+    };
+
+    return sendSuccess(res, 'Developer logo uploaded successfully', fileData, 201);
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   uploadProjectDocuments,
   getProjectDocuments,
@@ -619,4 +736,6 @@ module.exports = {
   uploadStandaloneCreative,
   uploadStandalonePaymentPlan,
   uploadStandaloneVideo,
+  uploadStandalonePhoto,
+  uploadStandaloneDeveloperLogo,
 };

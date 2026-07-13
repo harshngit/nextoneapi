@@ -10,15 +10,17 @@
  *
  * Earned salary formula:
  *   working_days  = total Mon–Fri days in the month (or manually overridable)
- *   present_days  = present + late + (0.5 × half_day)
+ *   present_days  = full_present + (0.5 × late_half_day) + (0.5 × half_day_leave)
  *   per_day       = monthly_salary / working_days
  *   earned        = per_day × present_days
  *   final         = earned - deductions
  *
- * Attendance → salary mapping (set by attendance rules):
- *   present / late  = 1 full day  (check-in 10:30–14:00 AND checkout ≥ 19:30)
- *   half_day        = 0.5 day     (check-in after 14:00 OR checkout before 19:30)
- *   absent / leave  = 0
+ * Attendance → salary mapping:
+ *   present                                   = 1 full day
+ *   late, checked in by 10:35 AM (late_by_minutes <= 5)  = 1 full day
+ *   late, checked in AFTER 10:35 AM (late_by_minutes > 5) = 0.5 day (50% cut for that day)
+ *   leave (leave_type = half_day)             = 0.5 day
+ *   absent / leave (other)                    = 0
  */
 
 const { pool }      = require('../config/db')
@@ -243,10 +245,14 @@ const generateSalarySlip = async (req, res, next) => {
     const start = `${y}-${String(m).padStart(2, '0')}-01`
     const end   = new Date(y, m, 0).toISOString().split('T')[0]
 
-    // Pull attendance summary for the month
+    // Pull attendance summary for the month.
+    // late_by_minutes is minutes past the 10:30 AM cutoff (set at check-in) —
+    // > 5 means the check-in was after 10:35 AM, which counts as a half day
+    // (50% salary cut for that day) instead of a full day.
     const attResult = await pool.query(
       `SELECT
-         COUNT(*) FILTER (WHERE status IN ('present', 'late'))                                    AS present_count,
+         COUNT(*) FILTER (WHERE status IN ('present', 'late') AND (late_by_minutes IS NULL OR late_by_minutes <= 5)) AS full_present_count,
+         COUNT(*) FILTER (WHERE status = 'late' AND late_by_minutes > 5)                        AS late_half_day_count,
          COUNT(*) FILTER (WHERE status = 'leave' AND leave_type = 'half_day')                    AS half_day_leave_count,
          COUNT(*) FILTER (WHERE status = 'leave' AND (leave_type IS NULL OR leave_type != 'half_day')) AS full_leave_count,
          COUNT(*) FILTER (WHERE status = 'absent')                                               AS absent_count
@@ -256,12 +262,13 @@ const generateSalarySlip = async (req, res, next) => {
     )
 
     const att = attResult.rows[0]
-    const presentCount      = parseFloat(att.present_count)       || 0
+    const fullPresentCount  = parseFloat(att.full_present_count)   || 0
+    const lateHalfDayCount  = parseFloat(att.late_half_day_count)  || 0
     const halfDayLeaveCount = parseFloat(att.half_day_leave_count) || 0
     const fullLeaveCount    = parseFloat(att.full_leave_count)    || 0
     const absentCount       = parseFloat(att.absent_count)        || 0
 
-    const presentDays = presentCount + (halfDayLeaveCount * 0.5)
+    const presentDays = fullPresentCount + (lateHalfDayCount * 0.5) + (halfDayLeaveCount * 0.5)
     const absentDays  = absentCount
     const leaveDays   = fullLeaveCount + halfDayLeaveCount
 
@@ -641,11 +648,13 @@ const generateAllSalarySlips = async (req, res, next) => {
       : countWorkingDays(y, m)
     const monthName    = new Date(y, m - 1).toLocaleString('en-IN', { month: 'long' })
 
-    // Fetch attendance for ALL employees in one query
+    // Fetch attendance for ALL employees in one query.
+    // late_by_minutes > 5 means check-in was after 10:35 AM → half day (50% cut).
     const attResult = await pool.query(
       `SELECT
          user_id,
-         COUNT(*) FILTER (WHERE status IN ('present', 'late'))                                    AS present_count,
+         COUNT(*) FILTER (WHERE status IN ('present', 'late') AND (late_by_minutes IS NULL OR late_by_minutes <= 5)) AS full_present_count,
+         COUNT(*) FILTER (WHERE status = 'late' AND late_by_minutes > 5)                        AS late_half_day_count,
          COUNT(*) FILTER (WHERE status = 'leave' AND leave_type = 'half_day')                    AS half_day_leave_count,
          COUNT(*) FILTER (WHERE status = 'leave' AND (leave_type IS NULL OR leave_type != 'half_day')) AS full_leave_count,
          COUNT(*) FILTER (WHERE status = 'absent')                                               AS absent_count
@@ -664,12 +673,13 @@ const generateAllSalarySlips = async (req, res, next) => {
 
     for (const emp of employees.rows) {
       try {
-        const att = attMap[emp.id] || { present_count: 0, half_day_leave_count: 0, full_leave_count: 0, absent_count: 0 }
-        const presentCount      = parseFloat(att.present_count)       || 0
+        const att = attMap[emp.id] || { full_present_count: 0, late_half_day_count: 0, half_day_leave_count: 0, full_leave_count: 0, absent_count: 0 }
+        const fullPresentCount  = parseFloat(att.full_present_count)   || 0
+        const lateHalfDayCount  = parseFloat(att.late_half_day_count)  || 0
         const halfDayLeaveCount = parseFloat(att.half_day_leave_count) || 0
         const fullLeaveCount    = parseFloat(att.full_leave_count)    || 0
         const absentCount       = parseFloat(att.absent_count)        || 0
-        const presentDays  = presentCount + (halfDayLeaveCount * 0.5)
+        const presentDays  = fullPresentCount + (lateHalfDayCount * 0.5) + (halfDayLeaveCount * 0.5)
         const absentDays   = absentCount
         const leaveDays    = fullLeaveCount + halfDayLeaveCount
 

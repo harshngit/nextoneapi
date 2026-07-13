@@ -6,7 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticate } = require('../middleware/auth');
-const { uploadProjectDocuments, uploadUnitPlan, uploadCreative, uploadPaymentPlan, uploadVideo } = require('../middleware/uploadMiddleware');
+const { uploadProjectDocuments, uploadUnitPlan, uploadCreative, uploadPaymentPlan, uploadVideo, uploadPhoto, uploadDeveloperLogo } = require('../middleware/uploadMiddleware');
 const {
   uploadProjectDocuments: uploadDocs,
   getProjectDocuments,
@@ -21,6 +21,8 @@ const {
   uploadStandaloneCreative,
   uploadStandalonePaymentPlan,
   uploadStandaloneVideo,
+  uploadStandalonePhoto,
+  uploadStandaloneDeveloperLogo,
 } = require('../controllers/projectDocumentsController');
 
 /**
@@ -136,10 +138,73 @@ router.post('/upload-video', authenticate, uploadVideo, uploadStandaloneVideo);
 
 /**
  * @swagger
+ * /api/v1/projects/upload-photo:
+ *   post:
+ *     summary: Upload a single project photo
+ *     description: >
+ *       Full URL: POST https://api.nextonerealty.in/api/v1/projects/upload-photo
+ *
+ *       Uploads a project photo without requiring a project ID. Returns file details
+ *       (file_name, file_path, file_size, mime_type, url) — pass that into the photos
+ *       array when creating/updating a project, or attach directly via
+ *       POST /api/v1/projects/{id}/documents.
+ *     tags: [Project Documents]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *                 description: Photo file (accepts any field name)
+ *     responses:
+ *       201:
+ *         description: Photo uploaded successfully
+ */
+router.post('/upload-photo', authenticate, uploadPhoto, uploadStandalonePhoto);
+
+/**
+ * @swagger
+ * /api/v1/projects/upload-developer-logo:
+ *   post:
+ *     summary: Upload a developer logo
+ *     description: >
+ *       Full URL: POST https://api.nextonerealty.in/api/v1/projects/upload-developer-logo
+ *
+ *       Uploads a developer logo without requiring a project ID. Returns file details
+ *       — pass that into the developer_logo field when creating/updating a project,
+ *       or attach directly via POST /api/v1/projects/{id}/documents.
+ *     tags: [Project Documents]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *                 description: Logo image (accepts any field name)
+ *     responses:
+ *       201:
+ *         description: Developer logo uploaded successfully
+ */
+router.post('/upload-developer-logo', authenticate, uploadDeveloperLogo, uploadStandaloneDeveloperLogo);
+
+/**
+ * @swagger
  * /api/v1/projects/{id}/documents:
  *   post:
- *     summary: Upload unit plans and creatives for a project
- *     description: Uploads multiple files as unit plans, creatives, payment plans, or videos for a specific project.
+ *     summary: Upload unit plans, creatives, photos, developer logo, and more for a project
+ *     description: Uploads multiple files as unit plans, creatives, payment plans, videos, photos, or developer logo for a specific project.
  *     tags: [Project Documents]
  *     security:
  *       - BearerAuth: []
@@ -182,6 +247,16 @@ router.post('/upload-video', authenticate, uploadVideo, uploadStandaloneVideo);
  *                   type: string
  *                   format: binary
  *                 description: Video documents (multiple)
+ *               photos:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: binary
+ *                 description: Project photos (multiple, up to 20)
+ *               developer_logo:
+ *                 type: string
+ *                 format: binary
+ *                 description: Developer logo (single file)
  *     responses:
  *       200:
  *         description: Documents uploaded successfully

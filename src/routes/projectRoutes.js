@@ -31,7 +31,7 @@ const { uploadProjectDocuments }   = require("../middleware/uploadMiddleware");
  *         name: status
  *         schema:
  *           type: string
- *           enum: [active, inactive, upcoming, completed]
+ *           enum: [active, inactive, upcoming, completed, under_construction, pre_launch, nearby_possession, ready_to_move]
  *         example: active
  *       - in: query
  *         name: city
@@ -68,7 +68,16 @@ const { uploadProjectDocuments }   = require("../middleware/uploadMiddleware");
  *                   city: "Mumbai"
  *                   locality: "Andheri West"
  *                   status: "active"
- *                   configurations: ["1BHK", "2BHK", "3BHK"]
+ *                   configurations:
+ *                     - configuration: "1BHK"
+ *                       carpet_area: "450 sqft"
+ *                       price: "65L"
+ *                     - configuration: "2BHK"
+ *                       carpet_area: "650 sqft"
+ *                       price: "85L"
+ *                     - configuration: "3BHK"
+ *                       carpet_area: "950 sqft"
+ *                       price: "1.2Cr"
  *                   price_range: "80L - 2Cr"
  *                   total_leads: 45
  *               pagination:
@@ -107,8 +116,19 @@ router.get("/", authenticate, projectController.getAllProjects);
  *               address:         { type: string }
  *               configurations:
  *                 type: array
- *                 items: { type: string }
- *                 example: ["1BHK", "2BHK", "3BHK"]
+ *                 description: >
+ *                   Each unit configuration with its own carpet area and price
+ *                   (not just a plain list of names).
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     configuration: { type: string, example: "2BHK" }
+ *                     carpet_area:   { type: string, example: "650 sqft" }
+ *                     price:         { type: string, example: "85L" }
+ *                 example:
+ *                   - { configuration: "1BHK", carpet_area: "450 sqft", price: "65L" }
+ *                   - { configuration: "2BHK", carpet_area: "650 sqft", price: "85L" }
+ *                   - { configuration: "3BHK", carpet_area: "950 sqft", price: "1.2Cr" }
  *               price_range:     { type: string, example: "80L - 1.5Cr" }
  *               total_units:     { type: integer }
  *               possession_date: { type: string, format: date }
@@ -117,12 +137,36 @@ router.get("/", authenticate, projectController.getAllProjects);
  *                 type: array
  *                 items: { type: string }
  *                 example: ["Swimming Pool", "Gym", "Clubhouse"]
- *               status:          { type: string, enum: [active, upcoming, completed, inactive] }
+ *               status:
+ *                 type: string
+ *                 enum: [active, upcoming, completed, inactive, under_construction, pre_launch, nearby_possession, ready_to_move]
  *               description:     { type: string }
  *               brochure_url:    { type: string }
  *               video_url:       { type: string }
  *               payment_plan_url: { type: string }
  *               home_loan_info:  { type: string }
+ *               photos:
+ *                 type: array
+ *                 description: >
+ *                   Optional. Get file_name/file_path/file_size/mime_type from
+ *                   POST /api/v1/projects/upload-photo first, then pass it here.
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     file_name: { type: string, example: "exterior_1.jpg" }
+ *                     file_path: { type: string, example: "/uploads/projects/exterior_1.jpg" }
+ *                     file_size: { type: integer, example: 204800 }
+ *                     mime_type: { type: string, example: "image/jpeg" }
+ *               developer_logo:
+ *                 type: object
+ *                 description: >
+ *                   Optional. Get file_name/file_path/file_size/mime_type from
+ *                   POST /api/v1/projects/upload-developer-logo first, then pass it here.
+ *                 properties:
+ *                   file_name: { type: string, example: "lodha_logo.png" }
+ *                   file_path: { type: string, example: "/uploads/projects/lodha_logo.png" }
+ *                   file_size: { type: integer, example: 51200 }
+ *                   mime_type: { type: string, example: "image/png" }
  *               unit_plans:
  *                 type: array
  *                 items:
@@ -166,9 +210,15 @@ router.get("/", authenticate, projectController.getAllProjects);
  *             locality: "Andheri West"
  *             address: "Plot 14, Veera Desai Road"
  *             configurations:
- *               - "1BHK"
- *               - "2BHK"
- *               - "3BHK"
+ *               - configuration: "1BHK"
+ *                 carpet_area: "450 sqft"
+ *                 price: "65L"
+ *               - configuration: "2BHK"
+ *                 carpet_area: "650 sqft"
+ *                 price: "85L"
+ *               - configuration: "3BHK"
+ *                 carpet_area: "950 sqft"
+ *                 price: "1.2Cr"
  *             price_range: "80L - 1.5Cr"
  *             total_units: 240
  *             possession_date: "2027-12-01"
@@ -183,6 +233,16 @@ router.get("/", authenticate, projectController.getAllProjects);
  *             video_url: "https://youtube.com/watch?v=abc"
  *             payment_plan_url: "/uploads/projects/payment_plan.pdf"
  *             home_loan_info: "Available through HDFC, SBI, ICICI"
+ *             photos:
+ *               - file_name: "exterior_1.jpg"
+ *                 file_path: "/uploads/projects/exterior_1.jpg"
+ *                 file_size: 204800
+ *                 mime_type: "image/jpeg"
+ *             developer_logo:
+ *               file_name: "lodha_logo.png"
+ *               file_path: "/uploads/projects/lodha_logo.png"
+ *               file_size: 51200
+ *               mime_type: "image/png"
  *             unit_plans:
  *               - file_name: "2bhk_floorplan.pdf"
  *                 file_path: "/uploads/projects/2bhk_floorplan.pdf"
@@ -258,7 +318,16 @@ router.post(
  *                 city: "Mumbai"
  *                 locality: "Andheri West"
  *                 address: "Plot 14, Veera Desai Road"
- *                 configurations: ["1BHK", "2BHK", "3BHK"]
+ *                 configurations:
+ *                   - configuration: "1BHK"
+ *                     carpet_area: "450 sqft"
+ *                     price: "65L"
+ *                   - configuration: "2BHK"
+ *                     carpet_area: "650 sqft"
+ *                     price: "85L"
+ *                   - configuration: "3BHK"
+ *                     carpet_area: "950 sqft"
+ *                     price: "1.2Cr"
  *                 price_range: "80L - 2Cr"
  *                 total_units: 240
  *                 possession_date: "2027-12-01"
@@ -306,8 +375,17 @@ router.get("/:id", authenticate, projectController.getProjectById);
  *               address:         { type: string }
  *               configurations:
  *                 type: array
- *                 items: { type: string }
- *                 example: ["1BHK", "2BHK", "3BHK"]
+ *                 description: Each unit configuration with its own carpet area and price
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     configuration: { type: string, example: "2BHK" }
+ *                     carpet_area:   { type: string, example: "650 sqft" }
+ *                     price:         { type: string, example: "85L" }
+ *                 example:
+ *                   - { configuration: "1BHK", carpet_area: "450 sqft", price: "65L" }
+ *                   - { configuration: "2BHK", carpet_area: "650 sqft", price: "85L" }
+ *                   - { configuration: "3BHK", carpet_area: "950 sqft", price: "1.2Cr" }
  *               price_range:     { type: string, example: "90L - 2.2Cr" }
  *               total_units:     { type: integer }
  *               possession_date: { type: string, format: date }
@@ -318,12 +396,30 @@ router.get("/:id", authenticate, projectController.getProjectById);
  *                 example: ["Swimming Pool", "Gym", "Clubhouse"]
  *               status:
  *                 type: string
- *                 enum: [active, upcoming, completed, inactive]
+ *                 enum: [active, upcoming, completed, inactive, under_construction, pre_launch, nearby_possession, ready_to_move]
  *               description:     { type: string }
  *               brochure_url:    { type: string }
  *               video_url:       { type: string }
  *               payment_plan_url: { type: string }
  *               home_loan_info:  { type: string }
+ *               photos:
+ *                 type: array
+ *                 description: Get file details from POST /api/v1/projects/upload-photo first
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     file_name: { type: string, example: "exterior_1.jpg" }
+ *                     file_path: { type: string, example: "/uploads/projects/exterior_1.jpg" }
+ *                     file_size: { type: integer, example: 204800 }
+ *                     mime_type: { type: string, example: "image/jpeg" }
+ *               developer_logo:
+ *                 type: object
+ *                 description: Get file details from POST /api/v1/projects/upload-developer-logo first
+ *                 properties:
+ *                   file_name: { type: string, example: "lodha_logo.png" }
+ *                   file_path: { type: string, example: "/uploads/projects/lodha_logo.png" }
+ *                   file_size: { type: integer, example: 51200 }
+ *                   mime_type: { type: string, example: "image/png" }
  *               unit_plans:
  *                 type: array
  *                 description: New unit plan documents to add
@@ -371,9 +467,15 @@ router.get("/:id", authenticate, projectController.getProjectById);
  *             locality: "Andheri West"
  *             address: "Plot 14, Veera Desai Road"
  *             configurations:
- *               - "1BHK"
- *               - "2BHK"
- *               - "3BHK"
+ *               - configuration: "1BHK"
+ *                 carpet_area: "450 sqft"
+ *                 price: "70L"
+ *               - configuration: "2BHK"
+ *                 carpet_area: "650 sqft"
+ *                 price: "90L"
+ *               - configuration: "3BHK"
+ *                 carpet_area: "950 sqft"
+ *                 price: "1.3Cr"
  *             price_range: "90L - 2.2Cr"
  *             total_units: 240
  *             possession_date: "2027-12-01"
@@ -492,9 +594,9 @@ router.delete("/:id", authenticate, authorize("super_admin", "admin"), projectCo
  *             properties:
  *               status:
  *                 type: string
- *                 enum: [active, inactive, upcoming, completed]
+ *                 enum: [active, inactive, upcoming, completed, under_construction, pre_launch, nearby_possession, ready_to_move]
  *           example:
- *             status: "completed"
+ *             status: "ready_to_move"
  *     responses:
  *       200:
  *         description: Project status updated

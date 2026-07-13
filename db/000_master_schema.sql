@@ -467,7 +467,10 @@ CREATE TABLE IF NOT EXISTS projects (
   possession_date  DATE,
   rera_number      VARCHAR(100),
   amenities        JSONB       DEFAULT '[]',
-  status           VARCHAR(20) DEFAULT 'active' CHECK (status IN ('active','inactive','upcoming','completed')),
+  status           VARCHAR(20) DEFAULT 'active' CHECK (status IN (
+                     'active','inactive','upcoming','completed',
+                     'under_construction','pre_launch','nearby_possession','ready_to_move'
+                   )),
   brochure_url     TEXT,
   description      TEXT,
   video_url        TEXT,
@@ -487,7 +490,7 @@ CREATE INDEX IF NOT EXISTS idx_projects_city   ON projects(city);
 CREATE TABLE IF NOT EXISTS project_documents (
   id            UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
   project_id    UUID        NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-  document_type VARCHAR(20) NOT NULL CHECK (document_type IN ('unit_plan','creative','payment_plan','video')),
+  document_type VARCHAR(20) NOT NULL CHECK (document_type IN ('unit_plan','creative','payment_plan','video','photo','developer_logo')),
   file_name     VARCHAR(255) NOT NULL,
   file_path     TEXT        NOT NULL,
   file_size     INTEGER     NOT NULL,

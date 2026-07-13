@@ -6,7 +6,11 @@
       "Bash(node -e \"require\\('./src/routes/siteRevisitRoutes'\\); console.log\\('OK'\\)\")",
       "Bash(node -e \"require\\('./src/routes/siteVisitRoutes'\\); console.log\\('OK'\\)\")",
       "Bash(node -e \"require\\('./src/routes/siteVisitRoutes'\\); require\\('./src/routes/siteRevisitRoutes'\\); console.log\\('OK'\\)\")",
-      "Bash(node -e \"require\\('./src/controllers/siteVisitController'\\); require\\('./src/controllers/siteRevisitController'\\); console.log\\('OK'\\)\")"
+      "Bash(node -e \"require\\('./src/controllers/siteVisitController'\\); require\\('./src/controllers/siteRevisitController'\\); console.log\\('OK'\\)\")",
+      "Bash(node -c src/controllers/projectDocumentsController.js)",
+      "Bash(node -c src/routes/projectDocumentsRoutes.js)",
+      "Bash(node -c src/routes/projectRoutes.js)",
+      "Bash(node -c src/controllers/salaryController.js)"
     ]
   }
 }

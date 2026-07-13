@@ -591,10 +591,25 @@ const buildProjectsSheet = async (wb) => {
   styleHeader(h, 'FFB45309')
 
   const STATUS_C = {
-    active:    { fill: 'FFD1FAE5', font: '065F46' },
-    inactive:  { fill: 'FFFEE2E2', font: '991B1B' },
-    upcoming:  { fill: 'FFCFFAFE', font: '164E63' },
-    completed: { fill: 'FFE0E7FF', font: '3730A3' },
+    active:              { fill: 'FFD1FAE5', font: '065F46' },
+    inactive:            { fill: 'FFFEE2E2', font: '991B1B' },
+    upcoming:            { fill: 'FFCFFAFE', font: '164E63' },
+    completed:           { fill: 'FFE0E7FF', font: '3730A3' },
+    under_construction:  { fill: 'FFFEF3C7', font: '92400E' },
+    pre_launch:          { fill: 'FFEDE9FE', font: '4C1D95' },
+    nearby_possession:   { fill: 'FFFFEDD5', font: '9A3412' },
+    ready_to_move:       { fill: 'FFD1FAE5', font: '065F46' },
+  }
+
+  // configurations is an array of { configuration, carpet_area, price } objects.
+  // Older rows may still hold plain strings — support both.
+  const formatConfigurations = (configurations) => {
+    if (!Array.isArray(configurations) || !configurations.length) return '—'
+    return configurations.map(c => {
+      if (typeof c === 'string') return c
+      const parts = [c.configuration, c.carpet_area, c.price].filter(Boolean)
+      return parts.join(' - ')
+    }).join(', ')
   }
 
   rows.rows.forEach((r, i) => {
@@ -602,7 +617,7 @@ const buildProjectsSheet = async (wb) => {
     const row = ws.addRow({
       sno: i + 1, name: r.name, developer: r.developer || '—',
       city: r.city, locality: r.locality || '—',
-      config: Array.isArray(r.configurations) && r.configurations.length ? r.configurations.join(', ') : '—',
+      config: formatConfigurations(r.configurations),
       price: r.price_range || '—', units: r.total_units || '—',
       status: (r.status || '').toUpperCase(), rera: r.rera_number || '—',
       leads: parseInt(r.total_leads) || 0, booked: parseInt(r.booked_leads) || 0,

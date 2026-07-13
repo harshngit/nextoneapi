@@ -217,13 +217,16 @@ const uploadLeadsBulkFile = uploadLeadsBulk.single('file');
 /**
  * Multiple files upload for project documents
  * Fields: 'unit_plans' (up to 10 files), 'creatives' (up to 10 files),
- *         'payment_plans' (up to 10 files), 'videos' (up to 10 files)
+ *         'payment_plans' (up to 10 files), 'videos' (up to 10 files),
+ *         'photos' (up to 20 files), 'developer_logo' (1 file)
  */
 const uploadProjectDocuments = uploadProjectDocs.fields([
   { name: 'unit_plans', maxCount: 10 },
   { name: 'creatives',  maxCount: 10 },
   { name: 'payment_plans', maxCount: 10 },
   { name: 'videos', maxCount: 10 },
+  { name: 'photos', maxCount: 20 },
+  { name: 'developer_logo', maxCount: 1 },
 ]);
 
 /**
@@ -246,6 +249,16 @@ const uploadPaymentPlan = uploadProjectDocs.any();
  */
 const uploadVideo = uploadProjectDocs.any();
 
+/**
+ * Single file upload for a project photo (accepts any field name)
+ */
+const uploadPhoto = uploadProjectDocs.any();
+
+/**
+ * Single file upload for a developer logo (accepts any field name)
+ */
+const uploadDeveloperLogo = uploadProjectDocs.any();
+
 const uploadSingleFile = uploadGeneric.single('file');
 const uploadMultipleFiles = uploadGeneric.array('files', 10);
 
@@ -256,6 +269,8 @@ module.exports = {
   uploadCreative,
   uploadPaymentPlan,
   uploadVideo,
+  uploadPhoto,
+  uploadDeveloperLogo,
   uploadLeadVoice,
   uploadPaymentProofFile,
   uploadLeadPhotoFile,
