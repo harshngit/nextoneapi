@@ -898,4 +898,30 @@ router.put('/:id', authenticate, ctrl.updateClosure);
  */
 router.patch('/:id/status', authenticate, authorize(...MANAGER), ctrl.updateClosureStatus);
 
+/**
+ * @swagger
+ * /api/v1/closures/{id}:
+ *   delete:
+ *     summary: Delete a closure record (Admin/Manager)
+ *     description: >
+ *       Permanently deletes the closure/booking record. Its documents
+ *       (cost sheet / payment proof) are deleted along with their files.
+ *       The lead's status is reverted from "booked" back to "negotiation"
+ *       (only if it was still "booked"). An activity entry is logged.
+ *     tags: [Lead Closures]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Closure deleted successfully
+ *       404:
+ *         description: Closure not found
+ */
+router.delete('/:id', authenticate, authorize(...MANAGER), ctrl.deleteClosure);
+
 module.exports = router;

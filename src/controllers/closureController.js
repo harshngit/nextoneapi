@@ -506,6 +506,49 @@ const updateClosure = async (req, res, next) => {
   } finally { client.release(); }
 };
 
+// ── DELETE /api/v1/closures/:id ───────────────────────────────────────────────
+const deleteClosure = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+
+    const existing = await pool.query('SELECT * FROM lead_closures WHERE id = $1', [id]);
+    if (!existing.rows.length) return next(new AppError('Closure not found', 404));
+    const closure = existing.rows[0];
+
+    // Clean up any uploaded document files before the cascading delete
+    const docs = await pool.query('SELECT url FROM closure_documents WHERE closure_id = $1', [id]);
+    for (const doc of docs.rows) {
+      if (doc.url && doc.url.startsWith('/uploads/')) {
+        const filePath = path.join(process.cwd(), doc.url);
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+      }
+    }
+
+    await client.query('BEGIN');
+
+    // Deleting the closure cascades to closure_documents automatically
+    await client.query('DELETE FROM lead_closures WHERE id = $1', [id]);
+
+    // Revert the lead back out of "booked" since the booking record is gone
+    await client.query(
+      `UPDATE leads SET status = 'negotiation', updated_at = NOW() WHERE id = $1 AND status = 'booked'`,
+      [closure.lead_id]
+    );
+
+    await client.query(
+      `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1,'note',$2,$3)`,
+      [closure.lead_id, 'Closure record deleted', req.user.id]
+    );
+
+    await client.query('COMMIT');
+
+    return sendSuccess(res, 'Closure deleted successfully');
+  } catch (err) {
+    await client.query('ROLLBACK'); next(err);
+  } finally { client.release(); }
+};
+
 // ── PATCH /api/v1/closures/:id/status ────────────────────────────────────────
 const updateClosureStatus = async (req, res, next) => {
   const client = await pool.connect();
@@ -851,7 +894,7 @@ const deleteClosureDocument = async (req, res, next) => {
 };
 
 module.exports = {
-  getAllClosures, createClosure, getClosureById, updateClosure,
+  getAllClosures, createClosure, getClosureById, updateClosure, deleteClosure,
   updateClosureStatus, getClosureByLead, getClosureSummary,
   getManagers,
   uploadDocumentFile, addClosureDocument, getClosureDocuments,
