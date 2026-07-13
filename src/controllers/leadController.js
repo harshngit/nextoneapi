@@ -30,6 +30,17 @@ const VALID_STATUSES = [
 // projects) but only up to this many times.
 const MAX_LEADS_PER_PHONE = 3;
 
+// ─── Helper — status is valid if it's a system status OR an active custom
+// status defined in lead_statuses (used by both createLead and updateLeadStatus
+// so the two entry points can never diverge on what counts as valid) ──────────
+const isValidLeadStatus = async (status) => {
+  if (VALID_STATUSES.includes(status)) return true;
+  const custom = await pool.query(
+    'SELECT key FROM lead_statuses WHERE key = $1 AND is_active = true', [status]
+  );
+  return custom.rows.length > 0;
+};
+
 // ─── Helper — count how many (non-archived) leads already use this phone ─────
 const countLeadsByPhone = async (client, phone, excludeLeadId = null) => {
   const result = excludeLeadId
@@ -215,7 +226,7 @@ const createLead = async (req, res, next) => {
             project_id, project_name,
             assigned_to, budget, location_preference, configuration, notes,
             callback_time, next_followup_time,
-            call_recordings } = req.body;
+            call_recordings, payment_proof, photos, status } = req.body;
 
     // project_id takes precedence over project_name
     let resolvedProjectId = null;
@@ -230,12 +241,42 @@ const createLead = async (req, res, next) => {
 
     if (!name || !phone) return next(new AppError("name and phone are required", 400));
 
+    // status defaults to 'new' — pass it explicitly to start the lead further
+    // along the lifecycle (e.g. importing an already-contacted lead)
+    let initialStatus = "new";
+    if (status !== undefined) {
+      if (!(await isValidLeadStatus(status))) {
+        return next(new AppError(
+          `Invalid status '${status}'. Use GET /api/v1/config/lead-statuses for the full list.`, 400
+        ));
+      }
+      initialStatus = status;
+    }
+
     // Validate call_recordings if provided
     let recordings = [];
     if (call_recordings) {
       recordings = Array.isArray(call_recordings) ? call_recordings : [call_recordings];
       for (const rec of recordings) {
         if (!rec.url) return next(new AppError('Each call_recording must have a url', 400));
+      }
+    }
+
+    // Validate payment_proof if provided
+    let proofs = [];
+    if (payment_proof) {
+      proofs = Array.isArray(payment_proof) ? payment_proof : [payment_proof];
+      for (const p of proofs) {
+        if (!p.url) return next(new AppError('Each payment_proof must have a url', 400));
+      }
+    }
+
+    // Validate photos if provided
+    let photoItems = [];
+    if (photos) {
+      photoItems = Array.isArray(photos) ? photos : [photos];
+      for (const ph of photoItems) {
+        if (!ph.url) return next(new AppError('Each photo must have a url', 400));
       }
     }
 
@@ -254,13 +295,13 @@ const createLead = async (req, res, next) => {
                           project_id, project_name_text, assigned_to, budget, location_preference, configuration,
                           callback_time, next_followup_time,
                           status, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'new',$14)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        RETURNING *`,
       [name.trim(), phone, alternate_phone_number || null, email || null, source || null,
        resolvedProjectId || null, resolvedProjectNameText || null,
        assigned_to || null, budget || null, location_preference || null,
        configuration || null, callback_time || null, next_followup_time || null,
-       req.user.id]
+       initialStatus, req.user.id]
     );
 
     const lead = result.rows[0];
@@ -282,6 +323,36 @@ const createLead = async (req, res, next) => {
       }
       await logActivity(client, lead.id, "call",
         `${recordings.length} call recording(s) attached`, req.user.id);
+    }
+
+    // ── Save payment proofs ──────────────────────────────────────────────────
+    const savedPaymentProofs = [];
+    if (proofs.length > 0) {
+      for (const p of proofs) {
+        const proofResult = await client.query(
+          `INSERT INTO payment_proofs (lead_id, url, name, amount, uploaded_by)
+           VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+          [lead.id, p.url, p.name || null, p.amount || null, req.user.id]
+        );
+        savedPaymentProofs.push(proofResult.rows[0]);
+      }
+      await logActivity(client, lead.id, "note",
+        `${proofs.length} payment proof(s) attached`, req.user.id);
+    }
+
+    // ── Save photos ───────────────────────────────────────────────────────────
+    const savedPhotos = [];
+    if (photoItems.length > 0) {
+      for (const ph of photoItems) {
+        const photoResult = await client.query(
+          `INSERT INTO lead_photos (lead_id, url, name, uploaded_by)
+           VALUES ($1, $2, $3, $4) RETURNING *`,
+          [lead.id, ph.url, ph.name || null, req.user.id]
+        );
+        savedPhotos.push(photoResult.rows[0]);
+      }
+      await logActivity(client, lead.id, "note",
+        `${photoItems.length} photo(s) attached`, req.user.id);
     }
 
     await client.query("COMMIT");
@@ -391,6 +462,8 @@ const createLead = async (req, res, next) => {
     return sendSuccess(res, "Lead created", {
       ...lead,
       call_recordings: savedRecordings,
+      payment_proofs: savedPaymentProofs,
+      photos: savedPhotos,
     }, 201);
   } catch (err) {
     await client.query("ROLLBACK");
@@ -544,14 +617,7 @@ const updateLeadStatus = async (req, res, next) => {
     if (!status) return next(new AppError('status is required', 400));
 
     // Validate against system statuses OR custom statuses in DB
-    let isValid = VALID_STATUSES.includes(status);
-    if (!isValid) {
-      const custom = await pool.query(
-        'SELECT key FROM lead_statuses WHERE key = $1 AND is_active = true', [status]
-      );
-      isValid = custom.rows.length > 0;
-    }
-    if (!isValid) {
+    if (!(await isValidLeadStatus(status))) {
       return next(new AppError(
         `Invalid status '${status}'. Use GET /api/v1/config/lead-statuses for the full list.`, 400
       ));
@@ -1464,6 +1530,399 @@ const deleteCallRecording = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+/**
+ * ─── PAYMENT PROOFS ────────────────────────────────────────────────────────────
+ *
+ * Same shape/flow as call recordings — booking receipts / payment screenshots
+ * attached to a lead.
+ *
+ * Endpoints:
+ *   POST   /api/v1/leads/upload-payment-proof       → upload file, get url (use in create/update)
+ *   POST   /api/v1/leads/:id/payment-proofs         → attach (file upload OR url array)
+ *   GET    /api/v1/leads/:id/payment-proofs         → list all proofs for a lead
+ *   PATCH  /api/v1/leads/:id/payment-proofs/:pid    → update name / amount
+ *   DELETE /api/v1/leads/:id/payment-proofs/:pid    → delete one proof
+ *
+ * File upload itself (get a url before attaching) uses the shared, simple
+ * upload endpoint POST /api/v1/upload/payment-proof — the same one the
+ * front-page form uses. There is no separate leads-only upload step; this
+ * keeps "upload a file" as one single place in the API.
+ */
+
+// ─── POST /api/v1/leads/:id/payment-proofs ────────────────────────────────────
+// Mode 1 — File upload (multipart/form-data): field payment_proof (required)
+//          body: name (optional), amount (optional)
+// Mode 2 — JSON body: { payment_proof: [{ url, name, amount }] } (single object also accepted)
+const addPaymentProof = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { role, id: callerId } = req.user;
+
+    const leadChk = await pool.query(
+      'SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false', [id]
+    );
+    if (!leadChk.rows.length) return next(new AppError('Lead not found', 404));
+    const lead = leadChk.rows[0];
+    if (role === 'sales_executive' && lead.assigned_to !== callerId) {
+      return next(new AppError('Access denied', 403));
+    }
+
+    const inserted = [];
+
+    // ── Mode 1: File upload ──────────────────────────────────────────────────
+    if (req.file) {
+      const { name, amount } = req.body;
+      const fileUrl  = `/uploads/payment-proofs/${req.file.filename}`;
+      const fileName = name || req.file.originalname;
+
+      const result = await pool.query(
+        `INSERT INTO payment_proofs (lead_id, url, name, amount, file_size, uploaded_by)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [id, fileUrl, fileName, amount || null, req.file.size || null, callerId]
+      );
+      inserted.push(result.rows[0]);
+
+      await pool.query(
+        `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, 'note', $2, $3)`,
+        [id, `Payment proof uploaded: ${fileName}${amount ? ` (₹${amount})` : ''}`, callerId]
+      );
+    }
+
+    // ── Mode 2: JSON URL array ───────────────────────────────────────────────
+    else if (req.body.payment_proof) {
+      let proofs = req.body.payment_proof;
+      if (!Array.isArray(proofs)) proofs = [proofs];
+      if (!proofs.length) return next(new AppError('payment_proof array cannot be empty', 400));
+
+      for (const p of proofs) {
+        if (!p.url) return next(new AppError('Each payment_proof must have a url', 400));
+        const result = await pool.query(
+          `INSERT INTO payment_proofs (lead_id, url, name, amount, uploaded_by)
+           VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+          [id, p.url, p.name || null, p.amount || null, callerId]
+        );
+        inserted.push(result.rows[0]);
+      }
+
+      await pool.query(
+        `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, 'note', $2, $3)`,
+        [id, `${inserted.length} payment proof(s) added`, callerId]
+      );
+    } else {
+      return next(new AppError('Provide either a payment_proof file or payment_proof JSON', 400));
+    }
+
+    return sendSuccess(res, `${inserted.length} payment proof(s) saved`, {
+      lead_id: id, payment_proofs: inserted,
+    }, 201);
+  } catch (err) { next(err); }
+};
+
+// ─── GET /api/v1/leads/:id/payment-proofs ─────────────────────────────────────
+const getPaymentProofs = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { role, id: callerId } = req.user;
+
+    const leadChk = await pool.query(
+      'SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false', [id]
+    );
+    if (!leadChk.rows.length) return next(new AppError('Lead not found', 404));
+    const lead = leadChk.rows[0];
+    if (role === 'sales_executive' && lead.assigned_to !== callerId) {
+      return next(new AppError('Access denied', 403));
+    }
+
+    const result = await pool.query(
+      `SELECT pp.*, CONCAT(u.first_name,' ',u.last_name) AS uploaded_by_name
+       FROM payment_proofs pp
+       LEFT JOIN users u ON u.id = pp.uploaded_by
+       WHERE pp.lead_id = $1
+       ORDER BY pp.created_at DESC`,
+      [id]
+    );
+
+    return sendSuccess(res, 'Payment proofs fetched', {
+      lead_id: id, total: result.rows.length, payment_proofs: result.rows,
+    });
+  } catch (err) { next(err); }
+};
+
+// ─── PATCH /api/v1/leads/:id/payment-proofs/:pid ─────────────────────────────
+// Update name and/or amount of an existing payment proof
+const updatePaymentProof = async (req, res, next) => {
+  try {
+    const { id, pid } = req.params;
+    const { role, id: callerId } = req.user;
+    const { name, amount } = req.body;
+
+    const leadChk = await pool.query(
+      'SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false', [id]
+    );
+    if (!leadChk.rows.length) return next(new AppError('Lead not found', 404));
+    const lead = leadChk.rows[0];
+    if (role === 'sales_executive' && lead.assigned_to !== callerId) {
+      return next(new AppError('Access denied', 403));
+    }
+
+    const proofChk = await pool.query(
+      'SELECT * FROM payment_proofs WHERE id = $1 AND lead_id = $2', [pid, id]
+    );
+    if (!proofChk.rows.length) return next(new AppError('Payment proof not found', 404));
+
+    const updates = []; const params = []; let idx = 1;
+    if (name   !== undefined) { updates.push(`name = $${idx++}`);   params.push(name); }
+    if (amount !== undefined) { updates.push(`amount = $${idx++}`); params.push(amount); }
+    if (!updates.length) return next(new AppError('Provide name or amount to update', 400));
+
+    updates.push('updated_at = NOW()');
+    params.push(pid, id);
+
+    const result = await pool.query(
+      `UPDATE payment_proofs SET ${updates.join(', ')}
+       WHERE id = $${idx++} AND lead_id = $${idx++} RETURNING *`,
+      params
+    );
+
+    return sendSuccess(res, 'Payment proof updated', result.rows[0]);
+  } catch (err) { next(err); }
+};
+
+// ─── DELETE /api/v1/leads/:id/payment-proofs/:pid ────────────────────────────
+const deletePaymentProof = async (req, res, next) => {
+  try {
+    const { id, pid } = req.params;
+    const { role, id: callerId } = req.user;
+
+    const leadChk = await pool.query(
+      'SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false', [id]
+    );
+    if (!leadChk.rows.length) return next(new AppError('Lead not found', 404));
+    const lead = leadChk.rows[0];
+    if (role === 'sales_executive' && lead.assigned_to !== callerId) {
+      return next(new AppError('Access denied', 403));
+    }
+
+    const proofChk = await pool.query(
+      'SELECT * FROM payment_proofs WHERE id = $1 AND lead_id = $2', [pid, id]
+    );
+    if (!proofChk.rows.length) return next(new AppError('Payment proof not found', 404));
+    const proof = proofChk.rows[0];
+
+    // Delete physical file only if it was uploaded locally
+    if (proof.url && proof.url.startsWith('/uploads/')) {
+      const filePath = path.join(process.cwd(), proof.url);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    }
+
+    await pool.query('DELETE FROM payment_proofs WHERE id = $1', [pid]);
+
+    await pool.query(
+      `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, 'note', $2, $3)`,
+      [id, `Payment proof deleted: ${proof.name || proof.url}`, callerId]
+    );
+
+    return sendSuccess(res, 'Payment proof deleted');
+  } catch (err) { next(err); }
+};
+
+/**
+ * ─── LEAD PHOTOS ───────────────────────────────────────────────────────────────
+ *
+ * Front-page form photo — separate from payment proof (different purpose,
+ * different table). Same shape/flow as call recordings.
+ *
+ * Endpoints:
+ *   POST   /api/v1/leads/upload-photo          → upload file, get url (use in create/update)
+ *   POST   /api/v1/leads/:id/photos            → attach (file upload OR url array)
+ *   GET    /api/v1/leads/:id/photos            → list all photos for a lead
+ *   PATCH  /api/v1/leads/:id/photos/:pid       → update name
+ *   DELETE /api/v1/leads/:id/photos/:pid       → delete one photo
+ */
+
+// ─── POST /api/v1/leads/upload-photo ──────────────────────────────────────────
+// Standalone file upload — returns { url, filename, size }
+// Field name: photo
+const uploadPhotoFile = async (req, res, next) => {
+  try {
+    if (!req.file) return next(new AppError('No file uploaded. Use field name: photo', 400));
+
+    return sendSuccess(res, 'File uploaded successfully', {
+      url:      `/uploads/leads/photos/${req.file.filename}`,
+      filename: req.file.originalname,
+      size:     req.file.size || null,
+    }, 201);
+  } catch (err) { next(err); }
+};
+
+// ─── POST /api/v1/leads/:id/photos ────────────────────────────────────────────
+// Mode 1 — File upload (multipart/form-data): field photo (required), body: name (optional)
+// Mode 2 — JSON body: { photos: [{ url, name }] } (single object also accepted)
+const addPhoto = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { role, id: callerId } = req.user;
+
+    const leadChk = await pool.query(
+      'SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false', [id]
+    );
+    if (!leadChk.rows.length) return next(new AppError('Lead not found', 404));
+    const lead = leadChk.rows[0];
+    if (role === 'sales_executive' && lead.assigned_to !== callerId) {
+      return next(new AppError('Access denied', 403));
+    }
+
+    const inserted = [];
+
+    // ── Mode 1: File upload ──────────────────────────────────────────────────
+    if (req.file) {
+      const { name } = req.body;
+      const fileUrl  = `/uploads/leads/photos/${req.file.filename}`;
+      const fileName = name || req.file.originalname;
+
+      const result = await pool.query(
+        `INSERT INTO lead_photos (lead_id, url, name, file_size, uploaded_by)
+         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+        [id, fileUrl, fileName, req.file.size || null, callerId]
+      );
+      inserted.push(result.rows[0]);
+
+      await pool.query(
+        `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, 'note', $2, $3)`,
+        [id, `Photo uploaded: ${fileName}`, callerId]
+      );
+    }
+
+    // ── Mode 2: JSON URL array ───────────────────────────────────────────────
+    else if (req.body.photos) {
+      let items = req.body.photos;
+      if (!Array.isArray(items)) items = [items];
+      if (!items.length) return next(new AppError('photos array cannot be empty', 400));
+
+      for (const ph of items) {
+        if (!ph.url) return next(new AppError('Each photo must have a url', 400));
+        const result = await pool.query(
+          `INSERT INTO lead_photos (lead_id, url, name, uploaded_by)
+           VALUES ($1, $2, $3, $4) RETURNING *`,
+          [id, ph.url, ph.name || null, callerId]
+        );
+        inserted.push(result.rows[0]);
+      }
+
+      await pool.query(
+        `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, 'note', $2, $3)`,
+        [id, `${inserted.length} photo(s) added`, callerId]
+      );
+    } else {
+      return next(new AppError('Provide either a photo file or photos JSON', 400));
+    }
+
+    return sendSuccess(res, `${inserted.length} photo(s) saved`, {
+      lead_id: id, photos: inserted,
+    }, 201);
+  } catch (err) { next(err); }
+};
+
+// ─── GET /api/v1/leads/:id/photos ─────────────────────────────────────────────
+const getPhotos = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { role, id: callerId } = req.user;
+
+    const leadChk = await pool.query(
+      'SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false', [id]
+    );
+    if (!leadChk.rows.length) return next(new AppError('Lead not found', 404));
+    const lead = leadChk.rows[0];
+    if (role === 'sales_executive' && lead.assigned_to !== callerId) {
+      return next(new AppError('Access denied', 403));
+    }
+
+    const result = await pool.query(
+      `SELECT lp.*, CONCAT(u.first_name,' ',u.last_name) AS uploaded_by_name
+       FROM lead_photos lp
+       LEFT JOIN users u ON u.id = lp.uploaded_by
+       WHERE lp.lead_id = $1
+       ORDER BY lp.created_at DESC`,
+      [id]
+    );
+
+    return sendSuccess(res, 'Photos fetched', {
+      lead_id: id, total: result.rows.length, photos: result.rows,
+    });
+  } catch (err) { next(err); }
+};
+
+// ─── PATCH /api/v1/leads/:id/photos/:pid ─────────────────────────────────────
+const updatePhoto = async (req, res, next) => {
+  try {
+    const { id, pid } = req.params;
+    const { role, id: callerId } = req.user;
+    const { name } = req.body;
+
+    const leadChk = await pool.query(
+      'SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false', [id]
+    );
+    if (!leadChk.rows.length) return next(new AppError('Lead not found', 404));
+    const lead = leadChk.rows[0];
+    if (role === 'sales_executive' && lead.assigned_to !== callerId) {
+      return next(new AppError('Access denied', 403));
+    }
+
+    const photoChk = await pool.query(
+      'SELECT * FROM lead_photos WHERE id = $1 AND lead_id = $2', [pid, id]
+    );
+    if (!photoChk.rows.length) return next(new AppError('Photo not found', 404));
+
+    if (name === undefined) return next(new AppError('Provide name to update', 400));
+
+    const result = await pool.query(
+      `UPDATE lead_photos SET name = $1, updated_at = NOW() WHERE id = $2 AND lead_id = $3 RETURNING *`,
+      [name, pid, id]
+    );
+
+    return sendSuccess(res, 'Photo updated', result.rows[0]);
+  } catch (err) { next(err); }
+};
+
+// ─── DELETE /api/v1/leads/:id/photos/:pid ────────────────────────────────────
+const deletePhoto = async (req, res, next) => {
+  try {
+    const { id, pid } = req.params;
+    const { role, id: callerId } = req.user;
+
+    const leadChk = await pool.query(
+      'SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false', [id]
+    );
+    if (!leadChk.rows.length) return next(new AppError('Lead not found', 404));
+    const lead = leadChk.rows[0];
+    if (role === 'sales_executive' && lead.assigned_to !== callerId) {
+      return next(new AppError('Access denied', 403));
+    }
+
+    const photoChk = await pool.query(
+      'SELECT * FROM lead_photos WHERE id = $1 AND lead_id = $2', [pid, id]
+    );
+    if (!photoChk.rows.length) return next(new AppError('Photo not found', 404));
+    const photo = photoChk.rows[0];
+
+    // Delete physical file only if it was uploaded locally
+    if (photo.url && photo.url.startsWith('/uploads/')) {
+      const filePath = path.join(process.cwd(), photo.url);
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    }
+
+    await pool.query('DELETE FROM lead_photos WHERE id = $1', [pid]);
+
+    await pool.query(
+      `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, 'note', $2, $3)`,
+      [id, `Photo deleted: ${photo.name || photo.url}`, callerId]
+    );
+
+    return sendSuccess(res, 'Photo deleted');
+  } catch (err) { next(err); }
+};
+
 
 module.exports = {
   getAllLeads,
@@ -1486,4 +1945,13 @@ module.exports = {
   getCallRecordings,
   updateCallRecording,
   deleteCallRecording,
+  addPaymentProof,
+  getPaymentProofs,
+  updatePaymentProof,
+  deletePaymentProof,
+  uploadPhotoFile,
+  addPhoto,
+  getPhotos,
+  updatePhoto,
+  deletePhoto,
 };

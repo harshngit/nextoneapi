@@ -48,7 +48,32 @@ const uploadMultipleFiles = async (req, res, next) => {
   }
 };
 
+/**
+ * POST /api/v1/upload/payment-proof
+ * Upload a payment proof file (receipt / screenshot / PDF) from the
+ * front-end booking form. Returns file metadata and a url to save
+ * alongside the booking/lead record.
+ * Field name: payment_proof
+ */
+const uploadPaymentProof = async (req, res, next) => {
+  try {
+    if (!req.file) {
+      return next(new AppError("No file uploaded. Use field name: payment_proof", 400));
+    }
+
+    return sendSuccess(res, "Payment proof uploaded successfully", {
+      url:       `/uploads/payment-proofs/${req.file.filename}`,
+      file_name: req.file.originalname,
+      file_size: req.file.size,
+      mime_type: req.file.mimetype,
+    }, 201);
+  } catch (err) {
+    next(err);
+  }
+};
+
 module.exports = {
   uploadFile,
   uploadMultipleFiles,
+  uploadPaymentProof,
 };

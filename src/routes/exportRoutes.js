@@ -20,13 +20,18 @@ const ADMIN = ['super_admin', 'admin']
  *     All other roles receive only their own assigned data.
  *
  *     **Workbook tabs per export:**
- *     - Leads     → Leads list + Leads Summary
- *     - Site Visits → Site Visits (with feedback)
- *     - Follow-Ups  → Tasks / Follow-ups
+ *     - Leads     → Leads list + Leads Summary + Leads By User & Date
+ *     - Site Visits → Site Visits (with feedback) + Site Visits By User & Date
+ *     - Follow-Ups  → Tasks / Follow-ups + Follow-Ups By User & Date
  *     - Projects    → Projects with lead counts (admin only)
  *     - Users       → Team members with stats (admin only)
  *     - Attendance  → All Records + Monthly Grid + Summary
  *     - All         → Every tab above in one file (admin only)
+ *
+ *     Every "By User & Date" tab is a pivot grid: one row per user, one
+ *     column per day in the selected range, cell = record count for that
+ *     user on that day (with a Total column/row) — the user-wise + date-wise
+ *     breakdown for leads, site visits, and follow-ups.
  */
 
 /**

@@ -631,6 +631,39 @@ CREATE TABLE IF NOT EXISTS call_recordings (
 CREATE INDEX IF NOT EXISTS idx_call_recordings_lead ON call_recordings(lead_id);
 
 -- ============================================================
+-- TABLE: payment_proofs  (migration 044 — booking receipts / screenshots)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS payment_proofs (
+  id          UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  lead_id     UUID        NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  url         TEXT        NOT NULL,
+  name        VARCHAR(255),
+  amount      VARCHAR(100),
+  file_size   BIGINT,
+  uploaded_by UUID        REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_payment_proofs_lead ON payment_proofs(lead_id);
+
+-- ============================================================
+-- TABLE: lead_photos  (migration 045 — front-page form photo, separate from payment proof)
+-- ============================================================
+CREATE TABLE IF NOT EXISTS lead_photos (
+  id          UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
+  lead_id     UUID        NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  url         TEXT        NOT NULL,
+  name        VARCHAR(255),
+  file_size   BIGINT,
+  uploaded_by UUID        REFERENCES users(id) ON DELETE SET NULL,
+  created_at  TIMESTAMPTZ DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_lead_photos_lead ON lead_photos(lead_id);
+
+-- ============================================================
 -- TABLE: site_visits  (includes closing_manager, closing_person, whatsapp, reminder columns)
 -- ============================================================
 CREATE TABLE IF NOT EXISTS site_visits (

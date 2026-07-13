@@ -124,6 +124,69 @@ const uploadLeadVoice = multer({
   limits:     { fileSize: 25 * 1024 * 1024 }, // 25 MB max
 }).single('voice_recording');
 
+// ── Storage engine for payment proof uploads (booking receipts/screenshots) ──
+const paymentProofStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(process.cwd(), 'uploads', 'payment-proofs');
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const timestamp = Date.now();
+    const ext = path.extname(file.originalname).toLowerCase();
+    const sanitized = path.basename(file.originalname, ext).replace(/[^a-zA-Z0-9._-]/g, '_');
+    cb(null, `payment_proof_${sanitized}_${timestamp}${ext}`);
+  },
+});
+
+const paymentProofFilter = (req, file, cb) => {
+  const allowed = [
+    'application/pdf',
+    'image/jpeg', 'image/jpg', 'image/png', 'image/webp',
+  ];
+  if (allowed.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new AppError('Only PDF, JPEG, PNG, or WEBP files are allowed for payment proof', 400), false);
+  }
+};
+
+const uploadPaymentProofFile = multer({
+  storage: paymentProofStorage,
+  fileFilter: paymentProofFilter,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB max
+}).single('payment_proof');
+
+// ── Storage engine for lead photos (front-page form photo — separate from payment proof) ──
+const leadPhotoStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(process.cwd(), 'uploads', 'leads', 'photos');
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const leadId    = req.params.id || 'unknown';
+    const timestamp = Date.now();
+    const ext       = path.extname(file.originalname).toLowerCase();
+    cb(null, `photo_${leadId}_${timestamp}${ext}`);
+  },
+});
+
+const leadPhotoFilter = (req, file, cb) => {
+  const allowed = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+  if (allowed.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new AppError('Only JPEG, PNG, or WEBP images are allowed for lead photos', 400), false);
+  }
+};
+
+const uploadLeadPhotoFile = multer({
+  storage: leadPhotoStorage,
+  fileFilter: leadPhotoFilter,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB max
+}).single('photo');
+
 // ── Generic storage for one-off uploads ──────────────────────────────────────
 const genericStorage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -194,6 +257,8 @@ module.exports = {
   uploadPaymentPlan,
   uploadVideo,
   uploadLeadVoice,
+  uploadPaymentProofFile,
+  uploadLeadPhotoFile,
   uploadSingleFile,
   uploadMultipleFiles,
 };

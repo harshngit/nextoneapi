@@ -114,6 +114,97 @@ const streamWorkbook = async (res, wb, filename) => {
   res.end()
 }
 
+/**
+ * Shared "User × Date" pivot grid — one row per user, one column per day in
+ * range, cell = record count for that user on that day. Mirrors the
+ * Attendance "Monthly Grid" tab so every module gets the same user-wise +
+ * date-wise breakdown the field team asked for.
+ */
+const buildUserDateGridSheet = (wb, { sheetName, title, tabColor, headerColor, records, start, end, userIdField, userNameField, dateField }) => {
+  const allDays = []
+  const cur = new Date(start)
+  while (cur <= new Date(end)) { allDays.push(cur.toISOString().split('T')[0]); cur.setDate(cur.getDate() + 1) }
+
+  const userMap = new Map()
+  records.forEach(r => {
+    const uid = r[userIdField]
+    if (!uid) return
+    const d = r[dateField] ? toDateStr(r[dateField]) : null
+    if (!d) return
+    if (!userMap.has(uid)) userMap.set(uid, { name: r[userNameField] || 'Unassigned', counts: {} })
+    const entry = userMap.get(uid)
+    entry.counts[d] = (entry.counts[d] || 0) + 1
+  })
+
+  const ws = wb.addWorksheet(sheetName, {
+    views: [{ state: 'frozen', xSplit: 2, ySplit: 2 }],
+    properties: { tabColor: { argb: tabColor } },
+  })
+  addTitle(ws, title, 3 + allDays.length, headerColor)
+
+  const hdr = ws.getRow(2)
+  hdr.getCell(1).value = '#'
+  hdr.getCell(2).value = 'User'
+  allDays.forEach((d, i) => {
+    hdr.getCell(3 + i).value = new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })
+  })
+  hdr.getCell(3 + allDays.length).value = 'Total'
+  styleHeader(hdr, headerColor)
+  ws.getColumn(1).width = 5
+  ws.getColumn(2).width = 24
+  allDays.forEach((_, i) => { ws.getColumn(3 + i).width = 8 })
+  ws.getColumn(3 + allDays.length).width = 10
+
+  const users = Array.from(userMap.entries()).sort((a, b) => a[1].name.localeCompare(b[1].name))
+
+  users.forEach(([, u], ui) => {
+    const row = ws.getRow(3 + ui)
+    row.getCell(1).value = ui + 1
+    row.getCell(2).value = u.name
+    let total = 0
+    allDays.forEach((d, i) => {
+      const cnt = u.counts[d] || 0
+      total += cnt
+      const cell = row.getCell(3 + i)
+      cell.value = cnt || ''
+      cell.alignment = { horizontal: 'center', vertical: 'middle' }
+      if (cnt > 0) {
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFD1FAE5' } }
+        cell.font = { bold: true, size: 9, color: { argb: 'FF065F46' } }
+      }
+    })
+    const totalCell = row.getCell(3 + allDays.length)
+    totalCell.value = total
+    totalCell.font = { bold: true }
+    totalCell.alignment = { horizontal: 'center' }
+    row.height = 18
+    shadeRow(row, ui)
+  })
+
+  const totRow = ws.getRow(3 + users.length)
+  totRow.getCell(2).value = 'TOTAL'
+  totRow.getCell(2).font = { bold: true }
+  let grandTotal = 0
+  allDays.forEach((d, i) => {
+    const dayTotal = users.reduce((sum, [, u]) => sum + (u.counts[d] || 0), 0)
+    grandTotal += dayTotal
+    const cell = totRow.getCell(3 + i)
+    cell.value = dayTotal || ''
+    cell.font = { bold: true }
+    cell.alignment = { horizontal: 'center' }
+  })
+  const grandCell = totRow.getCell(3 + allDays.length)
+  grandCell.value = grandTotal
+  grandCell.font = { bold: true }
+  grandCell.alignment = { horizontal: 'center' }
+  totRow.height = 20
+  for (let c = 1; c <= 3 + allDays.length; c++) {
+    totRow.getCell(c).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE5E7EB' } }
+  }
+
+  return ws
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // ── LEADS EXPORT ──────────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────────────────────
@@ -140,11 +231,14 @@ const buildLeadsSheet = async (wb, user, start, end, projectId) => {
 
   const rows = await pool.query(
     `SELECT l.id, l.name, l.phone, l.alternate_phone_number, l.email,
-            l.status, l.source, l.budget, l.location_preference,
+            l.status, l.source, l.budget, l.location_preference, l.configuration,
+            l.callback_time, l.next_followup_time,
+            l.is_converted, l.converted_at,
             l.created_at, l.updated_at,
+            l.assigned_to,
             CONCAT(u.first_name,' ',u.last_name) AS assigned_to_name,
             CONCAT(c.first_name,' ',c.last_name) AS created_by_name,
-            p.name AS project_name, p.city AS project_city
+            COALESCE(p.name, l.project_name_text) AS project_name, p.city AS project_city
      FROM leads l
      LEFT JOIN users    u ON u.id = l.assigned_to
      LEFT JOIN users    c ON c.id = l.created_by
@@ -158,7 +252,7 @@ const buildLeadsSheet = async (wb, user, start, end, projectId) => {
     views: [{ state: 'frozen', xSplit: 0, ySplit: 2 }],
     properties: { tabColor: { argb: 'FF3B82F6' } },
   })
-  addTitle(ws, `Leads Export  |  ${fmtDate(start)} – ${fmtDate(end)}${admin ? '' : `  |  ${user.first_name} ${user.last_name}`}`, 15, 'FF1D4ED8')
+  addTitle(ws, `Leads Export  |  ${fmtDate(start)} – ${fmtDate(end)}${admin ? '' : `  |  ${user.first_name} ${user.last_name}`}`, 20, 'FF1D4ED8')
 
   ws.columns = [
     { key: 'sno',      width: 5  },
@@ -166,13 +260,17 @@ const buildLeadsSheet = async (wb, user, start, end, projectId) => {
     { key: 'alt',      width: 16 }, { key: 'email',    width: 26 },
     { key: 'status',   width: 20 }, { key: 'source',   width: 16 },
     { key: 'budget',   width: 14 }, { key: 'location', width: 20 },
+    { key: 'config',   width: 14 },
     { key: 'project',  width: 22 }, { key: 'city',     width: 14 },
     { key: 'assigned', width: 20 }, { key: 'created_by',width:18 },
+    { key: 'callback', width: 18 }, { key: 'next_followup', width: 18 },
+    { key: 'converted',width: 12 }, { key: 'converted_at', width: 18 },
     { key: 'created',  width: 18 }, { key: 'updated',  width: 18 },
   ]
   const h = ws.getRow(2)
   h.values = ['#','Name','Phone','Alt Phone','Email','Status','Source','Budget',
-    'Location Pref','Project','City','Assigned To','Created By','Created At','Updated At']
+    'Location Pref','Configuration','Project','City','Assigned To','Created By',
+    'Callback Time','Next Follow-Up','Converted?','Converted At','Created At','Updated At']
   styleHeader(h, 'FF1D4ED8')
 
   rows.rows.forEach((r, i) => {
@@ -181,8 +279,13 @@ const buildLeadsSheet = async (wb, user, start, end, projectId) => {
       sno: i + 1, name: r.name, phone: r.phone, alt: r.alternate_phone_number || '—',
       email: r.email || '—', status: (r.status || '').replace(/_/g, ' ').toUpperCase(),
       source: r.source || '—', budget: r.budget || '—', location: r.location_preference || '—',
+      config: r.configuration || '—',
       project: r.project_name || '—', city: r.project_city || '—',
       assigned: r.assigned_to_name || '—', created_by: r.created_by_name || '—',
+      callback: r.callback_time ? fmtDateTime(r.callback_time) : '—',
+      next_followup: r.next_followup_time ? fmtDateTime(r.next_followup_time) : '—',
+      converted: r.is_converted ? 'Yes' : 'No',
+      converted_at: r.converted_at ? fmtDateTime(r.converted_at) : '—',
       created: fmtDateTime(r.created_at), updated: fmtDateTime(r.updated_at),
     })
     row.height = 20
@@ -227,7 +330,21 @@ const buildLeadsSheet = async (wb, user, start, end, projectId) => {
   }
 
   ws2.autoFilter = { from: 'A2', to: 'C2' }
-  ws.autoFilter  = { from: 'A2', to: 'P2' }
+  ws.autoFilter  = { from: 'A2', to: 'T2' }
+
+  // User & Date grid — how many leads each person brought in, per day
+  buildUserDateGridSheet(wb, {
+    sheetName:    'Leads By User & Date',
+    title:        `Leads By User & Date  |  ${fmtDate(start)} – ${fmtDate(end)}`,
+    tabColor:     'FF60A5FA',
+    headerColor:  'FF1D4ED8',
+    records:      rows.rows,
+    start, end,
+    userIdField:   'assigned_to',
+    userNameField: 'assigned_to_name',
+    dateField:     'created_at',
+  })
+
   return rows.rows.length
 }
 
@@ -254,15 +371,20 @@ const buildSiteVisitsSheet = async (wb, user, start, end, projectId) => {
   const rows = await pool.query(
     `SELECT sv.id, sv.visit_date, sv.visit_time, sv.status,
             sv.transport_arranged, sv.notes,
-            sv.created_at,
+            sv.created_at, sv.assigned_to,
+            sv.closing_person,
             l.name  AS lead_name,  l.phone AS lead_phone, l.email AS lead_email,
             p.name  AS project_name, p.city AS project_city, p.locality,
-            CONCAT(u.first_name,' ',u.last_name) AS assigned_to_name,
+            CONCAT(u.first_name,' ',u.last_name)  AS assigned_to_name,
+            CONCAT(c.first_name,' ',c.last_name)  AS created_by_name,
+            CONCAT(cm.first_name,' ',cm.last_name) AS closing_manager_name,
             svf.client_reaction, svf.next_step, svf.remarks, svf.rating
      FROM site_visits sv
      JOIN    leads    l   ON l.id  = sv.lead_id
      JOIN    projects p   ON p.id  = sv.project_id
      LEFT JOIN users  u   ON u.id  = sv.assigned_to
+     LEFT JOIN users  c   ON c.id  = sv.created_by
+     LEFT JOIN users  cm  ON cm.id = sv.closing_manager
      LEFT JOIN site_visit_feedback svf ON svf.site_visit_id = sv.id
      WHERE ${conditions.join(' AND ')}
      ORDER BY sv.visit_date DESC, sv.visit_time DESC`,
@@ -273,20 +395,23 @@ const buildSiteVisitsSheet = async (wb, user, start, end, projectId) => {
     views: [{ state: 'frozen', xSplit: 0, ySplit: 2 }],
     properties: { tabColor: { argb: 'FF8B5CF6' } },
   })
-  addTitle(ws, `Site Visits  |  ${fmtDate(start)} – ${fmtDate(end)}`, 15, 'FF6D28D9')
+  addTitle(ws, `Site Visits  |  ${fmtDate(start)} – ${fmtDate(end)}`, 18, 'FF6D28D9')
   ws.columns = [
     { key: 'sno',       width: 5  }, { key: 'lead',      width: 22 },
     { key: 'phone',     width: 15 }, { key: 'email',     width: 24 },
     { key: 'project',   width: 22 }, { key: 'city',      width: 14 },
     { key: 'date',      width: 14 }, { key: 'time',      width: 12 },
     { key: 'status',    width: 14 }, { key: 'assigned',  width: 20 },
+    { key: 'created_by',width: 18 },
+    { key: 'closing_mgr', width: 20 }, { key: 'closing_person', width: 20 },
     { key: 'transport', width: 12 }, { key: 'reaction',  width: 18 },
     { key: 'next_step', width: 18 }, { key: 'rating',    width: 10 },
     { key: 'notes',     width: 30 },
   ]
   const h = ws.getRow(2)
   h.values = ['#','Lead Name','Phone','Email','Project','City','Visit Date','Time',
-    'Status','Assigned To','Transport','Client Reaction','Next Step','Rating','Notes']
+    'Status','Assigned To','Created By','Closing Manager','Closing Person',
+    'Transport','Client Reaction','Next Step','Rating','Notes']
   styleHeader(h, 'FF6D28D9')
 
   rows.rows.forEach((r, i) => {
@@ -298,6 +423,9 @@ const buildSiteVisitsSheet = async (wb, user, start, end, projectId) => {
       time: r.visit_time ? r.visit_time.substring(0, 5) : '—',
       status: (r.status || '').toUpperCase(),
       assigned: r.assigned_to_name || '—',
+      created_by: r.created_by_name || '—',
+      closing_mgr: r.closing_manager_name || '—',
+      closing_person: r.closing_person || '—',
       transport: r.transport_arranged ? 'Yes' : 'No',
       reaction: (r.client_reaction || '—').replace(/_/g, ' '),
       next_step: (r.next_step || '—').replace(/_/g, ' '),
@@ -311,7 +439,21 @@ const buildSiteVisitsSheet = async (wb, user, start, end, projectId) => {
     sc2.alignment = { horizontal: 'center', vertical: 'middle' }
     shadeRow(row, i)
   })
-  ws.autoFilter = { from: 'A2', to: 'O2' }
+  ws.autoFilter = { from: 'A2', to: 'R2' }
+
+  // User & Date grid — how many site visits each exec ran, per day
+  buildUserDateGridSheet(wb, {
+    sheetName:    'Site Visits By User & Date',
+    title:        `Site Visits By User & Date  |  ${fmtDate(start)} – ${fmtDate(end)}`,
+    tabColor:     'FFA78BFA',
+    headerColor:  'FF6D28D9',
+    records:      rows.rows,
+    start, end,
+    userIdField:   'assigned_to',
+    userNameField: 'assigned_to_name',
+    dateField:     'visit_date',
+  })
+
   return rows.rows.length
 }
 
@@ -328,7 +470,7 @@ const buildFollowUpsSheet = async (wb, user, start, end) => {
 
   const rows = await pool.query(
     `SELECT t.id, t.title, t.notes, t.priority, t.due_date,
-            t.is_completed, t.completed_at, t.created_at,
+            t.is_completed, t.completed_at, t.created_at, t.assigned_to,
             l.name  AS lead_name, l.phone AS lead_phone, l.status AS lead_status,
             p.name  AS project_name,
             CONCAT(a.first_name,' ',a.last_name) AS assigned_to_name,
@@ -395,6 +537,20 @@ const buildFollowUpsSheet = async (wb, user, start, end) => {
     shadeRow(row, i)
   })
   ws.autoFilter = { from: 'A2', to: 'M2' }
+
+  // User & Date grid — how many follow-ups each exec has due, per day
+  buildUserDateGridSheet(wb, {
+    sheetName:    'Follow-Ups By User & Date',
+    title:        `Follow-Ups By User & Date  |  ${fmtDate(start)} – ${fmtDate(end)}`,
+    tabColor:     'FF6EE7B7',
+    headerColor:  'FF059669',
+    records:      rows.rows,
+    start, end,
+    userIdField:   'assigned_to',
+    userNameField: 'assigned_to_name',
+    dateField:     'due_date',
+  })
+
   return rows.rows.length
 }
 
@@ -422,7 +578,7 @@ const buildProjectsSheet = async (wb) => {
   ws.columns = [
     { key: 'sno',       width: 5  }, { key: 'name',      width: 26 },
     { key: 'developer', width: 22 }, { key: 'city',      width: 16 },
-    { key: 'locality',  width: 18 }, { key: 'type',      width: 14 },
+    { key: 'locality',  width: 18 }, { key: 'config',    width: 18 },
     { key: 'price',     width: 18 }, { key: 'units',     width: 12 },
     { key: 'status',    width: 14 }, { key: 'rera',      width: 20 },
     { key: 'leads',     width: 12 }, { key: 'booked',    width: 12 },
@@ -430,7 +586,7 @@ const buildProjectsSheet = async (wb) => {
     { key: 'created_by',width: 20 },
   ]
   const h = ws.getRow(2)
-  h.values = ['#','Project Name','Developer','City','Locality','Type','Price Range',
+  h.values = ['#','Project Name','Developer','City','Locality','Configurations','Price Range',
     'Total Units','Status','RERA No.','Total Leads','Booked','Site Visits','Possession','Created By']
   styleHeader(h, 'FFB45309')
 
@@ -445,7 +601,8 @@ const buildProjectsSheet = async (wb) => {
     const sc  = STATUS_C[r.status] || { fill: 'FFF9FAFB', font: '111827' }
     const row = ws.addRow({
       sno: i + 1, name: r.name, developer: r.developer || '—',
-      city: r.city, locality: r.locality || '—', type: '—',
+      city: r.city, locality: r.locality || '—',
+      config: Array.isArray(r.configurations) && r.configurations.length ? r.configurations.join(', ') : '—',
       price: r.price_range || '—', units: r.total_units || '—',
       status: (r.status || '').toUpperCase(), rera: r.rera_number || '—',
       leads: parseInt(r.total_leads) || 0, booked: parseInt(r.booked_leads) || 0,

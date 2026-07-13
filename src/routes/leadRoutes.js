@@ -169,7 +169,21 @@ router.post(
  *       Step 2 - Pass that url in the call_recordings array in this request body.
  *       Multiple recordings can be attached at create time. Omit call_recordings if none.
  *
- *       Status defaults to new on creation.
+ *       Payment proof flow (2 steps):
+ *       Step 1 - Upload file via POST /api/v1/upload/payment-proof to get a url
+ *       (same upload endpoint used by the front-page form).
+ *       Step 2 - Pass that url in the payment_proof array in this request body.
+ *       Multiple proofs can be attached at create time. Omit payment_proof if none.
+ *
+ *       Photo flow (2 steps) — separate from payment proof, same pattern as call recordings:
+ *       Step 1 - Upload file via POST /api/v1/leads/upload-photo to get a url.
+ *       Step 2 - Pass that url in the photos array in this request body.
+ *       Multiple photos can be attached at create time. Omit photos if none.
+ *
+ *       Status defaults to "new" on creation — pass status explicitly to start
+ *       the lead further along the lifecycle (e.g. "booked" for an already-closed
+ *       deal being backfilled). Must be one of the values from
+ *       GET /api/v1/config/lead-statuses.
  *
  *       A single phone number can only be used on up to 3 leads (e.g. interested
  *       in multiple projects). The 4th attempt with the same phone is rejected.
@@ -200,6 +214,14 @@ router.post(
  *               source:
  *                 type: string
  *                 example: "Facebook"
+ *               status:
+ *                 type: string
+ *                 description: >
+ *                   Optional. Defaults to "new" if omitted. Set this to start the
+ *                   lead at a later lifecycle stage (e.g. importing a lead that's
+ *                   already booked). Must match a key from GET /api/v1/config/lead-statuses.
+ *                 enum: [new, contacted, interested, follow_up, site_visit_scheduled, site_visit_done, negotiation, booked, lost]
+ *                 example: "booked"
  *               project_id:
  *                 type: string
  *                 description: Project UUID or project name
@@ -247,12 +269,53 @@ router.post(
  *                       type: string
  *                       description: Label for this recording
  *                       example: "First call - Suresh"
+ *               payment_proof:
+ *                 type: array
+ *                 description: >
+ *                   Optional. Get the url from POST /api/v1/upload/payment-proof first
+ *                   (same upload endpoint the front-page form uses).
+ *                   Pass null or omit entirely if no payment proof yet.
+ *                 items:
+ *                   type: object
+ *                   required: [url]
+ *                   properties:
+ *                     url:
+ *                       type: string
+ *                       description: File url returned from POST /api/v1/upload/payment-proof
+ *                       example: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
+ *                     name:
+ *                       type: string
+ *                       description: Label for this proof
+ *                       example: "Booking token receipt"
+ *                     amount:
+ *                       type: string
+ *                       description: Amount shown on the proof
+ *                       example: "50000"
+ *               photos:
+ *                 type: array
+ *                 description: >
+ *                   Optional. Separate from payment_proof — this is the front-page
+ *                   form photo. Get the url from POST /api/v1/leads/upload-photo first.
+ *                   Pass null or omit entirely if no photo yet.
+ *                 items:
+ *                   type: object
+ *                   required: [url]
+ *                   properties:
+ *                     url:
+ *                       type: string
+ *                       description: File url returned from upload-photo endpoint
+ *                       example: "/uploads/leads/photos/photo_lead-uuid_123.jpg"
+ *                     name:
+ *                       type: string
+ *                       description: Label for this photo
+ *                       example: "Customer photo"
  *           example:
  *             name: "Suresh Patel"
  *             phone: "+919876543210"
  *             alternate_phone_number: "+919876543211"
  *             email: "suresh.patel@gmail.com"
  *             source: "Facebook"
+ *             status: "booked"
  *             project_id: "proj-uuid-001"
  *             assigned_to: "user-uuid-001"
  *             budget: "80-100L"
@@ -265,6 +328,13 @@ router.post(
  *               - url: "/uploads/leads/voice/voice_abc123.webm"
  *                 phone_number: "+919876543210"
  *                 name: "First call - Suresh"
+ *             payment_proof:
+ *               - url: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
+ *                 name: "Booking token receipt"
+ *                 amount: "50000"
+ *             photos:
+ *               - url: "/uploads/leads/photos/photo_lead-uuid_123.jpg"
+ *                 name: "Customer photo"
  *     responses:
  *       201:
  *         description: Lead created successfully
@@ -276,7 +346,7 @@ router.post(
  *               data:
  *                 id: "lead-uuid-001"
  *                 name: "Suresh Patel"
- *                 status: "new"
+ *                 status: "booked"
  *                 callback_time: "2026-06-01T10:30:00Z"
  *                 next_followup_time: "2026-06-03T11:00:00Z"
  *                 call_recordings:
@@ -286,8 +356,21 @@ router.post(
  *                     phone_number: "+919876543210"
  *                     name: "First call - Suresh"
  *                     created_at: "2026-06-01T10:35:00Z"
+ *                 payment_proofs:
+ *                   - id: "proof-uuid-001"
+ *                     lead_id: "lead-uuid-001"
+ *                     url: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
+ *                     name: "Booking token receipt"
+ *                     amount: "50000"
+ *                     created_at: "2026-06-01T10:35:00Z"
+ *                 photos:
+ *                   - id: "photo-uuid-001"
+ *                     lead_id: "lead-uuid-001"
+ *                     url: "/uploads/leads/photos/photo_lead-uuid_123.jpg"
+ *                     name: "Customer photo"
+ *                     created_at: "2026-06-01T10:35:00Z"
  *       400:
- *         description: name and phone are required
+ *         description: name and phone are required, or invalid status
  */
 router.post("/", authenticate, leadController.createLead);
 
@@ -1164,7 +1247,483 @@ router.patch("/:id/call-recordings/:rid", authenticate, leadController.updateCal
  */
 router.delete("/:id/call-recordings/:rid", authenticate, leadController.deleteCallRecording);
 
+/**
+ * @swagger
+ * /api/v1/leads/{id}/payment-proofs:
+ *   post:
+ *     summary: Add a payment proof to a lead
+ *     description: >
+ *       Two modes supported (same pattern as call recordings):
+ *
+ *       **Mode 1 — File Upload** (multipart/form-data):
+ *       Upload a file directly. Field name must be `payment_proof`.
+ *       Optionally include `name` and `amount` as form fields.
+ *       Supported formats: PDF, JPEG, PNG, WEBP. Max 10 MB.
+ *
+ *       **Mode 2 — JSON URL Array** (application/json):
+ *       Pass `payment_proof` as an array (or single object) of proofs
+ *       that already exist at a URL (e.g. from POST /api/v1/upload/payment-proof).
+ *       Each item must have a `url`. `name` and `amount` are optional.
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         example: "lead-uuid-001"
+ *     requestBody:
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [payment_proof]
+ *             properties:
+ *               payment_proof:
+ *                 type: string
+ *                 format: binary
+ *                 description: Receipt / screenshot / PDF (max 10 MB)
+ *               name:
+ *                 type: string
+ *                 example: "Booking token receipt"
+ *               amount:
+ *                 type: string
+ *                 example: "50000"
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [payment_proof]
+ *             properties:
+ *               payment_proof:
+ *                 description: Single object or array of proofs
+ *                 oneOf:
+ *                   - type: array
+ *                     items:
+ *                       type: object
+ *                       required: [url]
+ *                       properties:
+ *                         url:
+ *                           type: string
+ *                           example: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
+ *                         name:
+ *                           type: string
+ *                           example: "Booking token receipt"
+ *                         amount:
+ *                           type: string
+ *                           example: "50000"
+ *                   - type: object
+ *                     required: [url]
+ *                     properties:
+ *                       url:
+ *                         type: string
+ *                       name:
+ *                         type: string
+ *                       amount:
+ *                         type: string
+ *           example:
+ *             payment_proof:
+ *               - url: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
+ *                 name: "Booking token receipt"
+ *                 amount: "50000"
+ *     responses:
+ *       201:
+ *         description: Payment proof(s) saved
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "1 payment proof(s) saved"
+ *               data:
+ *                 lead_id: "lead-uuid-001"
+ *                 payment_proofs:
+ *                   - id: "proof-uuid-001"
+ *                     lead_id: "lead-uuid-001"
+ *                     url: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
+ *                     name: "Booking token receipt"
+ *                     amount: "50000"
+ *                     created_at: "2026-06-01T10:35:00Z"
+ *       400:
+ *         description: No file or payment_proof provided
+ *       403:
+ *         description: Access denied
+ *       404:
+ *         description: Lead not found
+ */
+router.post(
+  "/:id/payment-proofs",
+  authenticate,
+  require("../middleware/uploadMiddleware").uploadPaymentProofFile,
+  leadController.addPaymentProof
+);
 
+/**
+ * @swagger
+ * /api/v1/leads/{id}/payment-proofs:
+ *   get:
+ *     summary: Get all payment proofs for a lead
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         example: "lead-uuid-001"
+ *     responses:
+ *       200:
+ *         description: Payment proofs list
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 lead_id: "lead-uuid-001"
+ *                 total: 1
+ *                 payment_proofs:
+ *                   - id: "proof-uuid-001"
+ *                     url: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
+ *                     name: "Booking token receipt"
+ *                     amount: "50000"
+ *                     uploaded_by_name: "Rahul Sharma"
+ *                     created_at: "2026-06-01T10:35:00Z"
+ */
+router.get("/:id/payment-proofs", authenticate, leadController.getPaymentProofs);
+
+/**
+ * @swagger
+ * /api/v1/leads/{id}/payment-proofs/{pid}:
+ *   patch:
+ *     summary: Update a payment proof's name or amount
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *       - in: path
+ *         name: pid
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Payment proof ID
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 example: "Updated receipt label"
+ *               amount:
+ *                 type: string
+ *                 example: "75000"
+ *     responses:
+ *       200:
+ *         description: Payment proof updated
+ *       404:
+ *         description: Payment proof not found
+ */
+router.patch("/:id/payment-proofs/:pid", authenticate, leadController.updatePaymentProof);
+
+/**
+ * @swagger
+ * /api/v1/leads/{id}/payment-proofs/{pid}:
+ *   delete:
+ *     summary: Delete a payment proof
+ *     description: Deletes the payment proof record and removes the file from disk if it was uploaded locally.
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *       - in: path
+ *         name: pid
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Payment proof ID
+ *     responses:
+ *       200:
+ *         description: Payment proof deleted
+ *       404:
+ *         description: Payment proof not found
+ */
+router.delete("/:id/payment-proofs/:pid", authenticate, leadController.deletePaymentProof);
+
+/**
+ * @swagger
+ * /api/v1/leads/upload-photo:
+ *   post:
+ *     summary: Upload a lead photo — returns url to use in lead body
+ *     description: >
+ *       Step 1 of the 2-step photo flow (same pattern as call recordings).
+ *       This is separate from payment proof — use this only for the front-page
+ *       form photo. Upload a file here first — the API returns a url.
+ *       Then pass that url inside the photos array when creating or updating a lead,
+ *       or attach it directly via POST /api/v1/leads/{id}/photos.
+ *       Supported formats: JPEG, PNG, WEBP. Max 10 MB.
+ *       Field name must be photo.
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [photo]
+ *             properties:
+ *               photo:
+ *                 type: string
+ *                 format: binary
+ *                 description: JPEG, PNG, or WEBP image, max 10 MB
+ *     responses:
+ *       201:
+ *         description: File uploaded — use the returned url in photos
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "File uploaded successfully"
+ *               data:
+ *                 url: "/uploads/leads/photos/photo_lead-uuid_1234567890.jpg"
+ *                 filename: "customer.jpg"
+ *                 size: 204800
+ *       400:
+ *         description: No file uploaded, or unsupported file type
+ */
+router.post(
+  "/upload-photo",
+  authenticate,
+  require("../middleware/uploadMiddleware").uploadLeadPhotoFile,
+  leadController.uploadPhotoFile
+);
+
+/**
+ * @swagger
+ * /api/v1/leads/{id}/photos:
+ *   post:
+ *     summary: Add a photo to a lead
+ *     description: >
+ *       Two modes supported (same pattern as call recordings):
+ *
+ *       **Mode 1 — File Upload** (multipart/form-data):
+ *       Upload a file directly. Field name must be `photo`.
+ *       Optionally include `name` as a form field.
+ *       Supported formats: JPEG, PNG, WEBP. Max 10 MB.
+ *
+ *       **Mode 2 — JSON URL Array** (application/json):
+ *       Pass `photos` as an array (or single object) of photos
+ *       that already exist at a URL (e.g. from POST /api/v1/leads/upload-photo).
+ *       Each item must have a `url`. `name` is optional.
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         example: "lead-uuid-001"
+ *     requestBody:
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [photo]
+ *             properties:
+ *               photo:
+ *                 type: string
+ *                 format: binary
+ *                 description: JPEG, PNG, or WEBP image (max 10 MB)
+ *               name:
+ *                 type: string
+ *                 example: "Customer photo"
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [photos]
+ *             properties:
+ *               photos:
+ *                 description: Single object or array of photos
+ *                 oneOf:
+ *                   - type: array
+ *                     items:
+ *                       type: object
+ *                       required: [url]
+ *                       properties:
+ *                         url:
+ *                           type: string
+ *                           example: "/uploads/leads/photos/photo_lead-uuid_123.jpg"
+ *                         name:
+ *                           type: string
+ *                           example: "Customer photo"
+ *                   - type: object
+ *                     required: [url]
+ *                     properties:
+ *                       url:
+ *                         type: string
+ *                       name:
+ *                         type: string
+ *           example:
+ *             photos:
+ *               - url: "/uploads/leads/photos/photo_lead-uuid_123.jpg"
+ *                 name: "Customer photo"
+ *     responses:
+ *       201:
+ *         description: Photo(s) saved
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "1 photo(s) saved"
+ *               data:
+ *                 lead_id: "lead-uuid-001"
+ *                 photos:
+ *                   - id: "photo-uuid-001"
+ *                     lead_id: "lead-uuid-001"
+ *                     url: "/uploads/leads/photos/photo_lead-uuid_123.jpg"
+ *                     name: "Customer photo"
+ *                     created_at: "2026-06-01T10:35:00Z"
+ *       400:
+ *         description: No file or photos provided
+ *       403:
+ *         description: Access denied
+ *       404:
+ *         description: Lead not found
+ */
+router.post(
+  "/:id/photos",
+  authenticate,
+  require("../middleware/uploadMiddleware").uploadLeadPhotoFile,
+  leadController.addPhoto
+);
+
+/**
+ * @swagger
+ * /api/v1/leads/{id}/photos:
+ *   get:
+ *     summary: Get all photos for a lead
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         example: "lead-uuid-001"
+ *     responses:
+ *       200:
+ *         description: Photos list
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 lead_id: "lead-uuid-001"
+ *                 total: 1
+ *                 photos:
+ *                   - id: "photo-uuid-001"
+ *                     url: "/uploads/leads/photos/photo_lead-uuid_123.jpg"
+ *                     name: "Customer photo"
+ *                     uploaded_by_name: "Rahul Sharma"
+ *                     created_at: "2026-06-01T10:35:00Z"
+ */
+router.get("/:id/photos", authenticate, leadController.getPhotos);
+
+/**
+ * @swagger
+ * /api/v1/leads/{id}/photos/{pid}:
+ *   patch:
+ *     summary: Update a photo's name
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *       - in: path
+ *         name: pid
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Photo ID
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 example: "Updated photo label"
+ *     responses:
+ *       200:
+ *         description: Photo updated
+ *       404:
+ *         description: Photo not found
+ */
+router.patch("/:id/photos/:pid", authenticate, leadController.updatePhoto);
+
+/**
+ * @swagger
+ * /api/v1/leads/{id}/photos/{pid}:
+ *   delete:
+ *     summary: Delete a photo
+ *     description: Deletes the photo record and removes the file from disk if it was uploaded locally.
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *       - in: path
+ *         name: pid
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Photo ID
+ *     responses:
+ *       200:
+ *         description: Photo deleted
+ *       404:
+ *         description: Photo not found
+ */
+router.delete("/:id/photos/:pid", authenticate, leadController.deletePhoto);
 
 
 
