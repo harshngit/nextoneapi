@@ -23,7 +23,8 @@
       "Bash(node -c src/routes/closureRoutes.js)",
       "Bash(grep \"lead_statuses \\\\$\")",
       "Bash(node -c src/controllers/myDataController.js)",
-      "Bash(node -c src/controllers/teamHistoryController.js)"
+      "Bash(node -c src/controllers/teamHistoryController.js)",
+      "Bash(node -e \"require\\('./src/controllers/closureController.js'\\); console.log\\('LOAD OK'\\);\")"
     ]
   }
 }

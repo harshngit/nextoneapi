@@ -432,15 +432,22 @@ const updateClosure = async (req, res, next) => {
       finalCommAmt = (parseFloat(agreed_price) * parseFloat(commission_percent) / 100).toFixed(2);
     }
 
+    // Empty strings ("") from form fields must become NULL — Postgres will
+    // throw "invalid input syntax" (22P02) trying to cast "" into a uuid,
+    // numeric, or date column.
+    const blankToNull = (v) => (v === '' ? null : v);
+
     const fields = {
-      project_id: resolvedProjectId, project_name_text: resolvedProjectNameText, site_visit_id,
-      booking_date, unit_number, tower_block, floor_number, unit_type,
-      carpet_area_sqft, super_area_sqft,
-      agreed_price, booking_amount, payment_plan,
-      loan_required, loan_bank,
-      commission_amount: finalCommAmt,
-      commission_percent,
-      commission_paid, commission_paid_date,
+      project_id: resolvedProjectId, project_name_text: resolvedProjectNameText,
+      site_visit_id: blankToNull(site_visit_id),
+      booking_date: blankToNull(booking_date), unit_number, tower_block,
+      floor_number: blankToNull(floor_number), unit_type,
+      carpet_area_sqft: blankToNull(carpet_area_sqft), super_area_sqft: blankToNull(super_area_sqft),
+      agreed_price: blankToNull(agreed_price), booking_amount: blankToNull(booking_amount), payment_plan,
+      loan_required: blankToNull(loan_required), loan_bank,
+      commission_amount: blankToNull(finalCommAmt),
+      commission_percent: blankToNull(commission_percent),
+      commission_paid: blankToNull(commission_paid), commission_paid_date: blankToNull(commission_paid_date),
       closed_by_manager: managerIds,
       closure_notes,
     };
