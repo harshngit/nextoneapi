@@ -688,6 +688,96 @@ router.post("/:id/activity", authenticate, leadController.addLeadActivity);
 
 /**
  * @swagger
+ * /api/v1/leads/{id}/notes:
+ *   get:
+ *     summary: Get all notes for a lead
+ *     description: >
+ *       Returns only the "note" type entries from the lead's activity log
+ *       (a filtered view of GET /:id/activity).
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         example: "lead-uuid-001"
+ *     responses:
+ *       200:
+ *         description: Notes returned
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 - id: "act-uuid-002"
+ *                   type: "note"
+ *                   note: "Client interested in 2BHK"
+ *                   performed_by: "Rahul Sharma"
+ *                   created_at: "2025-04-12T15:30:00Z"
+ *       404:
+ *         description: Lead not found
+ */
+router.get("/:id/notes", authenticate, leadController.getLeadNotes);
+
+/**
+ * @swagger
+ * /api/v1/leads/{id}/notes:
+ *   post:
+ *     summary: Add a note to a lead
+ *     description: >
+ *       Adds a note — stored in the same activity log as
+ *       POST /:id/activity (type is always "note"), so it also shows up
+ *       in GET /:id/activity.
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         example: "lead-uuid-001"
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [note]
+ *             properties:
+ *               note:
+ *                 type: string
+ *                 example: "Client interested in 2BHK"
+ *           example:
+ *             note: "Client interested in 2BHK"
+ *     responses:
+ *       201:
+ *         description: Note added successfully
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Note added successfully"
+ *               data:
+ *                 id: "act-uuid-003"
+ *                 type: "note"
+ *                 note: "Client interested in 2BHK"
+ *                 created_at: "2025-04-20T11:30:00Z"
+ *       400:
+ *         description: note is required
+ *       404:
+ *         description: Lead not found
+ */
+router.post("/:id/notes", authenticate, leadController.addLeadNote);
+
+/**
+ * @swagger
  * /api/v1/leads/sources:
  *   get:
  *     summary: Get list of all lead sources

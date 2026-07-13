@@ -1058,6 +1058,67 @@ const addLeadActivity = async (req, res, next) => {
 };
 
 /**
+ * GET /api/v1/leads/:id/notes
+ * Returns only the "note" type entries from the lead's activity log.
+ */
+const getLeadNotes = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const lead = await pool.query("SELECT id, assigned_to FROM leads WHERE id = $1", [id]);
+    if (lead.rows.length === 0) return next(new AppError("Lead not found", 404));
+
+    const { role, id: callerId } = req.user;
+    if (role === "sales_executive" && lead.rows[0].assigned_to !== callerId) {
+      return next(new AppError("Access denied", 403));
+    }
+
+    const result = await pool.query(
+      `SELECT la.id, la.type, la.note, la.created_at,
+              CONCAT(u.first_name, ' ', u.last_name) AS performed_by
+       FROM lead_activities la
+       LEFT JOIN users u ON u.id = la.performed_by
+       WHERE la.lead_id = $1 AND la.type = 'note'
+       ORDER BY la.created_at DESC`,
+      [id]
+    );
+    return sendSuccess(res, "Notes fetched", result.rows);
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * POST /api/v1/leads/:id/notes
+ * Adds a note — stored in lead_activities (type = 'note'), so it also
+ * shows up in the lead's activity log (GET /:id/activity).
+ */
+const addLeadNote = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { note } = req.body;
+    if (!note) return next(new AppError("note is required", 400));
+
+    const lead = await pool.query(
+      "SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false", [id]
+    );
+    if (lead.rows.length === 0) return next(new AppError("Lead not found", 404));
+
+    const { role, id: callerId } = req.user;
+    if (role === "sales_executive" && lead.rows[0].assigned_to !== callerId) {
+      return next(new AppError("Access denied", 403));
+    }
+
+    const result = await pool.query(
+      `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1,'note',$2,$3) RETURNING *`,
+      [id, note, callerId]
+    );
+    return sendSuccess(res, "Note added successfully", result.rows[0], 201);
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
  * GET /api/v1/leads/sources
  */
 const getLeadSources = async (req, res, next) => {
@@ -1415,6 +1476,8 @@ module.exports = {
   convertLead,
   getLeadActivity,
   addLeadActivity,
+  getLeadNotes,
+  addLeadNote,
   getLeadSources,
   sendLeadWhatsapp,
   sendLeadEmail,

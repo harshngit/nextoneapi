@@ -131,16 +131,19 @@ const createProject = async (req, res, next) => {
 
     const processDocuments = async (docs, docType) => {
       for (const doc of (docs || [])) {
+        if (!doc.file_name || !doc.file_path) {
+          throw new AppError(`Each ${docType} entry requires 'file_name' and 'file_path' — upload the file first via the upload endpoint, then submit the returned metadata`, 400);
+        }
         const docResult = await client.query(
           `INSERT INTO project_documents
              (project_id, document_type, file_name, file_path, file_size, mime_type, uploaded_by)
            VALUES ($1,$2,$3,$4,$5,$6,$7)
            RETURNING *`,
           [
-            project.id, 
-            docType, 
-            doc.file_name, 
-            doc.file_path, 
+            project.id,
+            docType,
+            doc.file_name,
+            doc.file_path,
             doc.file_size || 0, 
             doc.mime_type || 'application/octet-stream', 
             req.user.id
@@ -301,6 +304,9 @@ const updateProject = async (req, res, next) => {
     const savedDocs = [];
     const processDocuments = async (docs, docType) => {
       for (const doc of (docs || [])) {
+        if (!doc.file_name || !doc.file_path) {
+          throw new AppError(`Each ${docType} entry requires 'file_name' and 'file_path' — upload the file first via the upload endpoint, then submit the returned metadata`, 400);
+        }
         const docResult = await client.query(
           `INSERT INTO project_documents
              (project_id, document_type, file_name, file_path, file_size, mime_type, uploaded_by)
