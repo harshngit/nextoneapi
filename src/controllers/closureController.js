@@ -360,11 +360,23 @@ const updateClosure = async (req, res, next) => {
       loan_required, loan_bank,
       commission_amount, commission_percent,
       commission_paid, commission_paid_date,
-      closed_by_manager, closure_notes,
+      closed_by_manager, closure_notes, documents,
     } = req.body;
 
     // Resolve project_id if provided (accepts UUID or name)
     const resolvedProjectId = project_id !== undefined ? await resolveProjectId(project_id) : undefined;
+
+    // Validate documents (cost sheet / payment proof) if provided
+    let docItems = [];
+    if (documents) {
+      docItems = Array.isArray(documents) ? documents : [documents];
+      for (const d of docItems) {
+        if (!d.url) return next(new AppError('Each document must have a url', 400));
+        if (!d.document_type || !VALID_DOC_TYPES.includes(d.document_type)) {
+          return next(new AppError(`Each document must have document_type one of: ${VALID_DOC_TYPES.join(', ')}`, 400));
+        }
+      }
+    }
 
     const existing = await pool.query('SELECT * FROM lead_closures WHERE id = $1', [id]);
     if (!existing.rows.length) return next(new AppError('Closure not found', 404));
@@ -404,18 +416,43 @@ const updateClosure = async (req, res, next) => {
     for (const [col, val] of Object.entries(fields)) {
       if (val !== undefined) { updates.push(`${col} = $${idx++}`); params.push(val); }
     }
-    if (!updates.length) return next(new AppError('No fields to update', 400));
-    updates.push('updated_at = NOW()');
-    params.push(id);
+    if (!updates.length && docItems.length === 0) {
+      return next(new AppError('No fields to update', 400));
+    }
 
     await client.query('BEGIN');
-    const result = await client.query(
-      `UPDATE lead_closures SET ${updates.join(', ')} WHERE id = $${idx} RETURNING *`, params
-    );
-    await client.query(
-      `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1,'note',$2,$3)`,
-      [existing.rows[0].lead_id, 'Closure record updated', req.user.id]
-    );
+
+    let closure = existing.rows[0];
+    if (updates.length) {
+      updates.push('updated_at = NOW()');
+      params.push(id);
+      const result = await client.query(
+        `UPDATE lead_closures SET ${updates.join(', ')} WHERE id = $${idx} RETURNING *`, params
+      );
+      closure = result.rows[0];
+      await client.query(
+        `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1,'note',$2,$3)`,
+        [existing.rows[0].lead_id, 'Closure record updated', req.user.id]
+      );
+    }
+
+    // Save any new cost sheet / payment proof documents
+    const savedDocs = [];
+    if (docItems.length > 0) {
+      for (const d of docItems) {
+        const docResult = await client.query(
+          `INSERT INTO closure_documents (closure_id, document_type, url, name, file_size, mime_type, uploaded_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+          [id, d.document_type, d.url, d.name || null, d.file_size || null, d.mime_type || null, req.user.id]
+        );
+        savedDocs.push(docResult.rows[0]);
+      }
+      await client.query(
+        `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1,'note',$2,$3)`,
+        [existing.rows[0].lead_id, `${docItems.length} closure document(s) added`, req.user.id]
+      );
+    }
+
     await client.query('COMMIT');
 
     // Fetch managers list for the response (all sales_manager + admin users)
@@ -427,7 +464,8 @@ const updateClosure = async (req, res, next) => {
     );
 
     return sendSuccess(res, 'Closure updated', {
-      closure:  result.rows[0],
+      closure:  closure,
+      documents: savedDocs,
       managers: managersRes.rows.map(m => ({ id: m.id, name: m.name, role: m.role })),
     });
   } catch (err) {

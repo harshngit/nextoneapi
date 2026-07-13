@@ -782,6 +782,19 @@ router.get('/:id', authenticate, ctrl.getClosureById);
  *               closure_notes:
  *                 type: string
  *                 example: "Client opted for construction linked plan. Home loan through HDFC."
+ *               documents:
+ *                 type: array
+ *                 description: >
+ *                   Optional. Adds MORE cost sheet / payment proof documents (does not
+ *                   replace existing ones). Get the url from
+ *                   POST /api/v1/closures/upload-document first, then pass it here.
+ *                 items:
+ *                   type: object
+ *                   required: [url, document_type]
+ *                   properties:
+ *                     url: { type: string, example: "/uploads/closures/documents/closure_doc_costsheet_123.pdf" }
+ *                     document_type: { type: string, enum: [cost_sheet, payment_proof] }
+ *                     name: { type: string, example: "Cost Sheet - Tower B" }
  *           example:
  *             project_id: "proj-uuid-001"
  *             site_visit_id: "sv-uuid-001"
@@ -803,6 +816,10 @@ router.get('/:id', authenticate, ctrl.getClosureById);
  *             closed_by_manager:
  *               - "manager-uuid-001"
  *               - "manager-uuid-002"
+ *             documents:
+ *               - url: "/uploads/closures/documents/closure_doc_paymentproof_456.jpg"
+ *                 document_type: "payment_proof"
+ *                 name: "Booking payment screenshot"
  *     responses:
  *       200:
  *         description: Closure updated with managers list for dropdown

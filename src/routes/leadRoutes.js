@@ -433,8 +433,10 @@ router.get("/:id", authenticate, leadController.getLeadById);
  *   put:
  *     summary: Update lead information
  *     description: >
- *       Updates lead details such as name, contact info, budget, or project mapping.
- *       Does NOT change status or assignment — use the dedicated endpoints for those.
+ *       Updates lead details such as name, contact info, budget, project mapping,
+ *       or status. Also accepts call_recordings, payment_proof, and photos arrays
+ *       to attach MORE of those (does not replace existing ones) — same pattern
+ *       as Create Lead. Does NOT reassign the lead — use PATCH /:id/assign for that.
  *       If the phone number is changed, the same 3-leads-per-phone-number limit applies.
  *     tags: [Lead Management]
  *     security:
@@ -502,6 +504,43 @@ router.get("/:id", authenticate, leadController.getLeadById);
  *                 format: date-time
  *                 description: Pass null to clear
  *                 example: "2026-06-03T11:00:00Z"
+ *               status:
+ *                 type: string
+ *                 description: >
+ *                   Optional. Must match a key from GET /api/v1/config/lead-statuses.
+ *                   Logs an activity entry when changed. For the full status-change
+ *                   flow with notifications/WhatsApp, use PATCH /:id/status instead.
+ *                 enum: [new, contacted, interested, follow_up, site_visit_scheduled, site_visit_done, negotiation, booked, lost]
+ *                 example: "negotiation"
+ *               call_recordings:
+ *                 type: array
+ *                 description: Optional. Adds MORE recordings (does not replace existing ones).
+ *                 items:
+ *                   type: object
+ *                   required: [url]
+ *                   properties:
+ *                     url:  { type: string, example: "/uploads/leads/voice/voice_abc123.webm" }
+ *                     phone_number: { type: string, example: "+919876543210" }
+ *                     name: { type: string, example: "Follow-up call - Suresh" }
+ *               payment_proof:
+ *                 type: array
+ *                 description: Optional. Adds MORE payment proofs (does not replace existing ones).
+ *                 items:
+ *                   type: object
+ *                   required: [url]
+ *                   properties:
+ *                     url:    { type: string, example: "/uploads/payment-proofs/payment_proof_receipt_123.jpg" }
+ *                     name:   { type: string, example: "Balance payment receipt" }
+ *                     amount: { type: string, example: "50000" }
+ *               photos:
+ *                 type: array
+ *                 description: Optional. Adds MORE photos (does not replace existing ones).
+ *                 items:
+ *                   type: object
+ *                   required: [url]
+ *                   properties:
+ *                     url:  { type: string, example: "/uploads/leads/photos/photo_lead-uuid_123.jpg" }
+ *                     name: { type: string, example: "Customer photo" }
  *           example:
  *             name: "Suresh Patel"
  *             phone: "+919876543999"
@@ -516,10 +555,18 @@ router.get("/:id", authenticate, leadController.getLeadById);
  *             notes: "Client upgraded interest to 3BHK"
  *             callback_time: "2026-06-01T10:30:00Z"
  *             next_followup_time: "2026-06-03T11:00:00Z"
+ *             status: "negotiation"
  *             call_recordings:
  *               - url: "/uploads/leads/voice/voice_abc123.webm"
  *                 phone_number: "+919876543210"
  *                 name: "First call - Suresh"
+ *             payment_proof:
+ *               - url: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
+ *                 name: "Balance payment receipt"
+ *                 amount: "50000"
+ *             photos:
+ *               - url: "/uploads/leads/photos/photo_lead-uuid_123.jpg"
+ *                 name: "Customer photo"
  *     responses:
  *       200:
  *         description: Lead updated successfully
@@ -533,8 +580,18 @@ router.get("/:id", authenticate, leadController.getLeadById);
  *                 name: "Suresh Patel"
  *                 phone: "+919876543999"
  *                 configuration: "3BHK"
+ *                 status: "negotiation"
  *                 callback_time: "2026-06-01T10:30:00Z"
  *                 next_followup_time: "2026-06-03T11:00:00Z"
+ *                 call_recordings: []
+ *                 payment_proofs:
+ *                   - id: "proof-uuid-002"
+ *                     url: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
+ *                     name: "Balance payment receipt"
+ *                     amount: "50000"
+ *                 photos: []
+ *       400:
+ *         description: Invalid status, or no fields to update
  *       404:
  *         description: Lead not found
  */

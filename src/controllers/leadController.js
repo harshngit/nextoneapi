@@ -546,12 +546,14 @@ const getLeadById = async (req, res, next) => {
  * PUT /api/v1/leads/:id
  */
 const updateLead = async (req, res, next) => {
+  const client = await pool.connect();
   try {
     const { id } = req.params;
     const { name, phone, alternate_phone_number, email, source,
             project_id, project_name,
             budget, location_preference, configuration,
-            callback_time, next_followup_time } = req.body;
+            callback_time, next_followup_time, status,
+            call_recordings, payment_proof, photos } = req.body;
 
     // project_id takes precedence over project_name. Neither has to match an
     // existing project — if it doesn't, it's stored as free text instead
@@ -572,8 +574,38 @@ const updateLead = async (req, res, next) => {
       resolvedProjectNameText = resolved.projectNameText;
     }
 
+    // status — validated the same way as PATCH /:id/status
+    if (status !== undefined && !(await isValidLeadStatus(status))) {
+      return next(new AppError(
+        `Invalid status '${status}'. Use GET /api/v1/config/lead-statuses for the full list.`, 400
+      ));
+    }
+
+    // Validate call_recordings / payment_proof / photos if provided
+    let recordings = [];
+    if (call_recordings) {
+      recordings = Array.isArray(call_recordings) ? call_recordings : [call_recordings];
+      for (const rec of recordings) {
+        if (!rec.url) return next(new AppError('Each call_recording must have a url', 400));
+      }
+    }
+    let proofs = [];
+    if (payment_proof) {
+      proofs = Array.isArray(payment_proof) ? payment_proof : [payment_proof];
+      for (const p of proofs) {
+        if (!p.url) return next(new AppError('Each payment_proof must have a url', 400));
+      }
+    }
+    let photoItems = [];
+    if (photos) {
+      photoItems = Array.isArray(photos) ? photos : [photos];
+      for (const ph of photoItems) {
+        if (!ph.url) return next(new AppError('Each photo must have a url', 400));
+      }
+    }
+
     const existing = await pool.query(
-      "SELECT id, assigned_to, phone FROM leads WHERE id = $1 AND is_archived = false", [id]
+      "SELECT id, assigned_to, phone, status FROM leads WHERE id = $1 AND is_archived = false", [id]
     );
     if (existing.rows.length === 0) return next(new AppError("Lead not found", 404));
 
@@ -604,17 +636,83 @@ const updateLead = async (req, res, next) => {
     if (configuration !== undefined)  { updates.push(`configuration = $${idx++}`);       params.push(configuration || null); }
     if (callback_time !== undefined)  { updates.push(`callback_time = $${idx++}`);       params.push(callback_time || null); }
     if (next_followup_time !== undefined) { updates.push(`next_followup_time = $${idx++}`); params.push(next_followup_time || null); }
+    if (status !== undefined)         { updates.push(`status = $${idx++}`);              params.push(status); }
 
-    if (updates.length === 0) return next(new AppError("No fields to update", 400));
-    updates.push(`updated_at = NOW()`);
-    params.push(id);
+    if (updates.length === 0 && recordings.length === 0 && proofs.length === 0 && photoItems.length === 0) {
+      return next(new AppError("No fields to update", 400));
+    }
 
-    const result = await pool.query(
-      `UPDATE leads SET ${updates.join(", ")} WHERE id = $${idx} RETURNING *`, params
-    );
-    return sendSuccess(res, "Lead updated successfully", result.rows[0]);
+    await client.query("BEGIN");
+
+    let lead = existing.rows[0];
+    if (updates.length > 0) {
+      updates.push(`updated_at = NOW()`);
+      params.push(id);
+      const result = await client.query(
+        `UPDATE leads SET ${updates.join(", ")} WHERE id = $${idx} RETURNING *`, params
+      );
+      lead = result.rows[0];
+
+      if (status !== undefined && status !== existing.rows[0].status) {
+        await logActivity(client, id, "status_change", `Status changed from ${existing.rows[0].status} to ${status}`, callerId);
+      }
+    }
+
+    // Save any new call recordings
+    const savedRecordings = [];
+    if (recordings.length > 0) {
+      for (const rec of recordings) {
+        const recResult = await client.query(
+          `INSERT INTO call_recordings (lead_id, url, phone_number, name, uploaded_by)
+           VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+          [id, rec.url, rec.phone_number || null, rec.name || null, callerId]
+        );
+        savedRecordings.push(recResult.rows[0]);
+      }
+      await logActivity(client, id, "call", `${recordings.length} call recording(s) attached`, callerId);
+    }
+
+    // Save any new payment proofs
+    const savedPaymentProofs = [];
+    if (proofs.length > 0) {
+      for (const p of proofs) {
+        const proofResult = await client.query(
+          `INSERT INTO payment_proofs (lead_id, url, name, amount, uploaded_by)
+           VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+          [id, p.url, p.name || null, p.amount || null, callerId]
+        );
+        savedPaymentProofs.push(proofResult.rows[0]);
+      }
+      await logActivity(client, id, "note", `${proofs.length} payment proof(s) attached`, callerId);
+    }
+
+    // Save any new photos
+    const savedPhotos = [];
+    if (photoItems.length > 0) {
+      for (const ph of photoItems) {
+        const photoResult = await client.query(
+          `INSERT INTO lead_photos (lead_id, url, name, uploaded_by)
+           VALUES ($1, $2, $3, $4) RETURNING *`,
+          [id, ph.url, ph.name || null, callerId]
+        );
+        savedPhotos.push(photoResult.rows[0]);
+      }
+      await logActivity(client, id, "note", `${photoItems.length} photo(s) attached`, callerId);
+    }
+
+    await client.query("COMMIT");
+
+    return sendSuccess(res, "Lead updated successfully", {
+      ...lead,
+      call_recordings: savedRecordings,
+      payment_proofs: savedPaymentProofs,
+      photos: savedPhotos,
+    });
   } catch (err) {
+    await client.query("ROLLBACK");
     next(err);
+  } finally {
+    client.release();
   }
 };
 
