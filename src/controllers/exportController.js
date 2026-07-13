@@ -826,6 +826,558 @@ const buildAttendanceSheets = async (wb, user, start, end) => {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ── SITE REVISITS EXPORT ─────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+
+const buildSiteRevisitsSheet = async (wb, user, start, end, projectId) => {
+  const admin = isAdmin(user)
+  const conditions = [`sr.visit_date BETWEEN $1 AND $2`]
+  const params = [start, end]
+  let idx = 3
+  if (!admin) { conditions.push(`sr.assigned_to = $${idx++}`); params.push(user.id) }
+  if (projectId) { conditions.push(`sr.project_id = $${idx++}`); params.push(projectId) }
+
+  const rows = await pool.query(
+    `SELECT sr.id, sr.visit_date, sr.visit_time, sr.status, sr.transport_arranged,
+            sr.reason, sr.notes, sr.created_at, sr.closing_person,
+            l.name AS lead_name, l.phone AS lead_phone,
+            p.name AS project_name, p.city AS project_city,
+            CONCAT(u.first_name,' ',u.last_name)  AS assigned_to_name,
+            CONCAT(cm.first_name,' ',cm.last_name) AS closing_manager_name,
+            srf.client_reaction, srf.next_step, srf.remarks, srf.rating
+     FROM site_revisits sr
+     JOIN leads    l  ON l.id  = sr.lead_id
+     JOIN projects p  ON p.id  = sr.project_id
+     LEFT JOIN users u  ON u.id  = sr.assigned_to
+     LEFT JOIN users cm ON cm.id = sr.closing_manager
+     LEFT JOIN site_revisit_feedback srf ON srf.revisit_id = sr.id
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY sr.visit_date DESC, sr.visit_time DESC`,
+    params
+  )
+
+  const ws = wb.addWorksheet('Site Revisits', {
+    views: [{ state: 'frozen', xSplit: 0, ySplit: 2 }],
+    properties: { tabColor: { argb: 'FFC084FC' } },
+  })
+  addTitle(ws, `Site Revisits  |  ${fmtDate(start)} – ${fmtDate(end)}`, 17, 'FF7E22CE')
+  ws.columns = [
+    { key: 'sno',       width: 5  }, { key: 'lead',        width: 22 },
+    { key: 'phone',     width: 15 }, { key: 'project',     width: 22 },
+    { key: 'city',      width: 14 }, { key: 'date',        width: 14 },
+    { key: 'time',      width: 12 }, { key: 'status',      width: 14 },
+    { key: 'assigned',  width: 20 }, { key: 'closing_mgr', width: 20 },
+    { key: 'closing_person', width: 20 }, { key: 'transport', width: 12 },
+    { key: 'reason',    width: 20 }, { key: 'reaction',    width: 18 },
+    { key: 'next_step', width: 18 }, { key: 'rating',      width: 10 },
+    { key: 'notes',     width: 30 },
+  ]
+  const h = ws.getRow(2)
+  h.values = ['#','Lead Name','Phone','Project','City','Visit Date','Time','Status',
+    'Assigned To','Closing Manager','Closing Person','Transport','Reason','Client Reaction','Next Step','Rating','Notes']
+  styleHeader(h, 'FF7E22CE')
+
+  rows.rows.forEach((r, i) => {
+    const sc  = SV_STATUS_COLOR[r.status] || { fill: 'FFF9FAFB', font: '111827' }
+    const row = ws.addRow({
+      sno: i + 1, lead: r.lead_name, phone: r.lead_phone,
+      project: r.project_name, city: r.project_city || '—',
+      date: fmtDate(r.visit_date),
+      time: r.visit_time ? r.visit_time.substring(0, 5) : '—',
+      status: (r.status || '').toUpperCase(),
+      assigned: r.assigned_to_name || '—',
+      closing_mgr: r.closing_manager_name || '—',
+      closing_person: r.closing_person || '—',
+      transport: r.transport_arranged ? 'Yes' : 'No',
+      reason: r.reason || '—',
+      reaction: (r.client_reaction || '—').replace(/_/g, ' '),
+      next_step: (r.next_step || '—').replace(/_/g, ' '),
+      rating: r.rating || '—',
+      notes: r.notes || '—',
+    })
+    row.height = 20
+    const sc2 = row.getCell('status')
+    sc2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: sc.fill } }
+    sc2.font = { bold: true, size: 9, color: { argb: `FF${sc.font}` } }
+    sc2.alignment = { horizontal: 'center', vertical: 'middle' }
+    shadeRow(row, i)
+  })
+  ws.autoFilter = { from: 'A2', to: 'Q2' }
+  return rows.rows.length
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── CLOSURES (BOOKINGS) EXPORT ───────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+
+const CLOSURE_STATUS_COLOR = {
+  confirmed: { fill: 'FFD1FAE5', font: '065F46' },
+  cancelled: { fill: 'FFFEE2E2', font: '991B1B' },
+  on_hold:   { fill: 'FFFEF3C7', font: '92400E' },
+}
+
+const buildClosuresSheet = async (wb, user, start, end, projectId) => {
+  const admin = isAdmin(user)
+  const conditions = [`lc.booking_date BETWEEN $1 AND $2`]
+  const params = [start, end]
+  let idx = 3
+  if (!admin) { conditions.push(`lc.closed_by = $${idx++}`); params.push(user.id) }
+  if (projectId) { conditions.push(`lc.project_id = $${idx++}`); params.push(projectId) }
+
+  const rows = await pool.query(
+    `SELECT lc.*,
+            l.name AS lead_name, l.phone AS lead_phone,
+            p.name AS project_name, p.city AS project_city,
+            CONCAT(cb.first_name,' ',cb.last_name) AS closed_by_name
+     FROM lead_closures lc
+     LEFT JOIN leads    l  ON l.id  = lc.lead_id
+     LEFT JOIN projects p  ON p.id  = lc.project_id
+     LEFT JOIN users    cb ON cb.id = lc.closed_by
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY lc.booking_date DESC`,
+    params
+  )
+
+  const ws = wb.addWorksheet('Closures', {
+    views: [{ state: 'frozen', xSplit: 0, ySplit: 2 }],
+    properties: { tabColor: { argb: 'FF22C55E' } },
+  })
+  addTitle(ws, `Closures / Bookings  |  ${fmtDate(start)} – ${fmtDate(end)}`, 23, 'FF15803D')
+  ws.columns = [
+    { key: 'sno',       width: 5  }, { key: 'lead',        width: 22 },
+    { key: 'phone',     width: 15 }, { key: 'project',     width: 22 },
+    { key: 'city',      width: 14 }, { key: 'unit',        width: 12 },
+    { key: 'tower',     width: 14 }, { key: 'floor',       width: 10 },
+    { key: 'unit_type', width: 12 }, { key: 'carpet',      width: 14 },
+    { key: 'super_area',width: 14 }, { key: 'agreed_price',width: 16 },
+    { key: 'booking_amt', width: 16 }, { key: 'payment_plan', width: 16 },
+    { key: 'loan',      width: 10 }, { key: 'loan_bank',   width: 18 },
+    { key: 'commission_amt', width: 16 }, { key: 'commission_pct', width: 14 },
+    { key: 'commission_paid', width: 16 }, { key: 'booking_date', width: 14 },
+    { key: 'status',    width: 14 }, { key: 'closed_by',   width: 20 },
+    { key: 'notes',     width: 30 },
+  ]
+  const h = ws.getRow(2)
+  h.values = ['#','Lead Name','Phone','Project','City','Unit No.','Tower/Block','Floor','Unit Type',
+    'Carpet Area (sqft)','Super Area (sqft)','Agreed Price','Booking Amount','Payment Plan','Loan Req?',
+    'Loan Bank','Commission Amt','Commission %','Commission Paid','Booking Date','Status','Closed By','Notes']
+  styleHeader(h, 'FF15803D')
+
+  rows.rows.forEach((r, i) => {
+    const sc  = CLOSURE_STATUS_COLOR[r.status] || { fill: 'FFF9FAFB', font: '111827' }
+    const row = ws.addRow({
+      sno: i + 1, lead: r.lead_name || '—', phone: r.lead_phone || '—',
+      project: r.project_name || '—', city: r.project_city || '—',
+      unit: r.unit_number || '—', tower: r.tower_block || '—',
+      floor: r.floor_number === null || r.floor_number === undefined ? '—' : r.floor_number,
+      unit_type: r.unit_type || '—',
+      carpet: r.carpet_area_sqft || '—', super_area: r.super_area_sqft || '—',
+      agreed_price: r.agreed_price || '—', booking_amt: r.booking_amount || '—',
+      payment_plan: r.payment_plan || '—', loan: r.loan_required ? 'Yes' : 'No',
+      loan_bank: r.loan_bank || '—',
+      commission_amt: r.commission_amount || '—', commission_pct: r.commission_percent || '—',
+      commission_paid: r.commission_paid ? 'Yes' : 'No',
+      booking_date: fmtDate(r.booking_date), status: (r.status || '').toUpperCase(),
+      closed_by: r.closed_by_name || '—', notes: r.closure_notes || '—',
+    })
+    row.height = 20
+    const sc2 = row.getCell('status')
+    sc2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: sc.fill } }
+    sc2.font = { bold: true, size: 9, color: { argb: `FF${sc.font}` } }
+    sc2.alignment = { horizontal: 'center', vertical: 'middle' }
+    shadeRow(row, i)
+  })
+  ws.autoFilter = { from: 'A2', to: 'W2' }
+  return rows.rows.length
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── HOLIDAYS EXPORT ───────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+
+const buildHolidaysSheet = async (wb, start, end) => {
+  const rows = await pool.query(
+    `SELECT h.*, CONCAT(u.first_name,' ',u.last_name) AS created_by_name
+     FROM holidays h
+     LEFT JOIN users u ON u.id = h.created_by
+     WHERE h.date BETWEEN $1 AND $2
+     ORDER BY h.date ASC`,
+    [start, end]
+  )
+
+  const ws = wb.addWorksheet('Holidays', {
+    views: [{ state: 'frozen', xSplit: 0, ySplit: 2 }],
+    properties: { tabColor: { argb: 'FFFBBF24' } },
+  })
+  addTitle(ws, `Holidays  |  ${fmtDate(start)} – ${fmtDate(end)}`, 7, 'FFB45309')
+  ws.columns = [
+    { key: 'sno',    width: 5  }, { key: 'date',        width: 14 },
+    { key: 'name',   width: 26 }, { key: 'description', width: 30 },
+    { key: 'roles',  width: 26 }, { key: 'user_count',  width: 14 },
+    { key: 'created_by', width: 20 },
+  ]
+  const h = ws.getRow(2)
+  h.values = ['#','Date','Holiday Name','Description','Applies To Roles','Specific Users','Created By']
+  styleHeader(h, 'FFB45309')
+
+  rows.rows.forEach((r, i) => {
+    const row = ws.addRow({
+      sno: i + 1, date: fmtDate(r.date), name: r.name, description: r.description || '—',
+      roles: (r.roles || []).length ? r.roles.join(', ').replace(/_/g, ' ') : '—',
+      user_count: (r.user_ids || []).length || 0,
+      created_by: r.created_by_name || '—',
+    })
+    row.height = 20
+    shadeRow(row, i)
+  })
+  ws.autoFilter = { from: 'A2', to: 'G2' }
+  return rows.rows.length
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── SALARY / PAYROLL EXPORT (admin only) ─────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+
+const buildSalarySheets = async (wb, start, end) => {
+  // ── Salary Slips tab ─────────────────────────────────────────────────────
+  const slips = await pool.query(
+    `SELECT ss.*, CONCAT(u.first_name,' ',u.last_name) AS full_name, u.role
+     FROM salary_slips ss
+     JOIN users u ON u.id = ss.user_id
+     WHERE make_date(ss.year, ss.month, 1)
+           BETWEEN date_trunc('month', $1::date) AND date_trunc('month', $2::date)
+     ORDER BY ss.year DESC, ss.month DESC, u.first_name ASC`,
+    [start, end]
+  )
+  const ws1 = wb.addWorksheet('Salary Slips', {
+    views: [{ state: 'frozen', xSplit: 0, ySplit: 2 }],
+    properties: { tabColor: { argb: 'FF0EA5E9' } },
+  })
+  addTitle(ws1, `Salary Slips  |  ${fmtDate(start)} – ${fmtDate(end)}`, 14, 'FF0369A1')
+  ws1.columns = [
+    { key: 'sno', width: 5 }, { key: 'name', width: 22 }, { key: 'role', width: 16 },
+    { key: 'month', width: 10 }, { key: 'year', width: 8 }, { key: 'monthly', width: 14 },
+    { key: 'working_days', width: 12 }, { key: 'present', width: 10 }, { key: 'absent', width: 10 },
+    { key: 'leave', width: 10 }, { key: 'earned', width: 14 }, { key: 'deductions', width: 14 },
+    { key: 'incentive', width: 14 }, { key: 'final', width: 14 },
+  ]
+  const h1 = ws1.getRow(2)
+  h1.values = ['#','Employee','Role','Month','Year','Monthly Salary','Working Days','Present','Absent',
+    'Leave','Earned Salary','Deductions','Incentive','Final Payout']
+  styleHeader(h1, 'FF0369A1')
+  slips.rows.forEach((r, i) => {
+    const row = ws1.addRow({
+      sno: i + 1, name: r.full_name, role: (r.role || '').replace(/_/g, ' '),
+      month: r.month, year: r.year, monthly: r.monthly_salary,
+      working_days: r.working_days, present: r.present_days, absent: r.absent_days, leave: r.leave_days,
+      earned: r.earned_salary, deductions: r.deductions, incentive: r.incentive_amount,
+      final: r.total_payout || r.final_salary,
+    })
+    row.height = 20
+    shadeRow(row, i)
+  })
+  ws1.autoFilter = { from: 'A2', to: 'N2' }
+
+  // ── Current Salaries tab ─────────────────────────────────────────────────
+  const sal = await pool.query(
+    `SELECT DISTINCT ON (es.user_id) es.*, CONCAT(u.first_name,' ',u.last_name) AS full_name, u.role
+     FROM employee_salaries es
+     JOIN users u ON u.id = es.user_id
+     ORDER BY es.user_id, es.effective_from DESC`
+  )
+  const ws2 = wb.addWorksheet('Current Salaries', { properties: { tabColor: { argb: 'FF38BDF8' } } })
+  addTitle(ws2, 'Current Salaries  |  Latest effective per employee', 6, 'FF0369A1')
+  ws2.columns = [
+    { key: 'sno', width: 5 }, { key: 'name', width: 24 }, { key: 'role', width: 18 },
+    { key: 'monthly', width: 16 }, { key: 'effective_from', width: 16 }, { key: 'notes', width: 30 },
+  ]
+  const h2 = ws2.getRow(2)
+  h2.values = ['#','Employee','Role','Monthly Salary','Effective From','Notes']
+  styleHeader(h2, 'FF0369A1')
+  sal.rows.forEach((r, i) => {
+    const row = ws2.addRow({
+      sno: i + 1, name: r.full_name, role: (r.role || '').replace(/_/g, ' '),
+      monthly: r.monthly_salary, effective_from: fmtDate(r.effective_from), notes: r.notes || '—',
+    })
+    row.height = 20
+    shadeRow(row, i)
+  })
+  ws2.autoFilter = { from: 'A2', to: 'F2' }
+
+  // ── Incentives tab ────────────────────────────────────────────────────────
+  const inc = await pool.query(
+    `SELECT ei.*, CONCAT(u.first_name,' ',u.last_name) AS full_name,
+            CONCAT(g.first_name,' ',g.last_name) AS given_by_name
+     FROM employee_incentives ei
+     JOIN users u ON u.id = ei.user_id
+     LEFT JOIN users g ON g.id = ei.given_by
+     WHERE make_date(ei.year, ei.month, 1)
+           BETWEEN date_trunc('month', $1::date) AND date_trunc('month', $2::date)
+     ORDER BY ei.year DESC, ei.month DESC`,
+    [start, end]
+  )
+  const ws3 = wb.addWorksheet('Incentives', { properties: { tabColor: { argb: 'FF34D399' } } })
+  addTitle(ws3, `Incentives  |  ${fmtDate(start)} – ${fmtDate(end)}`, 7, 'FF047857')
+  ws3.columns = [
+    { key: 'sno', width: 5 }, { key: 'name', width: 24 }, { key: 'month', width: 10 },
+    { key: 'year', width: 8 }, { key: 'amount', width: 14 }, { key: 'reason', width: 30 },
+    { key: 'given_by', width: 20 },
+  ]
+  const h3 = ws3.getRow(2)
+  h3.values = ['#','Employee','Month','Year','Amount','Reason','Given By']
+  styleHeader(h3, 'FF047857')
+  inc.rows.forEach((r, i) => {
+    const row = ws3.addRow({
+      sno: i + 1, name: r.full_name, month: r.month, year: r.year,
+      amount: r.amount, reason: r.reason || '—', given_by: r.given_by_name || '—',
+    })
+    row.height = 20
+    shadeRow(row, i)
+  })
+  ws3.autoFilter = { from: 'A2', to: 'G2' }
+
+  // ── Bonus tab ─────────────────────────────────────────────────────────────
+  const bon = await pool.query(
+    `SELECT eb.*, CONCAT(u.first_name,' ',u.last_name) AS full_name,
+            CONCAT(g.first_name,' ',g.last_name) AS given_by_name
+     FROM employee_bonus eb
+     JOIN users u ON u.id = eb.user_id
+     LEFT JOIN users g ON g.id = eb.given_by
+     WHERE eb.created_at::date BETWEEN $1 AND $2
+     ORDER BY eb.created_at DESC`,
+    [start, end]
+  )
+  const ws4 = wb.addWorksheet('Bonus', { properties: { tabColor: { argb: 'FFF472B6' } } })
+  addTitle(ws4, `Bonus  |  ${fmtDate(start)} – ${fmtDate(end)}`, 8, 'FFBE185D')
+  ws4.columns = [
+    { key: 'sno', width: 5 }, { key: 'name', width: 24 }, { key: 'type', width: 16 },
+    { key: 'amount', width: 14 }, { key: 'paid', width: 10 }, { key: 'paid_date', width: 14 },
+    { key: 'reason', width: 26 }, { key: 'given_by', width: 20 },
+  ]
+  const h4 = ws4.getRow(2)
+  h4.values = ['#','Employee','Bonus Type','Amount','Paid?','Paid Date','Reason','Given By']
+  styleHeader(h4, 'FFBE185D')
+  bon.rows.forEach((r, i) => {
+    const row = ws4.addRow({
+      sno: i + 1, name: r.full_name, type: (r.bonus_type || '').replace(/_/g, ' '),
+      amount: r.amount, paid: r.paid ? 'Yes' : 'No',
+      paid_date: r.paid_date ? fmtDate(r.paid_date) : '—',
+      reason: r.reason || '—', given_by: r.given_by_name || '—',
+    })
+    row.height = 20
+    shadeRow(row, i)
+  })
+  ws4.autoFilter = { from: 'A2', to: 'H2' }
+
+  // ── Appraisals tab ────────────────────────────────────────────────────────
+  const app = await pool.query(
+    `SELECT ea.*, CONCAT(u.first_name,' ',u.last_name) AS full_name,
+            CONCAT(g.first_name,' ',g.last_name) AS appraised_by_name
+     FROM employee_appraisals ea
+     JOIN users u ON u.id = ea.user_id
+     LEFT JOIN users g ON g.id = ea.appraised_by
+     WHERE ea.effective_from BETWEEN $1 AND $2
+     ORDER BY ea.effective_from DESC`,
+    [start, end]
+  )
+  const ws5 = wb.addWorksheet('Appraisals', { properties: { tabColor: { argb: 'FFA78BFA' } } })
+  addTitle(ws5, `Appraisals  |  ${fmtDate(start)} – ${fmtDate(end)}`, 8, 'FF5B21B6')
+  ws5.columns = [
+    { key: 'sno', width: 5 }, { key: 'name', width: 24 }, { key: 'from_salary', width: 14 },
+    { key: 'to_salary', width: 14 }, { key: 'increment_amt', width: 16 }, { key: 'increment_pct', width: 14 },
+    { key: 'effective_from', width: 16 }, { key: 'appraised_by', width: 20 },
+  ]
+  const h5 = ws5.getRow(2)
+  h5.values = ['#','Employee','From Salary','To Salary','Increment Amt','Increment %','Effective From','Appraised By']
+  styleHeader(h5, 'FF5B21B6')
+  app.rows.forEach((r, i) => {
+    const row = ws5.addRow({
+      sno: i + 1, name: r.full_name, from_salary: r.from_salary || '—', to_salary: r.to_salary,
+      increment_amt: r.increment_amount || '—', increment_pct: r.increment_percent || '—',
+      effective_from: fmtDate(r.effective_from), appraised_by: r.appraised_by_name || '—',
+    })
+    row.height = 20
+    shadeRow(row, i)
+  })
+  ws5.autoFilter = { from: 'A2', to: 'H2' }
+
+  return slips.rows.length
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── TARGETS EXPORT ────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+
+const buildTargetsSheet = async (wb, user, start, end) => {
+  const admin = isAdmin(user)
+  const conditions = [`ut.target_month BETWEEN date_trunc('month', $1::date) AND date_trunc('month', $2::date)`]
+  const params = [start, end]
+  let idx = 3
+  if (!admin) { conditions.push(`ut.user_id = $${idx++}`); params.push(user.id) }
+
+  const rows = await pool.query(
+    `SELECT ut.*, CONCAT(u.first_name,' ',u.last_name) AS full_name, u.role,
+            (SELECT COUNT(*) FROM site_visits sv
+             WHERE sv.assigned_to = ut.user_id
+               AND date_trunc('month', sv.visit_date) = ut.target_month) AS site_visits_achieved,
+            (SELECT COUNT(*) FROM lead_closures lc
+             WHERE lc.closed_by = ut.user_id
+               AND date_trunc('month', lc.booking_date) = ut.target_month) AS closures_achieved
+     FROM user_targets ut
+     JOIN users u ON u.id = ut.user_id
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY ut.target_month DESC, u.first_name ASC`,
+    params
+  )
+
+  const ws = wb.addWorksheet('Targets', {
+    views: [{ state: 'frozen', xSplit: 0, ySplit: 2 }],
+    properties: { tabColor: { argb: 'FFFB923C' } },
+  })
+  addTitle(ws, `Targets  |  ${fmtDate(start)} – ${fmtDate(end)}`, 9, 'FFC2410C')
+  ws.columns = [
+    { key: 'sno', width: 5 }, { key: 'name', width: 24 }, { key: 'role', width: 16 },
+    { key: 'month', width: 14 }, { key: 'sv_target', width: 14 }, { key: 'sv_achieved', width: 16 },
+    { key: 'cl_target', width: 14 }, { key: 'cl_achieved', width: 16 },
+  ]
+  const h = ws.getRow(2)
+  h.values = ['#','Employee','Role','Target Month','Site Visit Target','Site Visits Achieved',
+    'Closure Target','Closures Achieved']
+  styleHeader(h, 'FFC2410C')
+  rows.rows.forEach((r, i) => {
+    const row = ws.addRow({
+      sno: i + 1, name: r.full_name, role: (r.role || '').replace(/_/g, ' '),
+      month: new Date(r.target_month).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }),
+      sv_target: r.site_visit_target, sv_achieved: parseInt(r.site_visits_achieved) || 0,
+      cl_target: r.closure_target, cl_achieved: parseInt(r.closures_achieved) || 0,
+    })
+    row.height = 20
+    shadeRow(row, i)
+  })
+  ws.autoFilter = { from: 'A2', to: 'H2' }
+  return rows.rows.length
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── PHONE REVEAL REQUESTS EXPORT ─────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PRR_STATUS_COLOR = {
+  pending:  { fill: 'FFFEF3C7', font: '92400E' },
+  approved: { fill: 'FFD1FAE5', font: '065F46' },
+  declined: { fill: 'FFFEE2E2', font: '991B1B' },
+}
+
+const buildPhoneRevealSheet = async (wb, user, start, end) => {
+  const admin = isAdmin(user)
+  const conditions = [`prr.created_at::date BETWEEN $1 AND $2`]
+  const params = [start, end]
+  let idx = 3
+  if (!admin) { conditions.push(`prr.requested_by = $${idx++}`); params.push(user.id) }
+
+  const rows = await pool.query(
+    `SELECT prr.*, l.name AS lead_name, l.phone AS lead_phone,
+            CONCAT(ru.first_name,' ',ru.last_name) AS requester_name,
+            CONCAT(rv.first_name,' ',rv.last_name) AS reviewer_name
+     FROM phone_reveal_requests prr
+     JOIN leads l  ON l.id  = prr.lead_id
+     JOIN users ru ON ru.id = prr.requested_by
+     LEFT JOIN users rv ON rv.id = prr.reviewed_by
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY prr.created_at DESC`,
+    params
+  )
+
+  const ws = wb.addWorksheet('Phone Reveal Requests', {
+    views: [{ state: 'frozen', xSplit: 0, ySplit: 2 }],
+    properties: { tabColor: { argb: 'FF60A5FA' } },
+  })
+  addTitle(ws, `Phone Reveal Requests  |  ${fmtDate(start)} – ${fmtDate(end)}`, 9, 'FF1D4ED8')
+  ws.columns = [
+    { key: 'sno', width: 5 }, { key: 'lead', width: 22 }, { key: 'phone', width: 15 },
+    { key: 'requester', width: 20 }, { key: 'reason', width: 26 }, { key: 'status', width: 14 },
+    { key: 'reviewer', width: 20 }, { key: 'review_note', width: 26 }, { key: 'created', width: 18 },
+  ]
+  const h = ws.getRow(2)
+  h.values = ['#','Lead Name','Phone','Requested By','Reason','Status','Reviewed By','Review Note','Requested At']
+  styleHeader(h, 'FF1D4ED8')
+  rows.rows.forEach((r, i) => {
+    const sc  = PRR_STATUS_COLOR[r.status] || { fill: 'FFF9FAFB', font: '111827' }
+    const row = ws.addRow({
+      sno: i + 1, lead: r.lead_name, phone: r.lead_phone,
+      requester: r.requester_name, reason: r.reason || '—',
+      status: (r.status || '').toUpperCase(), reviewer: r.reviewer_name || '—',
+      review_note: r.review_note || '—', created: fmtDateTime(r.created_at),
+    })
+    row.height = 20
+    const sc2 = row.getCell('status')
+    sc2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: sc.fill } }
+    sc2.font = { bold: true, size: 9, color: { argb: `FF${sc.font}` } }
+    sc2.alignment = { horizontal: 'center', vertical: 'middle' }
+    shadeRow(row, i)
+  })
+  ws.autoFilter = { from: 'A2', to: 'I2' }
+  return rows.rows.length
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ── LEAD REASSIGNMENT HISTORY EXPORT ─────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+
+const buildReassignmentHistorySheet = async (wb, user, start, end) => {
+  const admin = isAdmin(user)
+  const conditions = [`rh.created_at::date BETWEEN $1 AND $2`]
+  const params = [start, end]
+  let idx = 3
+  if (!admin) {
+    conditions.push(`(rh.from_user_id = $${idx} OR rh.to_user_id = $${idx})`)
+    params.push(user.id)
+    idx++
+  }
+
+  const rows = await pool.query(
+    `SELECT rh.*, l.name AS lead_name, l.phone AS lead_phone,
+            CONCAT(fu.first_name,' ',fu.last_name) AS from_user_name,
+            CONCAT(tu.first_name,' ',tu.last_name) AS to_user_name,
+            CONCAT(pb.first_name,' ',pb.last_name) AS performed_by_name
+     FROM lead_reassignment_history rh
+     JOIN leads l ON l.id = rh.lead_id
+     LEFT JOIN users fu ON fu.id = rh.from_user_id
+     LEFT JOIN users tu ON tu.id = rh.to_user_id
+     LEFT JOIN users pb ON pb.id = rh.performed_by
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY rh.created_at DESC`,
+    params
+  )
+
+  const ws = wb.addWorksheet('Lead Reassignments', {
+    views: [{ state: 'frozen', xSplit: 0, ySplit: 2 }],
+    properties: { tabColor: { argb: 'FFF87171' } },
+  })
+  addTitle(ws, `Lead Reassignment History  |  ${fmtDate(start)} – ${fmtDate(end)}`, 8, 'FFB91C1C')
+  ws.columns = [
+    { key: 'sno', width: 5 }, { key: 'lead', width: 22 }, { key: 'phone', width: 15 },
+    { key: 'from_user', width: 20 }, { key: 'to_user', width: 20 }, { key: 'reason', width: 26 },
+    { key: 'performed_by', width: 20 }, { key: 'created', width: 18 },
+  ]
+  const h = ws.getRow(2)
+  h.values = ['#','Lead Name','Phone','From','To','Reason','Performed By','Date']
+  styleHeader(h, 'FFB91C1C')
+  rows.rows.forEach((r, i) => {
+    const row = ws.addRow({
+      sno: i + 1, lead: r.lead_name, phone: r.lead_phone,
+      from_user: r.from_user_name || '—', to_user: r.to_user_name || '—',
+      reason: r.reason || '—', performed_by: r.performed_by_name || '—',
+      created: fmtDateTime(r.created_at),
+    })
+    row.height = 20
+    shadeRow(row, i)
+  })
+  ws.autoFilter = { from: 'A2', to: 'H2' }
+  return rows.rows.length
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ── ROUTE HANDLERS ───────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -893,6 +1445,84 @@ const exportAttendance = async (req, res, next) => {
   } catch (err) { next(err) }
 }
 
+const exportSiteRevisits = async (req, res, next) => {
+  try {
+    const { from, to, project_id } = req.query
+    const { start, end } = defaultRange(from, to)
+    const wb = new ExcelJS.Workbook()
+    wb.creator = 'NextOne Realty CRM'; wb.created = new Date()
+    await buildSiteRevisitsSheet(wb, req.user, start, end, project_id)
+    await streamWorkbook(res, wb, `SiteRevisits_${start}_${end}.xlsx`)
+  } catch (err) { next(err) }
+}
+
+const exportClosures = async (req, res, next) => {
+  try {
+    const { from, to, project_id } = req.query
+    const { start, end } = defaultRange(from, to)
+    const wb = new ExcelJS.Workbook()
+    wb.creator = 'NextOne Realty CRM'; wb.created = new Date()
+    await buildClosuresSheet(wb, req.user, start, end, project_id)
+    await streamWorkbook(res, wb, `Closures_${start}_${end}.xlsx`)
+  } catch (err) { next(err) }
+}
+
+const exportHolidays = async (req, res, next) => {
+  try {
+    const { from, to } = req.query
+    const { start, end } = defaultRange(from, to)
+    const wb = new ExcelJS.Workbook()
+    wb.creator = 'NextOne Realty CRM'; wb.created = new Date()
+    await buildHolidaysSheet(wb, start, end)
+    await streamWorkbook(res, wb, `Holidays_${start}_${end}.xlsx`)
+  } catch (err) { next(err) }
+}
+
+const exportSalary = async (req, res, next) => {
+  try {
+    if (!isAdmin(req.user)) return next(new AppError('Admin access required', 403))
+    const { from, to } = req.query
+    const { start, end } = defaultRange(from, to)
+    const wb = new ExcelJS.Workbook()
+    wb.creator = 'NextOne Realty CRM'; wb.created = new Date()
+    await buildSalarySheets(wb, start, end)
+    await streamWorkbook(res, wb, `Salary_${start}_${end}.xlsx`)
+  } catch (err) { next(err) }
+}
+
+const exportTargets = async (req, res, next) => {
+  try {
+    const { from, to } = req.query
+    const { start, end } = defaultRange(from, to)
+    const wb = new ExcelJS.Workbook()
+    wb.creator = 'NextOne Realty CRM'; wb.created = new Date()
+    await buildTargetsSheet(wb, req.user, start, end)
+    await streamWorkbook(res, wb, `Targets_${start}_${end}.xlsx`)
+  } catch (err) { next(err) }
+}
+
+const exportPhoneReveal = async (req, res, next) => {
+  try {
+    const { from, to } = req.query
+    const { start, end } = defaultRange(from, to)
+    const wb = new ExcelJS.Workbook()
+    wb.creator = 'NextOne Realty CRM'; wb.created = new Date()
+    await buildPhoneRevealSheet(wb, req.user, start, end)
+    await streamWorkbook(res, wb, `PhoneRevealRequests_${start}_${end}.xlsx`)
+  } catch (err) { next(err) }
+}
+
+const exportReassignmentHistory = async (req, res, next) => {
+  try {
+    const { from, to } = req.query
+    const { start, end } = defaultRange(from, to)
+    const wb = new ExcelJS.Workbook()
+    wb.creator = 'NextOne Realty CRM'; wb.created = new Date()
+    await buildReassignmentHistorySheet(wb, req.user, start, end)
+    await streamWorkbook(res, wb, `LeadReassignments_${start}_${end}.xlsx`)
+  } catch (err) { next(err) }
+}
+
 const exportAll = async (req, res, next) => {
   try {
     if (!isAdmin(req.user)) return next(new AppError('Admin access required', 403))
@@ -902,10 +1532,17 @@ const exportAll = async (req, res, next) => {
     wb.creator = 'NextOne Realty CRM'; wb.created = new Date()
     await buildLeadsSheet(wb, req.user, start, end, null)
     await buildSiteVisitsSheet(wb, req.user, start, end, null)
+    await buildSiteRevisitsSheet(wb, req.user, start, end, null)
     await buildFollowUpsSheet(wb, req.user, start, end)
+    await buildClosuresSheet(wb, req.user, start, end, null)
     await buildProjectsSheet(wb)
     await buildUsersSheet(wb)
     await buildAttendanceSheets(wb, req.user, start, end)
+    await buildTargetsSheet(wb, req.user, start, end)
+    await buildHolidaysSheet(wb, start, end)
+    await buildPhoneRevealSheet(wb, req.user, start, end)
+    await buildReassignmentHistorySheet(wb, req.user, start, end)
+    if (isAdmin(req.user)) await buildSalarySheets(wb, start, end)
     await streamWorkbook(res, wb, `NextOne_CRM_Export_${start}_${end}.xlsx`)
   } catch (err) { next(err) }
 }
@@ -913,4 +1550,6 @@ const exportAll = async (req, res, next) => {
 module.exports = {
   exportLeads, exportSiteVisits, exportFollowUps,
   exportProjects, exportUsers, exportAttendance, exportAll,
+  exportSiteRevisits, exportClosures, exportHolidays,
+  exportSalary, exportTargets, exportPhoneReveal, exportReassignmentHistory,
 }
