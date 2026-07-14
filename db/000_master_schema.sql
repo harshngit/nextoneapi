@@ -820,7 +820,7 @@ COMMENT ON COLUMN lead_closures.closed_by_manager IS 'Array of manager UUIDs who
 CREATE TABLE IF NOT EXISTS closure_documents (
   id            UUID        PRIMARY KEY DEFAULT uuid_generate_v4(),
   closure_id    UUID        NOT NULL REFERENCES lead_closures(id) ON DELETE CASCADE,
-  document_type VARCHAR(20) NOT NULL CHECK (document_type IN ('cost_sheet','payment_proof')),
+  document_type VARCHAR(20) NOT NULL CHECK (document_type IN ('cost_sheet','payment_proof','booking_form')),
   url           TEXT        NOT NULL,
   name          VARCHAR(255),
   file_size     BIGINT,

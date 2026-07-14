@@ -18,7 +18,7 @@ const { getTeamIds, ADMIN_ROLES, LEAF_ROLES } = require('../utils/teamUtils');
 const { resolveProjectId } = require('../utils/projectResolver');
 
 const VALID_STATUSES  = ['confirmed', 'cancelled', 'on_hold'];
-const VALID_DOC_TYPES = ['cost_sheet', 'payment_proof'];
+const VALID_DOC_TYPES = ['cost_sheet', 'payment_proof', 'booking_form'];
 
 // ── GET /api/v1/closures ──────────────────────────────────────────────────────
 const getAllClosures = async (req, res, next) => {
@@ -764,7 +764,7 @@ const uploadDocumentFile = async (req, res, next) => {
 
 // ─── POST /api/v1/closures/:id/documents ──────────────────────────────────────
 // Mode 1 — File upload (multipart/form-data): field document (required),
-//          body: document_type (required: cost_sheet | payment_proof), name (optional)
+//          body: document_type (required: cost_sheet | payment_proof | booking_form), name (optional)
 // Mode 2 — JSON body: { documents: [{ url, document_type, name }] } (single object also accepted)
 const addClosureDocument = async (req, res, next) => {
   try {

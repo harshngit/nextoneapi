@@ -260,7 +260,7 @@ router.get('/', authenticate, ctrl.getAllClosures);
  *                       example: "/uploads/closures/documents/closure_doc_costsheet_123.pdf"
  *                     document_type:
  *                       type: string
- *                       enum: [cost_sheet, payment_proof]
+ *                       enum: [cost_sheet, payment_proof, booking_form]
  *                       example: "cost_sheet"
  *                     name:
  *                       type: string
@@ -473,7 +473,7 @@ router.post('/upload-document', authenticate, uploadClosureDocFile, ctrl.uploadD
  *                 description: Cost sheet / payment proof (PDF, JPEG, PNG, WEBP, max 10 MB)
  *               document_type:
  *                 type: string
- *                 enum: [cost_sheet, payment_proof]
+ *                 enum: [cost_sheet, payment_proof, booking_form]
  *               name:
  *                 type: string
  *                 example: "Cost Sheet - Tower B"
@@ -491,13 +491,13 @@ router.post('/upload-document', authenticate, uploadClosureDocFile, ctrl.uploadD
  *                       required: [url, document_type]
  *                       properties:
  *                         url: { type: string, example: "/uploads/closures/documents/closure_doc_costsheet_123.pdf" }
- *                         document_type: { type: string, enum: [cost_sheet, payment_proof] }
+ *                         document_type: { type: string, enum: [cost_sheet, payment_proof, booking_form] }
  *                         name: { type: string, example: "Cost Sheet - Tower B" }
  *                   - type: object
  *                     required: [url, document_type]
  *                     properties:
  *                       url: { type: string }
- *                       document_type: { type: string, enum: [cost_sheet, payment_proof] }
+ *                       document_type: { type: string, enum: [cost_sheet, payment_proof, booking_form] }
  *                       name: { type: string }
  *           example:
  *             documents:
@@ -800,7 +800,7 @@ router.get('/:id', authenticate, ctrl.getClosureById);
  *                   required: [url, document_type]
  *                   properties:
  *                     url: { type: string, example: "/uploads/closures/documents/closure_doc_costsheet_123.pdf" }
- *                     document_type: { type: string, enum: [cost_sheet, payment_proof] }
+ *                     document_type: { type: string, enum: [cost_sheet, payment_proof, booking_form] }
  *                     name: { type: string, example: "Cost Sheet - Tower B" }
  *           example:
  *             project_id: "proj-uuid-001"
