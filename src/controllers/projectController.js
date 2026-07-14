@@ -288,11 +288,15 @@ const updateProject = async (req, res, next) => {
     const existing = await client.query("SELECT id FROM projects WHERE id = $1", [id]);
     if (existing.rows.length === 0) return next(new AppError("Project not found", 404));
 
-    const { unit_plans, creatives, payment_plans, videos, photos, developer_logo, payment_plan_url } = req.body;
+    const { unit_plans, creatives, payment_plans, videos, photos, developer_logo, payment_plan_url, status } = req.body;
+
+    if (status !== undefined && !VALID_STATUSES.includes(status)) {
+      return next(new AppError(`Invalid status. Must be one of: ${VALID_STATUSES.join(", ")}`, 400));
+    }
 
     const fields = ["name", "developer", "city", "locality", "address", "price_range",
                     "total_units", "possession_date", "rera_number", "brochure_url", "description",
-                    "video_url", "payment_plan", "home_loan_info"];
+                    "video_url", "payment_plan", "home_loan_info", "status"];
     const jsonFields = ["configurations", "amenities"];
 
     const updates = []; const params = []; let idx = 1;
