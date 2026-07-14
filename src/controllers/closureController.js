@@ -20,6 +20,20 @@ const { resolveProjectId } = require('../utils/projectResolver');
 const VALID_STATUSES  = ['confirmed', 'cancelled', 'on_hold'];
 const VALID_DOC_TYPES = ['cost_sheet', 'payment_proof', 'booking_form'];
 
+// closed_by_manager accepts either an array of manager UUID strings, or an
+// array of manager objects ({ id, name, role }) — e.g. echoed straight back
+// from a GET response instead of extracting just the id. Always normalizes
+// down to a plain array of UUID strings (or null/undefined).
+const normalizeManagerIds = (closed_by_manager) => {
+  if (closed_by_manager === undefined) return undefined;
+  if (closed_by_manager === null) return null;
+  const rawArray = Array.isArray(closed_by_manager) ? closed_by_manager : [closed_by_manager];
+  const ids = rawArray
+    .map((m) => (m && typeof m === 'object' ? m.id : m))
+    .filter(Boolean);
+  return ids.length ? ids : null;
+};
+
 // ── GET /api/v1/closures ──────────────────────────────────────────────────────
 const getAllClosures = async (req, res, next) => {
   try {
@@ -153,14 +167,9 @@ const createClosure = async (req, res, next) => {
     const projId = resolvedProjectId !== undefined ? resolvedProjectId : lead.project_id;
     const projNameText = resolvedProjectNameText !== undefined ? resolvedProjectNameText : lead.project_name_text;
 
-    // Normalize closed_by_manager to array (accept single UUID or array)
-    let managerIds = null;
-    if (closed_by_manager) {
-      managerIds = Array.isArray(closed_by_manager)
-        ? closed_by_manager.filter(Boolean)
-        : [closed_by_manager];
-      if (managerIds.length === 0) managerIds = null;
-    }
+    // Normalize closed_by_manager — accepts UUID strings or full manager
+    // objects ({ id, name, role }), single value or array.
+    const managerIds = normalizeManagerIds(closed_by_manager) || null;
 
     // Auto-calculate commission if percent given but amount not
     let finalCommAmt = commission_amount || null;
@@ -414,17 +423,9 @@ const updateClosure = async (req, res, next) => {
     const existing = await pool.query('SELECT * FROM lead_closures WHERE id = $1', [id]);
     if (!existing.rows.length) return next(new AppError('Closure not found', 404));
 
-    // Normalize closed_by_manager to array
-    let managerIds = undefined;
-    if (closed_by_manager !== undefined) {
-      if (closed_by_manager === null || (Array.isArray(closed_by_manager) && closed_by_manager.length === 0)) {
-        managerIds = null;
-      } else {
-        managerIds = Array.isArray(closed_by_manager)
-          ? closed_by_manager.filter(Boolean)
-          : [closed_by_manager];
-      }
-    }
+    // Normalize closed_by_manager — accepts UUID strings or full manager
+    // objects ({ id, name, role }), single value, array, or null to clear.
+    const managerIds = normalizeManagerIds(closed_by_manager);
 
     // Auto-calculate commission amount if percent provided but amount not
     let finalCommAmt = commission_amount;
