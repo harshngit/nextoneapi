@@ -112,6 +112,8 @@ const fetchLeadWithProject = async (leadId) => {
        l.created_at,
        l.updated_at,
        l.configuration,
+       l.payment_proof_url,
+       l.payment_proof_amount,
        COALESCE(p.name, l.project_name_text) AS project_name,
        CONCAT(u.first_name,' ',u.last_name) AS assigned_name,
        u.email            AS assigned_email
@@ -1056,6 +1058,7 @@ const convertLead = async (req, res, next) => {
 
     await client.query("BEGIN");
     
+    const finalProjectId = resolvedProjectId !== undefined ? resolvedProjectId : lead.project_id;
     await client.query(
       `UPDATE leads
        SET status       = 'booked',
