@@ -719,7 +719,70 @@ router.get('/leaves/today', authenticate, authorize(...ADMIN), ctrl.getTodayLeav
  */
 router.get('/leaves', authenticate, ctrl.getAllLeaves)
 
+/**
+ * @swagger
+ * /api/v1/attendance/leave/{id}/approve:
+ *   patch:
+ *     summary: Approve a leave request (admin only)
+ *     description: >
+ *       Approves a pending leave request. Sets leave_status to 'approved' and notifies the user.
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               reason: { type: string, example: "Leave approved as requested" }
+ *     responses:
+ *       200:
+ *         description: Leave approved successfully
+ *       404:
+ *         description: Leave record not found
+ */
 router.patch('/leave/:id/approve', authenticate, authorize(...ADMIN), ctrl.approveLeave)
+
+/**
+ * @swagger
+ * /api/v1/attendance/leave/{id}/disapprove:
+ *   patch:
+ *     summary: Disapprove a leave request (admin only)
+ *     description: >
+ *       Disapproves a leave request. Sets status to 'absent' and leave_status to 'disapproved', then notifies the user.
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               reason: { type: string, example: "Cannot approve leave for this date" }
+ *     responses:
+ *       200:
+ *         description: Leave disapproved successfully
+ *       404:
+ *         description: Leave record not found
+ */
 router.patch('/leave/:id/disapprove', authenticate, authorize(...ADMIN), ctrl.disapproveLeave)
 
 /**
