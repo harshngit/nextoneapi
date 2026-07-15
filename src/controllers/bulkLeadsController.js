@@ -354,12 +354,12 @@ const bulkUploadLeads = async (req, res, next) => {
       const configuration = cell(10);
 
       // ── Required field validation ──────────────────────────────────────
+      // Only Name and Phone are actually required — matches the regular
+      // POST /api/v1/leads API (budget/location/configuration are optional
+      // there too), so bulk upload shouldn't be stricter.
       const missing = [];
-      if (!name)          missing.push('Name');
-      if (!phone)         missing.push('Phone Number');
-      if (!budget)        missing.push('Budget');
-      if (!location)      missing.push('Location Preference');
-      if (!configuration) missing.push('Configuration');
+      if (!name)  missing.push('Name');
+      if (!phone) missing.push('Phone Number');
 
       if (missing.length) {
         errors.push({ row: rowNum, error: `Missing required fields: ${missing.join(', ')}` });

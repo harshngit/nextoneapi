@@ -30,7 +30,9 @@
       "Bash(powershell -Command \"New-Item -ItemType Directory -Force -Path 'd:\\\\Clients\\\\nextone\\\\backend\\\\scripts' | Out-Null; Write-Output done\")",
       "Bash(node -c scripts/audit-orphaned-documents.js)",
       "Bash(node -e \"require\\('./src/routes/leadRoutes.js'\\); console.log\\('LOAD OK'\\);\")",
-      "Bash(grep -n \"whatsapp_negotiation_sent\\\\|created_at.*TIMESTAMPTZ DEFAULT NOW\\(\\),$\" db/000_master_schema.sql)"
+      "Bash(grep -n \"whatsapp_negotiation_sent\\\\|created_at.*TIMESTAMPTZ DEFAULT NOW\\(\\),$\" db/000_master_schema.sql)",
+      "Bash(node -c src/controllers/bulkLeadsController.js)",
+      "Bash(node -e \"require\\('./src/controllers/bulkLeadsController.js'\\); console.log\\('LOAD OK'\\);\")"
     ]
   }
 }
