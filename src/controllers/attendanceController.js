@@ -191,11 +191,18 @@ const uploadPhoto = (req, res, next) => {
 const checkIn = async (req, res, next) => {
   try {
     const userId = req.user.id
-    const today  = new Date().toISOString().split('T')[0]
+    const today = new Date().toISOString().split('T')[0]
 
     const existing = await pool.query(
-      `SELECT id, check_in_time FROM attendance WHERE user_id=$1 AND date=$2`, [userId, today]
+      `SELECT id, check_in_time, status, leave_status FROM attendance WHERE user_id = $1 AND date = $2`,
+      [userId, today]
     )
+    // Block check-in if status is 'leave' (pending or approved)
+    if (existing.rows[0]?.status === 'leave' && 
+        ['pending', 'approved'].includes(existing.rows[0]?.leave_status)) {
+      if (req.file) fs.unlink(req.file.path, ()=>{})
+      return next(new AppError('Cannot check in - you have applied for leave on this date.', 400))
+    }
     if (existing.rows[0]?.check_in_time) {
       if (req.file) fs.unlink(req.file.path, ()=>{})
       return next(new AppError('Already checked in today', 400))
@@ -246,9 +253,15 @@ const checkIn = async (req, res, next) => {
 const checkOut = async (req, res, next) => {
   try {
     const userId = req.user.id
-    const today  = new Date().toISOString().split('T')[0]
+    const today = new Date().toISOString().split('T')[0]
 
-    const existing = await pool.query(`SELECT * FROM attendance WHERE user_id=$1 AND date=$2`, [userId, today])
+    const existing = await pool.query(`SELECT * FROM attendance WHERE user_id = $1 AND date = $2`, [userId, today])
+    // Block check-out if status is 'leave' (pending or approved)
+    if (existing.rows[0]?.status === 'leave' && 
+        ['pending', 'approved'].includes(existing.rows[0]?.leave_status)) {
+      if (req.file) fs.unlink(req.file.path, ()=>{})
+      return next(new AppError('Cannot check out - you have applied for leave on this date.', 400))
+    }
     if (!existing.rows[0]?.check_in_time) {
       if (req.file) fs.unlink(req.file.path, ()=>{})
       return next(new AppError('You have not checked in yet today', 400))
@@ -1523,11 +1536,11 @@ const applyLeave = async (req, res, next) => {
     const userMeta = await getUserMeta(userId)
 
     const r = await pool.query(
-      `INSERT INTO attendance (user_id, date, status, leave_type, reason)
-       VALUES ($1, $2, 'leave', $3, $4)
+      `INSERT INTO attendance (user_id, date, status, leave_type, reason, leave_status)
+       VALUES ($1, $2, 'leave', $3, $4, 'pending')
        ON CONFLICT (user_id, date) DO UPDATE
          SET status = 'leave', leave_type = EXCLUDED.leave_type,
-             reason = EXCLUDED.reason, updated_at = NOW()
+             reason = EXCLUDED.reason, leave_status = 'pending', updated_at = NOW()
        RETURNING *`,
       [userId, date, leave_type, reason || null]
     )
@@ -1551,6 +1564,103 @@ const applyLeave = async (req, res, next) => {
       attendance: addPhotoUrls(r.rows[0]),
       user: userMeta,
     }, 201)
+  } catch (err) { next(err) }
+}
+
+// ─── APPROVE LEAVE (admin only) ─────────────────────────────────────────────
+const approveLeave = async (req, res, next) => {
+  try {
+    const { id } = req.params
+    const { reason } = req.body
+
+    const existing = await pool.query(
+      `SELECT * FROM attendance WHERE id = $1`,
+      [id]
+    )
+    if (!existing.rows.length) return next(new AppError('Leave record not found', 404))
+    if (existing.rows[0].status !== 'leave') return next(new AppError('This is not a leave record', 400))
+
+    const userMeta = await getUserMeta(existing.rows[0].user_id)
+
+    const r = await pool.query(
+      `UPDATE attendance
+       SET leave_status = 'approved',
+           reason = COALESCE($2, reason),
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [id, reason || null]
+    )
+
+    // Notify user that leave was approved
+    setImmediate(async () => {
+      try {
+        await createNotification(existing.rows[0].user_id, {
+          type: 'leave_approved',
+          title: 'Leave Approved',
+          message: `Your leave request for ${existing.rows[0].date} has been approved.${reason ? ` Reason: ${reason}` : ''}`,
+          reference_id: id,
+          reference_type: 'attendance',
+          metadata: { date: existing.rows[0].date, leave_type: existing.rows[0].leave_type },
+        })
+      } catch (e) {
+        console.error('[Notification] approveLeave failed:', e.message)
+      }
+    })
+
+    return sendSuccess(res, 'Leave approved successfully', {
+      attendance: addPhotoUrls(r.rows[0]),
+      user: userMeta,
+    })
+  } catch (err) { next(err) }
+}
+
+// ─── DISAPPROVE LEAVE (admin only) ──────────────────────────────────────────
+const disapproveLeave = async (req, res, next) => {
+  try {
+    const { id } = req.params
+    const { reason } = req.body
+
+    const existing = await pool.query(
+      `SELECT * FROM attendance WHERE id = $1`,
+      [id]
+    )
+    if (!existing.rows.length) return next(new AppError('Leave record not found', 404))
+    if (existing.rows[0].status !== 'leave') return next(new AppError('This is not a leave record', 400))
+
+    const userMeta = await getUserMeta(existing.rows[0].user_id)
+
+    const r = await pool.query(
+      `UPDATE attendance
+       SET status = 'absent',
+           leave_status = 'disapproved',
+           reason = COALESCE($2, reason),
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [id, reason || null]
+    )
+
+    // Notify user that leave was disapproved
+    setImmediate(async () => {
+      try {
+        await createNotification(existing.rows[0].user_id, {
+          type: 'leave_disapproved',
+          title: 'Leave Disapproved',
+          message: `Your leave request for ${existing.rows[0].date} has been disapproved.${reason ? ` Reason: ${reason}` : ''}`,
+          reference_id: id,
+          reference_type: 'attendance',
+          metadata: { date: existing.rows[0].date, leave_type: existing.rows[0].leave_type },
+        })
+      } catch (e) {
+        console.error('[Notification] disapproveLeave failed:', e.message)
+      }
+    })
+
+    return sendSuccess(res, 'Leave disapproved successfully', {
+      attendance: addPhotoUrls(r.rows[0]),
+      user: userMeta,
+    })
   } catch (err) { next(err) }
 }
 
@@ -1785,5 +1895,6 @@ module.exports = {
   changeAttendanceStatus,
   getTodayAll,
   applyLeave, getTodayLeaves, getAllLeaves,
+  approveLeave, disapproveLeave,
   getUserHistory,
 }

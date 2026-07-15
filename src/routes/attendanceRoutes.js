@@ -719,6 +719,9 @@ router.get('/leaves/today', authenticate, authorize(...ADMIN), ctrl.getTodayLeav
  */
 router.get('/leaves', authenticate, ctrl.getAllLeaves)
 
+router.patch('/leave/:id/approve', authenticate, authorize(...ADMIN), ctrl.approveLeave)
+router.patch('/leave/:id/disapprove', authenticate, authorize(...ADMIN), ctrl.disapproveLeave)
+
 /**
  * @swagger
  * /api/v1/attendance/leave:
