@@ -4,13 +4,16 @@
 
 const express  = require('express');
 const router   = express.Router();
-const { authenticate } = require('../middleware/auth');
+const { authenticate, authorize } = require('../middleware/auth');
 const { uploadLeadsBulkFile } = require('../middleware/uploadMiddleware');
 const {
   downloadLeadTemplate,
   bulkUploadLeads,
   downloadResultFile,
+  bulkDeleteLeads,
 } = require('../controllers/bulkLeadsController');
+
+const ADMIN = ['super_admin', 'admin'];
 
 /**
  * @swagger
@@ -34,18 +37,18 @@ const {
  *       | B | Phone Number | 10-digit number | ✅ Yes |
  *       | C | Alternate Phone | 10-digit number | No |
  *       | D | Source | **Dropdown** (from lead_sources config) | No |
- *       | E | Budget | Free text (e.g. "60-80 Lakhs") | ✅ Yes |
- *       | F | Location Preference | Free text (e.g. "Andheri West") | ✅ Yes |
+ *       | E | Budget | Free text (e.g. "60-80 Lakhs") | No |
+ *       | F | Location Preference | Free text (e.g. "Andheri West") | No |
  *       | G | Project Name | **Dropdown** (active projects) | No |
  *       | H | Status | **Dropdown** (from lead_statuses config) | No — defaults to "new" |
  *       | I | Assign To | **Dropdown** (non-super_admin users) | No |
- *       | J | Configuration | **Dropdown** (unique configs across all projects, e.g. 1BHK / 2BHK) | ✅ Yes |
+ *       | J | Configuration | **Dropdown** (unique configs across all projects, e.g. 1BHK / 2BHK) | No |
  *
  *       All dropdown lists are fetched **live from the database** each time the template is
  *       downloaded, so they always reflect the latest admin configuration.
  *
  *       **Required fields for a row to be accepted on upload:**
- *       Name, Phone Number, Budget, Location Preference, Configuration
+ *       Name, Phone Number only — everything else is optional.
  *     tags: [Bulk Leads]
  *     security:
  *       - BearerAuth: []
@@ -71,7 +74,7 @@ router.get('/template', authenticate, downloadLeadTemplate);
  *       Accepts a `.xlsx` file matching the downloaded template.
  *       Each row is validated and inserted as a lead.
  *
- *       **Required per row:** Name, Phone Number, Budget, Location Preference, Configuration
+ *       **Required per row:** Name, Phone Number only
  *
  *       **Validation:**
  *       - Rows missing any required field are rejected with an error entry
@@ -173,5 +176,48 @@ router.post('/upload', authenticate, uploadLeadsBulkFile, bulkUploadLeads);
  *         description: Result file not found
  */
 router.get('/result/:filename', authenticate, downloadResultFile);
+
+/**
+ * @swagger
+ * /api/v1/leads/bulk/delete:
+ *   delete:
+ *     summary: Bulk delete leads (Admin / Super Admin only)
+ *     description: >
+ *       Deletes multiple leads in a single call. Any ids that don't exist are
+ *       reported back rather than causing the whole request to fail.
+ *     tags: [Bulk Leads]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [ids]
+ *             properties:
+ *               ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: uuid
+ *     responses:
+ *       200:
+ *         description: Deletion summary
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "2 lead(s) deleted"
+ *               data:
+ *                 deleted_count: 2
+ *                 deleted_ids: ["uuid1", "uuid2"]
+ *                 not_found_ids: []
+ *       400:
+ *         description: ids array missing or empty
+ *       403:
+ *         description: Only Admin / Super Admin can bulk-delete leads
+ */
+router.delete('/delete', authenticate, authorize(...ADMIN), bulkDeleteLeads);
 
 module.exports = router;

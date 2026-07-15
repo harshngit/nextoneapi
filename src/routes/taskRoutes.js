@@ -321,6 +321,49 @@ router.put("/:id", authenticate, taskController.updateTask);
 
 /**
  * @swagger
+ * /api/v1/tasks/bulk:
+ *   delete:
+ *     summary: Bulk delete follow-up tasks
+ *     description: >
+ *       Deletes multiple tasks in one call. Admin/Super Admin can delete any
+ *       task; other roles can only delete tasks they created — ids failing
+ *       that check are returned in denied_ids instead of failing the batch.
+ *     tags: [Follow-Up & Task Management]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [ids]
+ *             properties:
+ *               ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: uuid
+ *     responses:
+ *       200:
+ *         description: Deletion summary
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "2 task(s) deleted"
+ *               data:
+ *                 deleted_count: 2
+ *                 deleted_ids: ["uuid1", "uuid2"]
+ *                 denied_ids: []
+ *                 not_found_ids: []
+ *       400:
+ *         description: ids array missing or empty
+ */
+router.delete("/bulk", authenticate, taskController.bulkDeleteTasks);
+
+/**
+ * @swagger
  * /api/v1/tasks/{id}:
  *   delete:
  *     summary: Delete a task

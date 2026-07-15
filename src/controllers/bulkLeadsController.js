@@ -573,4 +573,35 @@ const downloadResultFile = async (req, res, next) => {
   }
 };
 
-module.exports = { downloadLeadTemplate, bulkUploadLeads, downloadResultFile };
+/**
+ * DELETE /api/v1/leads/bulk/delete
+ * Body: { ids: [uuid, ...] }
+ * Deletes multiple leads in one call. Admin / Super Admin only — bulk
+ * deletion is high blast-radius, unlike the single-lead delete endpoint.
+ */
+const bulkDeleteLeads = async (req, res, next) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || !ids.length) {
+      return next(new AppError('ids array is required and cannot be empty', 400));
+    }
+
+    const existing = await pool.query('SELECT id FROM leads WHERE id = ANY($1::uuid[])', [ids]);
+    const foundIds = existing.rows.map(r => r.id);
+    const notFoundIds = ids.filter(id => !foundIds.includes(id));
+
+    if (foundIds.length) {
+      await pool.query('DELETE FROM leads WHERE id = ANY($1::uuid[])', [foundIds]);
+    }
+
+    return sendSuccess(res, `${foundIds.length} lead(s) deleted`, {
+      deleted_count: foundIds.length,
+      deleted_ids: foundIds,
+      not_found_ids: notFoundIds,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = { downloadLeadTemplate, bulkUploadLeads, downloadResultFile, bulkDeleteLeads };

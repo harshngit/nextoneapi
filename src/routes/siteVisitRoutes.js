@@ -256,6 +256,46 @@ router.patch('/:id/status', authenticate, ctrl.updateSiteVisitStatus);
 
 /**
  * @swagger
+ * /api/v1/site-visits/bulk:
+ *   delete:
+ *     summary: Bulk delete site visits (Admin / Super Admin only)
+ *     tags: [Site Visits]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [ids]
+ *             properties:
+ *               ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: uuid
+ *     responses:
+ *       200:
+ *         description: Deletion summary
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "2 site visit(s) deleted"
+ *               data:
+ *                 deleted_count: 2
+ *                 deleted_ids: ["uuid1", "uuid2"]
+ *                 not_found_ids: []
+ *       400:
+ *         description: ids array missing or empty
+ *       403:
+ *         description: Only Admin / Super Admin can bulk-delete site visits
+ */
+router.delete('/bulk', authenticate, authorize(...ADMIN), ctrl.bulkDeleteSiteVisits);
+
+/**
+ * @swagger
  * /api/v1/site-visits/{id}:
  *   delete:
  *     summary: Delete site visit

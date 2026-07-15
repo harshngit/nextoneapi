@@ -329,6 +329,53 @@ const deleteTask = async (req, res, next) => {
 };
 
 /**
+ * DELETE /api/v1/tasks/bulk
+ * Body: { ids: [uuid, ...] }
+ * Mirrors deleteTask's permission rule per item: super_admin/admin can
+ * delete any task, everyone else only tasks they created. Items failing
+ * that check land in denied_ids instead of failing the whole batch.
+ */
+const bulkDeleteTasks = async (req, res, next) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || !ids.length) {
+      return next(new AppError("ids array is required and cannot be empty", 400));
+    }
+
+    const { role, id: callerId } = req.user;
+    const existing = await pool.query(
+      "SELECT id, created_by FROM tasks WHERE id = ANY($1::uuid[])",
+      [ids]
+    );
+    const foundMap = new Map(existing.rows.map(r => [r.id, r.created_by]));
+    const notFoundIds = ids.filter(id => !foundMap.has(id));
+
+    const deletableIds = [];
+    const deniedIds = [];
+    for (const [id, createdBy] of foundMap) {
+      if (["super_admin", "admin"].includes(role) || createdBy === callerId) {
+        deletableIds.push(id);
+      } else {
+        deniedIds.push(id);
+      }
+    }
+
+    if (deletableIds.length) {
+      await pool.query("DELETE FROM tasks WHERE id = ANY($1::uuid[])", [deletableIds]);
+    }
+
+    return sendSuccess(res, `${deletableIds.length} task(s) deleted`, {
+      deleted_count: deletableIds.length,
+      deleted_ids: deletableIds,
+      denied_ids: deniedIds,
+      not_found_ids: notFoundIds,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
  * PATCH /api/v1/tasks/:id/complete
  * ✉ Sends email: Follow-Up Completed (to managers) — only when marking as completed
  */
@@ -577,6 +624,6 @@ const createTaskWithLead = async (req, res, next) => {
 
 module.exports = {
   getAllTasks, createTask, getTodayTasks, getTaskById,
-  updateTask, deleteTask, completeTask, getTasksByLead,
+  updateTask, deleteTask, bulkDeleteTasks, completeTask, getTasksByLead,
   createTaskWithLead,
 };

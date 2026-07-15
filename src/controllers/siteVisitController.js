@@ -388,6 +388,34 @@ const deleteSiteVisit = async (req, res, next) => {
   } finally { client.release(); }
 };
 
+// ─── DELETE /api/v1/site-visits/bulk ──────────────────────────────────────────
+// Body: { ids: [uuid, ...] }. Admin/Super Admin only, matching the single-
+// delete endpoint's authorize(...ADMIN) restriction at the route level.
+const bulkDeleteSiteVisits = async (req, res, next) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || !ids.length) {
+      return next(new AppError('ids array is required and cannot be empty', 400));
+    }
+
+    const existing = await pool.query('SELECT id FROM site_visits WHERE id = ANY($1::uuid[])', [ids]);
+    const foundIds = existing.rows.map(r => r.id);
+    const notFoundIds = ids.filter(id => !foundIds.includes(id));
+
+    if (foundIds.length) {
+      await pool.query('DELETE FROM site_visits WHERE id = ANY($1::uuid[])', [foundIds]);
+    }
+
+    return sendSuccess(res, `${foundIds.length} site visit(s) deleted`, {
+      deleted_count: foundIds.length,
+      deleted_ids: foundIds,
+      not_found_ids: notFoundIds,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
 // ─── POST /api/v1/site-visits/:id/feedback ────────────────────────────────────
 const submitSiteVisitFeedback = async (req, res, next) => {
   const client = await pool.connect();
@@ -583,6 +611,6 @@ const createSiteVisitWithLead = async (req, res, next) => {
 
 module.exports = {
   getAllSiteVisits, createSiteVisit, getSiteVisitById, updateSiteVisit,
-  updateSiteVisitStatus, deleteSiteVisit, submitSiteVisitFeedback,
+  updateSiteVisitStatus, deleteSiteVisit, bulkDeleteSiteVisits, submitSiteVisitFeedback,
   createSiteVisitWithLead,
 };
