@@ -1581,6 +1581,7 @@ const getTodayLeaves = async (req, res, next) => {
 const getAllLeaves = async (req, res, next) => {
   try {
     const { from, to, user_id, leave_type, page = 1, per_page = 30 } = req.query
+    const { role, id: callerId } = req.user
     const offset = (parseInt(page) - 1) * parseInt(per_page)
     const now = new Date()
     const start = from || new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0]
@@ -1590,7 +1591,22 @@ const getAllLeaves = async (req, res, next) => {
     const params = [start, end]
     let idx = 3
 
-    if (user_id) { conds.push(`a.user_id = $${idx++}`); params.push(user_id) }
+    // Add role-based access filter
+    if (LEAF_ROLES.includes(role)) {
+      // Leaf roles can only see their own leaves
+      conds.push(`a.user_id = $${idx++}`)
+      params.push(callerId)
+    } else if (!ADMIN_ROLES.includes(role)) {
+      // Hierarchy roles can see their team's leaves
+      const teamIds = await getTeamIds(callerId)
+      conds.push(`a.user_id = ANY($${idx++}::uuid[])`)
+      params.push(teamIds)
+    } else if (user_id) {
+      // Admins can filter by user_id if provided
+      conds.push(`a.user_id = $${idx++}`)
+      params.push(user_id)
+    }
+
     if (leave_type) { conds.push(`a.leave_type = $${idx++}`); params.push(leave_type) }
 
     const where = `WHERE ${conds.join(' AND ')}`

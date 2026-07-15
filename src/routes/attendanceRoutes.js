@@ -717,7 +717,7 @@ router.get('/leaves/today', authenticate, authorize(...ADMIN), ctrl.getTodayLeav
  *       200:
  *         description: Paginated leave records
  */
-router.get('/leaves', authenticate, authorize(...ADMIN), ctrl.getAllLeaves)
+router.get('/leaves', authenticate, ctrl.getAllLeaves)
 
 /**
  * @swagger
