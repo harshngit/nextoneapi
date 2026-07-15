@@ -183,11 +183,11 @@ router.post(
  *       Step 2 - Pass that url in the call_recordings array in this request body.
  *       Multiple recordings can be attached at create time. Omit call_recordings if none.
  *
- *       Payment proof flow (2 steps):
+ *       Payment proof flow (2 steps) — a single flat proof per lead, not an array:
  *       Step 1 - Upload file via POST /api/v1/upload/payment-proof to get a url
  *       (same upload endpoint used by the front-page form).
- *       Step 2 - Pass that url in the payment_proof array in this request body.
- *       Multiple proofs can be attached at create time. Omit payment_proof if none.
+ *       Step 2 - Pass that url as payment_proof_url (and optionally payment_proof_amount)
+ *       in this request body. Omit both if there's no proof yet.
  *
  *       Photo flow (2 steps) — separate from payment proof, same pattern as call recordings:
  *       Step 1 - Upload file via POST /api/v1/leads/upload-photo to get a url.
@@ -283,28 +283,17 @@ router.post(
  *                       type: string
  *                       description: Label for this recording
  *                       example: "First call - Suresh"
- *               payment_proof:
- *                 type: array
+ *               payment_proof_url:
+ *                 type: string
  *                 description: >
- *                   Optional. Get the url from POST /api/v1/upload/payment-proof first
- *                   (same upload endpoint the front-page form uses).
- *                   Pass null or omit entirely if no payment proof yet.
- *                 items:
- *                   type: object
- *                   required: [url]
- *                   properties:
- *                     url:
- *                       type: string
- *                       description: File url returned from POST /api/v1/upload/payment-proof
- *                       example: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
- *                     name:
- *                       type: string
- *                       description: Label for this proof
- *                       example: "Booking token receipt"
- *                     amount:
- *                       type: string
- *                       description: Amount shown on the proof
- *                       example: "50000"
+ *                   Optional. A single payment proof url — get it from
+ *                   POST /api/v1/upload/payment-proof first (same upload endpoint
+ *                   the front-page form uses). Not an array — one proof per lead.
+ *                 example: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
+ *               payment_proof_amount:
+ *                 type: string
+ *                 description: Amount shown on the payment proof
+ *                 example: "50000"
  *               photos:
  *                 type: array
  *                 description: >
@@ -342,10 +331,8 @@ router.post(
  *               - url: "/uploads/leads/voice/voice_abc123.webm"
  *                 phone_number: "+919876543210"
  *                 name: "First call - Suresh"
- *             payment_proof:
- *               - url: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
- *                 name: "Booking token receipt"
- *                 amount: "50000"
+ *             payment_proof_url: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
+ *             payment_proof_amount: "50000"
  *             photos:
  *               - url: "/uploads/leads/photos/photo_lead-uuid_123.jpg"
  *                 name: "Customer photo"
@@ -363,19 +350,14 @@ router.post(
  *                 status: "booked"
  *                 callback_time: "2026-06-01T10:30:00Z"
  *                 next_followup_time: "2026-06-03T11:00:00Z"
+ *                 payment_proof_url: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
+ *                 payment_proof_amount: "50000"
  *                 call_recordings:
  *                   - id: "rec-uuid-001"
  *                     lead_id: "lead-uuid-001"
  *                     url: "/uploads/leads/voice/voice_abc123.webm"
  *                     phone_number: "+919876543210"
  *                     name: "First call - Suresh"
- *                     created_at: "2026-06-01T10:35:00Z"
- *                 payment_proofs:
- *                   - id: "proof-uuid-001"
- *                     lead_id: "lead-uuid-001"
- *                     url: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
- *                     name: "Booking token receipt"
- *                     amount: "50000"
  *                     created_at: "2026-06-01T10:35:00Z"
  *                 photos:
  *                   - id: "photo-uuid-001"
@@ -446,9 +428,11 @@ router.get("/:id", authenticate, leadController.getLeadById);
  *     summary: Update lead information
  *     description: >
  *       Updates lead details such as name, contact info, budget, project mapping,
- *       or status. Also accepts call_recordings, payment_proof, and photos arrays
- *       to attach MORE of those (does not replace existing ones) — same pattern
- *       as Create Lead. Does NOT reassign the lead — use PATCH /:id/assign for that.
+ *       or status. Also accepts call_recordings and photos arrays to attach MORE
+ *       of those (does not replace existing ones) — same pattern as Create Lead.
+ *       payment_proof_url / payment_proof_amount are a single flat pair (not an
+ *       array) — sending them REPLACES the lead's current payment proof.
+ *       Does NOT reassign the lead — use PATCH /:id/assign for that.
  *       If the phone number is changed, the same 3-leads-per-phone-number limit applies.
  *     tags: [Lead Management]
  *     security:
@@ -534,16 +518,16 @@ router.get("/:id", authenticate, leadController.getLeadById);
  *                     url:  { type: string, example: "/uploads/leads/voice/voice_abc123.webm" }
  *                     phone_number: { type: string, example: "+919876543210" }
  *                     name: { type: string, example: "Follow-up call - Suresh" }
- *               payment_proof:
- *                 type: array
- *                 description: Optional. Adds MORE payment proofs (does not replace existing ones).
- *                 items:
- *                   type: object
- *                   required: [url]
- *                   properties:
- *                     url:    { type: string, example: "/uploads/payment-proofs/payment_proof_receipt_123.jpg" }
- *                     name:   { type: string, example: "Balance payment receipt" }
- *                     amount: { type: string, example: "50000" }
+ *               payment_proof_url:
+ *                 type: string
+ *                 description: >
+ *                   Optional. A single payment proof url (not an array) — replaces
+ *                   the lead's current payment proof. Pass null to clear it.
+ *                 example: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
+ *               payment_proof_amount:
+ *                 type: string
+ *                 description: Amount shown on the payment proof
+ *                 example: "50000"
  *               photos:
  *                 type: array
  *                 description: Optional. Adds MORE photos (does not replace existing ones).
@@ -572,10 +556,8 @@ router.get("/:id", authenticate, leadController.getLeadById);
  *               - url: "/uploads/leads/voice/voice_abc123.webm"
  *                 phone_number: "+919876543210"
  *                 name: "First call - Suresh"
- *             payment_proof:
- *               - url: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
- *                 name: "Balance payment receipt"
- *                 amount: "50000"
+ *             payment_proof_url: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
+ *             payment_proof_amount: "50000"
  *             photos:
  *               - url: "/uploads/leads/photos/photo_lead-uuid_123.jpg"
  *                 name: "Customer photo"
@@ -595,12 +577,9 @@ router.get("/:id", authenticate, leadController.getLeadById);
  *                 status: "negotiation"
  *                 callback_time: "2026-06-01T10:30:00Z"
  *                 next_followup_time: "2026-06-03T11:00:00Z"
+ *                 payment_proof_url: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
+ *                 payment_proof_amount: "50000"
  *                 call_recordings: []
- *                 payment_proofs:
- *                   - id: "proof-uuid-002"
- *                     url: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
- *                     name: "Balance payment receipt"
- *                     amount: "50000"
  *                 photos: []
  *       400:
  *         description: Invalid status, or no fields to update
@@ -1317,227 +1296,6 @@ router.patch("/:id/call-recordings/:rid", authenticate, leadController.updateCal
  *         description: Recording not found
  */
 router.delete("/:id/call-recordings/:rid", authenticate, leadController.deleteCallRecording);
-
-/**
- * @swagger
- * /api/v1/leads/{id}/payment-proofs:
- *   post:
- *     summary: Add a payment proof to a lead
- *     description: >
- *       Two modes supported (same pattern as call recordings):
- *
- *       **Mode 1 — File Upload** (multipart/form-data):
- *       Upload a file directly. Field name must be `payment_proof`.
- *       Optionally include `name` and `amount` as form fields.
- *       Supported formats: PDF, JPEG, PNG, WEBP. Max 10 MB.
- *
- *       **Mode 2 — JSON URL Array** (application/json):
- *       Pass `payment_proof` as an array (or single object) of proofs
- *       that already exist at a URL (e.g. from POST /api/v1/upload/payment-proof).
- *       Each item must have a `url`. `name` and `amount` are optional.
- *     tags: [Lead Management]
- *     security:
- *       - BearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *         example: "lead-uuid-001"
- *     requestBody:
- *       content:
- *         multipart/form-data:
- *           schema:
- *             type: object
- *             required: [payment_proof]
- *             properties:
- *               payment_proof:
- *                 type: string
- *                 format: binary
- *                 description: Receipt / screenshot / PDF (max 10 MB)
- *               name:
- *                 type: string
- *                 example: "Booking token receipt"
- *               amount:
- *                 type: string
- *                 example: "50000"
- *         application/json:
- *           schema:
- *             type: object
- *             required: [payment_proof]
- *             properties:
- *               payment_proof:
- *                 description: Single object or array of proofs
- *                 oneOf:
- *                   - type: array
- *                     items:
- *                       type: object
- *                       required: [url]
- *                       properties:
- *                         url:
- *                           type: string
- *                           example: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
- *                         name:
- *                           type: string
- *                           example: "Booking token receipt"
- *                         amount:
- *                           type: string
- *                           example: "50000"
- *                   - type: object
- *                     required: [url]
- *                     properties:
- *                       url:
- *                         type: string
- *                       name:
- *                         type: string
- *                       amount:
- *                         type: string
- *           example:
- *             payment_proof:
- *               - url: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
- *                 name: "Booking token receipt"
- *                 amount: "50000"
- *     responses:
- *       201:
- *         description: Payment proof(s) saved
- *         content:
- *           application/json:
- *             example:
- *               success: true
- *               message: "1 payment proof(s) saved"
- *               data:
- *                 lead_id: "lead-uuid-001"
- *                 payment_proofs:
- *                   - id: "proof-uuid-001"
- *                     lead_id: "lead-uuid-001"
- *                     url: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
- *                     name: "Booking token receipt"
- *                     amount: "50000"
- *                     created_at: "2026-06-01T10:35:00Z"
- *       400:
- *         description: No file or payment_proof provided
- *       403:
- *         description: Access denied
- *       404:
- *         description: Lead not found
- */
-router.post(
-  "/:id/payment-proofs",
-  authenticate,
-  require("../middleware/uploadMiddleware").uploadPaymentProofFile,
-  leadController.addPaymentProof
-);
-
-/**
- * @swagger
- * /api/v1/leads/{id}/payment-proofs:
- *   get:
- *     summary: Get all payment proofs for a lead
- *     tags: [Lead Management]
- *     security:
- *       - BearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *         example: "lead-uuid-001"
- *     responses:
- *       200:
- *         description: Payment proofs list
- *         content:
- *           application/json:
- *             example:
- *               success: true
- *               data:
- *                 lead_id: "lead-uuid-001"
- *                 total: 1
- *                 payment_proofs:
- *                   - id: "proof-uuid-001"
- *                     url: "/uploads/payment-proofs/payment_proof_receipt_123.jpg"
- *                     name: "Booking token receipt"
- *                     amount: "50000"
- *                     uploaded_by_name: "Rahul Sharma"
- *                     created_at: "2026-06-01T10:35:00Z"
- */
-router.get("/:id/payment-proofs", authenticate, leadController.getPaymentProofs);
-
-/**
- * @swagger
- * /api/v1/leads/{id}/payment-proofs/{pid}:
- *   patch:
- *     summary: Update a payment proof's name or amount
- *     tags: [Lead Management]
- *     security:
- *       - BearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *       - in: path
- *         name: pid
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *         description: Payment proof ID
- *     requestBody:
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               name:
- *                 type: string
- *                 example: "Updated receipt label"
- *               amount:
- *                 type: string
- *                 example: "75000"
- *     responses:
- *       200:
- *         description: Payment proof updated
- *       404:
- *         description: Payment proof not found
- */
-router.patch("/:id/payment-proofs/:pid", authenticate, leadController.updatePaymentProof);
-
-/**
- * @swagger
- * /api/v1/leads/{id}/payment-proofs/{pid}:
- *   delete:
- *     summary: Delete a payment proof
- *     description: Deletes the payment proof record and removes the file from disk if it was uploaded locally.
- *     tags: [Lead Management]
- *     security:
- *       - BearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *       - in: path
- *         name: pid
- *         required: true
- *         schema:
- *           type: string
- *           format: uuid
- *         description: Payment proof ID
- *     responses:
- *       200:
- *         description: Payment proof deleted
- *       404:
- *         description: Payment proof not found
- */
-router.delete("/:id/payment-proofs/:pid", authenticate, leadController.deletePaymentProof);
 
 /**
  * @swagger

@@ -529,6 +529,8 @@ CREATE TABLE IF NOT EXISTS leads (
   converted_at              TIMESTAMPTZ DEFAULT NULL,
   callback_time             TIMESTAMPTZ,
   next_followup_time        TIMESTAMPTZ,
+  payment_proof_url         TEXT,
+  payment_proof_amount      VARCHAR(100),
   whatsapp_welcome_sent     BOOLEAN     DEFAULT false,
   whatsapp_interested_sent  BOOLEAN     DEFAULT false,
   whatsapp_negotiation_sent BOOLEAN     DEFAULT false,

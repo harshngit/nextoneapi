@@ -191,11 +191,11 @@ const getAllLeads = async (req, res, next) => {
       `SELECT l.id, l.name, l.phone, l.alternate_phone_number, l.email, l.status,
               l.source, l.budget, l.location_preference, l.project_id, l.project_name_text, l.assigned_to,
               l.callback_time, l.next_followup_time, l.configuration,
+              l.payment_proof_url, l.payment_proof_amount,
               l.is_converted, l.converted_at, l.created_at, l.updated_at,
               COALESCE(p.name, l.project_name_text) AS project_name, p.city AS project_city,
               CONCAT(u.first_name, ' ', u.last_name) AS assigned_name,
               (SELECT COUNT(*) FROM call_recordings cr WHERE cr.lead_id = l.id) AS call_recordings_count,
-              (SELECT COUNT(*) FROM payment_proofs pp WHERE pp.lead_id = l.id)  AS payment_proofs_count,
               (SELECT COUNT(*) FROM lead_photos ph WHERE ph.lead_id = l.id)    AS photos_count
        FROM leads l
        LEFT JOIN projects p ON p.id = l.project_id
@@ -208,7 +208,6 @@ const getAllLeads = async (req, res, next) => {
 
     dataResult.rows.forEach(r => {
       r.call_recordings_count = parseInt(r.call_recordings_count) || 0;
-      r.payment_proofs_count  = parseInt(r.payment_proofs_count)  || 0;
       r.photos_count          = parseInt(r.photos_count)          || 0;
     });
 
@@ -251,7 +250,7 @@ const createLead = async (req, res, next) => {
             project_id, project_name,
             assigned_to, budget, location_preference, configuration, notes,
             callback_time, next_followup_time,
-            call_recordings, payment_proof, photos, status } = req.body;
+            call_recordings, payment_proof_url, payment_proof_amount, photos, status } = req.body;
 
     // project_id takes precedence over project_name. Neither has to match an
     // existing project — if it doesn't, it's stored as free text instead
@@ -293,13 +292,10 @@ const createLead = async (req, res, next) => {
       }
     }
 
-    // Validate payment_proof if provided
-    let proofs = [];
-    if (payment_proof) {
-      proofs = Array.isArray(payment_proof) ? payment_proof : [payment_proof];
-      for (const p of proofs) {
-        if (!p.url) return next(new AppError('Each payment_proof must have a url', 400));
-      }
+    // payment_proof_url / payment_proof_amount — a single flat proof per lead
+    // (not an array). amount without a url makes no sense.
+    if (payment_proof_amount !== undefined && !payment_proof_url) {
+      return next(new AppError('payment_proof_url is required when payment_proof_amount is provided', 400));
     }
 
     // Validate photos if provided
@@ -324,14 +320,15 @@ const createLead = async (req, res, next) => {
     const result = await client.query(
       `INSERT INTO leads (name, phone, alternate_phone_number, email, source,
                           project_id, project_name_text, assigned_to, budget, location_preference, configuration,
-                          callback_time, next_followup_time,
+                          callback_time, next_followup_time, payment_proof_url, payment_proof_amount,
                           status, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
        RETURNING *`,
       [name.trim(), phone, alternate_phone_number || null, email || null, source || null,
        resolvedProjectId || null, resolvedProjectNameText || null,
        assigned_to || null, budget || null, location_preference || null,
        configuration || null, callback_time || null, next_followup_time || null,
+       payment_proof_url || null, payment_proof_amount || null,
        initialStatus, req.user.id]
     );
 
@@ -356,19 +353,8 @@ const createLead = async (req, res, next) => {
         `${recordings.length} call recording(s) attached`, req.user.id);
     }
 
-    // ── Save payment proofs ──────────────────────────────────────────────────
-    const savedPaymentProofs = [];
-    if (proofs.length > 0) {
-      for (const p of proofs) {
-        const proofResult = await client.query(
-          `INSERT INTO payment_proofs (lead_id, url, name, amount, uploaded_by)
-           VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-          [lead.id, p.url, p.name || null, p.amount || null, req.user.id]
-        );
-        savedPaymentProofs.push(proofResult.rows[0]);
-      }
-      await logActivity(client, lead.id, "note",
-        `${proofs.length} payment proof(s) attached`, req.user.id);
+    if (payment_proof_url) {
+      await logActivity(client, lead.id, "note", "Payment proof attached", req.user.id);
     }
 
     // ── Save photos ───────────────────────────────────────────────────────────
@@ -493,7 +479,6 @@ const createLead = async (req, res, next) => {
     return sendSuccess(res, "Lead created", {
       ...lead,
       call_recordings: savedRecordings,
-      payment_proofs: savedPaymentProofs,
       photos: savedPhotos,
     }, 201);
   } catch (err) {
@@ -517,6 +502,7 @@ const getLeadById = async (req, res, next) => {
          l.id, l.name, l.phone, l.alternate_phone_number, l.email,
          l.status, l.source, l.budget, l.location_preference,
          l.callback_time, l.next_followup_time, l.configuration,
+         l.payment_proof_url, l.payment_proof_amount,
          l.project_id, l.project_name_text, l.assigned_to, l.is_converted, l.converted_at,
          l.created_at, l.updated_at,
          p.name AS project_name, p.city AS project_city, p.locality AS project_locality,
@@ -524,8 +510,6 @@ const getLeadById = async (req, res, next) => {
          u.phone_number AS assigned_phone,
          (SELECT COALESCE(json_agg(cr.* ORDER BY cr.created_at DESC), '[]')
           FROM call_recordings cr WHERE cr.lead_id = l.id) AS call_recordings,
-         (SELECT COALESCE(json_agg(pp.* ORDER BY pp.created_at DESC), '[]')
-          FROM payment_proofs pp WHERE pp.lead_id = l.id) AS payment_proofs,
          (SELECT COALESCE(json_agg(ph.* ORDER BY ph.created_at DESC), '[]')
           FROM lead_photos ph WHERE ph.lead_id = l.id) AS photos
        FROM leads l
@@ -569,7 +553,7 @@ const updateLead = async (req, res, next) => {
             project_id, project_name,
             budget, location_preference, configuration,
             callback_time, next_followup_time, status,
-            call_recordings, payment_proof, photos } = req.body;
+            call_recordings, payment_proof_url, payment_proof_amount, photos } = req.body;
 
     // project_id takes precedence over project_name. Neither has to match an
     // existing project — if it doesn't, it's stored as free text instead
@@ -605,13 +589,6 @@ const updateLead = async (req, res, next) => {
         if (!rec.url) return next(new AppError('Each call_recording must have a url', 400));
       }
     }
-    let proofs = [];
-    if (payment_proof) {
-      proofs = Array.isArray(payment_proof) ? payment_proof : [payment_proof];
-      for (const p of proofs) {
-        if (!p.url) return next(new AppError('Each payment_proof must have a url', 400));
-      }
-    }
     let photoItems = [];
     if (photos) {
       photoItems = Array.isArray(photos) ? photos : [photos];
@@ -621,7 +598,7 @@ const updateLead = async (req, res, next) => {
     }
 
     const existing = await pool.query(
-      "SELECT id, assigned_to, phone, status FROM leads WHERE id = $1 AND is_archived = false", [id]
+      "SELECT id, assigned_to, phone, status, payment_proof_url FROM leads WHERE id = $1 AND is_archived = false", [id]
     );
     if (existing.rows.length === 0) return next(new AppError("Lead not found", 404));
 
@@ -652,9 +629,11 @@ const updateLead = async (req, res, next) => {
     if (configuration !== undefined)  { updates.push(`configuration = $${idx++}`);       params.push(configuration || null); }
     if (callback_time !== undefined)  { updates.push(`callback_time = $${idx++}`);       params.push(callback_time || null); }
     if (next_followup_time !== undefined) { updates.push(`next_followup_time = $${idx++}`); params.push(next_followup_time || null); }
+    if (payment_proof_url !== undefined)    { updates.push(`payment_proof_url = $${idx++}`);    params.push(payment_proof_url || null); }
+    if (payment_proof_amount !== undefined) { updates.push(`payment_proof_amount = $${idx++}`); params.push(payment_proof_amount || null); }
     if (status !== undefined)         { updates.push(`status = $${idx++}`);              params.push(status); }
 
-    if (updates.length === 0 && recordings.length === 0 && proofs.length === 0 && photoItems.length === 0) {
+    if (updates.length === 0 && recordings.length === 0 && photoItems.length === 0) {
       return next(new AppError("No fields to update", 400));
     }
 
@@ -688,18 +667,8 @@ const updateLead = async (req, res, next) => {
       await logActivity(client, id, "call", `${recordings.length} call recording(s) attached`, callerId);
     }
 
-    // Save any new payment proofs
-    const savedPaymentProofs = [];
-    if (proofs.length > 0) {
-      for (const p of proofs) {
-        const proofResult = await client.query(
-          `INSERT INTO payment_proofs (lead_id, url, name, amount, uploaded_by)
-           VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-          [id, p.url, p.name || null, p.amount || null, callerId]
-        );
-        savedPaymentProofs.push(proofResult.rows[0]);
-      }
-      await logActivity(client, id, "note", `${proofs.length} payment proof(s) attached`, callerId);
+    if (payment_proof_url !== undefined && payment_proof_url !== existing.rows[0].payment_proof_url) {
+      await logActivity(client, id, "note", "Payment proof updated", callerId);
     }
 
     // Save any new photos
@@ -721,7 +690,6 @@ const updateLead = async (req, res, next) => {
     return sendSuccess(res, "Lead updated successfully", {
       ...lead,
       call_recordings: savedRecordings,
-      payment_proofs: savedPaymentProofs,
       photos: savedPhotos,
     });
   } catch (err) {
@@ -1673,201 +1641,9 @@ const deleteCallRecording = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
-/**
- * ─── PAYMENT PROOFS ────────────────────────────────────────────────────────────
- *
- * Same shape/flow as call recordings — booking receipts / payment screenshots
- * attached to a lead.
- *
- * Endpoints:
- *   POST   /api/v1/leads/upload-payment-proof       → upload file, get url (use in create/update)
- *   POST   /api/v1/leads/:id/payment-proofs         → attach (file upload OR url array)
- *   GET    /api/v1/leads/:id/payment-proofs         → list all proofs for a lead
- *   PATCH  /api/v1/leads/:id/payment-proofs/:pid    → update name / amount
- *   DELETE /api/v1/leads/:id/payment-proofs/:pid    → delete one proof
- *
- * File upload itself (get a url before attaching) uses the shared, simple
- * upload endpoint POST /api/v1/upload/payment-proof — the same one the
- * front-page form uses. There is no separate leads-only upload step; this
- * keeps "upload a file" as one single place in the API.
- */
-
-// ─── POST /api/v1/leads/:id/payment-proofs ────────────────────────────────────
-// Mode 1 — File upload (multipart/form-data): field payment_proof (required)
-//          body: name (optional), amount (optional)
-// Mode 2 — JSON body: { payment_proof: [{ url, name, amount }] } (single object also accepted)
-const addPaymentProof = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const { role, id: callerId } = req.user;
-
-    const leadChk = await pool.query(
-      'SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false', [id]
-    );
-    if (!leadChk.rows.length) return next(new AppError('Lead not found', 404));
-    const lead = leadChk.rows[0];
-    if (role === 'sales_executive' && lead.assigned_to !== callerId) {
-      return next(new AppError('Access denied', 403));
-    }
-
-    const inserted = [];
-
-    // ── Mode 1: File upload ──────────────────────────────────────────────────
-    if (req.file) {
-      const { name, amount } = req.body;
-      const fileUrl  = `/uploads/payment-proofs/${req.file.filename}`;
-      const fileName = name || req.file.originalname;
-
-      const result = await pool.query(
-        `INSERT INTO payment_proofs (lead_id, url, name, amount, file_size, uploaded_by)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-        [id, fileUrl, fileName, amount || null, req.file.size || null, callerId]
-      );
-      inserted.push(result.rows[0]);
-
-      await pool.query(
-        `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, 'note', $2, $3)`,
-        [id, `Payment proof uploaded: ${fileName}${amount ? ` (₹${amount})` : ''}`, callerId]
-      );
-    }
-
-    // ── Mode 2: JSON URL array ───────────────────────────────────────────────
-    else if (req.body.payment_proof) {
-      let proofs = req.body.payment_proof;
-      if (!Array.isArray(proofs)) proofs = [proofs];
-      if (!proofs.length) return next(new AppError('payment_proof array cannot be empty', 400));
-
-      for (const p of proofs) {
-        if (!p.url) return next(new AppError('Each payment_proof must have a url', 400));
-        const result = await pool.query(
-          `INSERT INTO payment_proofs (lead_id, url, name, amount, uploaded_by)
-           VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-          [id, p.url, p.name || null, p.amount || null, callerId]
-        );
-        inserted.push(result.rows[0]);
-      }
-
-      await pool.query(
-        `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, 'note', $2, $3)`,
-        [id, `${inserted.length} payment proof(s) added`, callerId]
-      );
-    } else {
-      return next(new AppError('Provide either a payment_proof file or payment_proof JSON', 400));
-    }
-
-    return sendSuccess(res, `${inserted.length} payment proof(s) saved`, {
-      lead_id: id, payment_proofs: inserted,
-    }, 201);
-  } catch (err) { next(err); }
-};
-
-// ─── GET /api/v1/leads/:id/payment-proofs ─────────────────────────────────────
-const getPaymentProofs = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const { role, id: callerId } = req.user;
-
-    const leadChk = await pool.query(
-      'SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false', [id]
-    );
-    if (!leadChk.rows.length) return next(new AppError('Lead not found', 404));
-    const lead = leadChk.rows[0];
-    if (role === 'sales_executive' && lead.assigned_to !== callerId) {
-      return next(new AppError('Access denied', 403));
-    }
-
-    const result = await pool.query(
-      `SELECT pp.*, CONCAT(u.first_name,' ',u.last_name) AS uploaded_by_name
-       FROM payment_proofs pp
-       LEFT JOIN users u ON u.id = pp.uploaded_by
-       WHERE pp.lead_id = $1
-       ORDER BY pp.created_at DESC`,
-      [id]
-    );
-
-    return sendSuccess(res, 'Payment proofs fetched', {
-      lead_id: id, total: result.rows.length, payment_proofs: result.rows,
-    });
-  } catch (err) { next(err); }
-};
-
-// ─── PATCH /api/v1/leads/:id/payment-proofs/:pid ─────────────────────────────
-// Update name and/or amount of an existing payment proof
-const updatePaymentProof = async (req, res, next) => {
-  try {
-    const { id, pid } = req.params;
-    const { role, id: callerId } = req.user;
-    const { name, amount } = req.body;
-
-    const leadChk = await pool.query(
-      'SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false', [id]
-    );
-    if (!leadChk.rows.length) return next(new AppError('Lead not found', 404));
-    const lead = leadChk.rows[0];
-    if (role === 'sales_executive' && lead.assigned_to !== callerId) {
-      return next(new AppError('Access denied', 403));
-    }
-
-    const proofChk = await pool.query(
-      'SELECT * FROM payment_proofs WHERE id = $1 AND lead_id = $2', [pid, id]
-    );
-    if (!proofChk.rows.length) return next(new AppError('Payment proof not found', 404));
-
-    const updates = []; const params = []; let idx = 1;
-    if (name   !== undefined) { updates.push(`name = $${idx++}`);   params.push(name); }
-    if (amount !== undefined) { updates.push(`amount = $${idx++}`); params.push(amount); }
-    if (!updates.length) return next(new AppError('Provide name or amount to update', 400));
-
-    updates.push('updated_at = NOW()');
-    params.push(pid, id);
-
-    const result = await pool.query(
-      `UPDATE payment_proofs SET ${updates.join(', ')}
-       WHERE id = $${idx++} AND lead_id = $${idx++} RETURNING *`,
-      params
-    );
-
-    return sendSuccess(res, 'Payment proof updated', result.rows[0]);
-  } catch (err) { next(err); }
-};
-
-// ─── DELETE /api/v1/leads/:id/payment-proofs/:pid ────────────────────────────
-const deletePaymentProof = async (req, res, next) => {
-  try {
-    const { id, pid } = req.params;
-    const { role, id: callerId } = req.user;
-
-    const leadChk = await pool.query(
-      'SELECT id, assigned_to FROM leads WHERE id = $1 AND is_archived = false', [id]
-    );
-    if (!leadChk.rows.length) return next(new AppError('Lead not found', 404));
-    const lead = leadChk.rows[0];
-    if (role === 'sales_executive' && lead.assigned_to !== callerId) {
-      return next(new AppError('Access denied', 403));
-    }
-
-    const proofChk = await pool.query(
-      'SELECT * FROM payment_proofs WHERE id = $1 AND lead_id = $2', [pid, id]
-    );
-    if (!proofChk.rows.length) return next(new AppError('Payment proof not found', 404));
-    const proof = proofChk.rows[0];
-
-    // Delete physical file only if it was uploaded locally
-    if (proof.url && proof.url.startsWith('/uploads/')) {
-      const filePath = path.join(process.cwd(), proof.url);
-      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-    }
-
-    await pool.query('DELETE FROM payment_proofs WHERE id = $1', [pid]);
-
-    await pool.query(
-      `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, 'note', $2, $3)`,
-      [id, `Payment proof deleted: ${proof.name || proof.url}`, callerId]
-    );
-
-    return sendSuccess(res, 'Payment proof deleted');
-  } catch (err) { next(err); }
-};
+// Payment proof is now a single flat pair of columns directly on the lead
+// (payment_proof_url, payment_proof_amount) — set via POST/PUT on the lead
+// itself. See createLead / updateLead. No separate CRUD endpoints needed.
 
 /**
  * ─── LEAD PHOTOS ───────────────────────────────────────────────────────────────
@@ -2088,10 +1864,6 @@ module.exports = {
   getCallRecordings,
   updateCallRecording,
   deleteCallRecording,
-  addPaymentProof,
-  getPaymentProofs,
-  updatePaymentProof,
-  deletePaymentProof,
   uploadPhotoFile,
   addPhoto,
   getPhotos,

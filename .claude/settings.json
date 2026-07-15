@@ -29,7 +29,8 @@
       "Bash(grep -n \"url: toFullUrl\\(\\\\`/api/v1/projects/\\\\${project.id}/documents/\\\\${docResult.rows\\\\[0\\\\].id}/download\\\\`\\)\" src/controllers/projectController.js)",
       "Bash(powershell -Command \"New-Item -ItemType Directory -Force -Path 'd:\\\\Clients\\\\nextone\\\\backend\\\\scripts' | Out-Null; Write-Output done\")",
       "Bash(node -c scripts/audit-orphaned-documents.js)",
-      "Bash(node -e \"require\\('./src/routes/leadRoutes.js'\\); console.log\\('LOAD OK'\\);\")"
+      "Bash(node -e \"require\\('./src/routes/leadRoutes.js'\\); console.log\\('LOAD OK'\\);\")",
+      "Bash(grep -n \"whatsapp_negotiation_sent\\\\|created_at.*TIMESTAMPTZ DEFAULT NOW\\(\\),$\" db/000_master_schema.sql)"
     ]
   }
 }
