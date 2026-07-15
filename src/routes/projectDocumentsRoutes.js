@@ -11,6 +11,7 @@ const {
   uploadProjectDocuments: uploadDocs,
   getProjectDocuments,
   downloadProjectDocument,
+  downloadProjectDocumentPublic,
   downloadAllProjectDocuments,
   downloadAllUnitPlans,
   downloadAllCreatives,
@@ -476,6 +477,52 @@ router.get('/:id/documents/videos/download-all', authenticate, downloadAllVideos
  *         description: Document not found
  */
 router.get('/:id/documents/:docId/download', authenticate, downloadProjectDocument);
+
+/**
+ * @swagger
+ * /api/v1/projects/{id}/documents/{docId}/public:
+ *   get:
+ *     summary: Public (unauthenticated) image download — photo / creative / developer_logo only
+ *     description: >
+ *       Full URL: GET https://api.nextonerealty.in/api/v1/projects/{id}/documents/{docId}/public
+ *
+ *       No Authorization header required — safe to embed directly in an
+ *       `<img src="...">` tag. Serves the file inline (not as a download
+ *       attachment) with a 24h cache header.
+ *
+ *       Only works for document_type photo, creative, or developer_logo —
+ *       requesting any other type (unit_plan, payment_plan, video) returns
+ *       403; use the authenticated /download route for those instead.
+ *     tags: [Project Documents]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Project UUID
+ *       - in: path
+ *         name: docId
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Document UUID
+ *     responses:
+ *       200:
+ *         description: The image file
+ *         content:
+ *           image/*:
+ *             schema:
+ *               type: string
+ *               format: binary
+ *       403:
+ *         description: Document type is not public (unit_plan / payment_plan / video)
+ *       404:
+ *         description: Document not found, or file missing from storage
+ */
+router.get('/:id/documents/:docId/public', downloadProjectDocumentPublic);
 
 /**
  * @swagger

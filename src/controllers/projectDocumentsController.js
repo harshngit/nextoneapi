@@ -23,6 +23,11 @@ const toFullUrl = (relativePath) => {
   return `${BACKEND_URL}${relativePath.startsWith('/') ? '' : '/'}${relativePath}`;
 };
 
+// Document types safe to expose without auth — meant to be embedded directly
+// in <img src>. unit_plan / payment_plan / video stay auth-only (downloaded
+// via explicit user action through /download, not rendered inline).
+const PUBLIC_DOCUMENT_TYPES = ['photo', 'creative', 'developer_logo'];
+
 /**
  * POST /api/v1/projects/:id/documents
  * Upload unit plans and creatives for a project
@@ -296,6 +301,9 @@ const getProjectDocuments = async (req, res, next) => {
     const documents = result.rows.map((doc) => ({
       ...doc,
       download_url: toFullUrl(`/api/v1/projects/${projectId}/documents/${doc.id}/download`),
+      ...(PUBLIC_DOCUMENT_TYPES.includes(doc.document_type) ? {
+        public_url: toFullUrl(`/api/v1/projects/${projectId}/documents/${doc.id}/public`),
+      } : {}),
       file_size_mb: (doc.file_size / (1024 * 1024)).toFixed(2),
     }));
 
@@ -350,6 +358,47 @@ const downloadProjectDocument = async (req, res, next) => {
       if (err) {
         next(err);
       }
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * GET /api/v1/projects/:id/documents/:docId/public
+ * Unauthenticated download — ONLY for photo / creative / developer_logo
+ * document types, meant to be embedded directly in <img src>. Serves the
+ * file inline (not as an attachment) with a long cache lifetime since
+ * uploads are immutable. Any other document_type is rejected (403) —
+ * use the authenticated /download route for unit_plan / payment_plan / video.
+ */
+const downloadProjectDocumentPublic = async (req, res, next) => {
+  try {
+    const { id: projectId, docId } = req.params;
+
+    const result = await pool.query(
+      `SELECT * FROM project_documents WHERE id = $1 AND project_id = $2`,
+      [docId, projectId]
+    );
+
+    if (result.rows.length === 0) {
+      return next(new AppError('Document not found', 404));
+    }
+
+    const doc = result.rows[0];
+
+    if (!PUBLIC_DOCUMENT_TYPES.includes(doc.document_type)) {
+      return next(new AppError('This document type requires authentication — use /download instead', 403));
+    }
+
+    if (!fs.existsSync(doc.file_path)) {
+      return next(new AppError('File not found on server', 404));
+    }
+
+    res.setHeader('Cache-Control', 'public, max-age=86400, immutable');
+    res.setHeader('Content-Type', doc.mime_type || 'application/octet-stream');
+    res.sendFile(doc.file_path, (err) => {
+      if (err) next(err);
     });
   } catch (err) {
     next(err);
@@ -726,6 +775,7 @@ module.exports = {
   uploadProjectDocuments,
   getProjectDocuments,
   downloadProjectDocument,
+  downloadProjectDocumentPublic,
   downloadAllProjectDocuments,
   downloadAllUnitPlans,
   downloadAllCreatives,

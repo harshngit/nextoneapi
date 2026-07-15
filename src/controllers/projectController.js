@@ -60,7 +60,8 @@ const getAllProjects = async (req, res, next) => {
         }));
         row.creatives = row.documents.filter(d => d.document_type === 'creative').map(d => ({
           ...d,
-          url: toFullUrl(`/api/v1/projects/${row.id}/documents/${d.id}/download`)
+          url: toFullUrl(`/api/v1/projects/${row.id}/documents/${d.id}/download`),
+          public_url: toFullUrl(`/api/v1/projects/${row.id}/documents/${d.id}/public`)
         }));
         row.payment_plans = row.documents.filter(d => d.document_type === 'payment_plan').map(d => ({
           ...d,
@@ -72,11 +73,13 @@ const getAllProjects = async (req, res, next) => {
         }));
         row.photos = row.documents.filter(d => d.document_type === 'photo').map(d => ({
           ...d,
-          url: toFullUrl(`/api/v1/projects/${row.id}/documents/${d.id}/download`)
+          url: toFullUrl(`/api/v1/projects/${row.id}/documents/${d.id}/download`),
+          public_url: toFullUrl(`/api/v1/projects/${row.id}/documents/${d.id}/public`)
         }));
         row.developer_logo = row.documents.filter(d => d.document_type === 'developer_logo').map(d => ({
           ...d,
-          url: toFullUrl(`/api/v1/projects/${row.id}/documents/${d.id}/download`)
+          url: toFullUrl(`/api/v1/projects/${row.id}/documents/${d.id}/download`),
+          public_url: toFullUrl(`/api/v1/projects/${row.id}/documents/${d.id}/public`)
         }))[0] || null;
         delete row.documents;
       } else {
@@ -165,6 +168,9 @@ const createProject = async (req, res, next) => {
         savedDocs.push({
           ...docResult.rows[0],
           url: toFullUrl(`/api/v1/projects/${project.id}/documents/${docResult.rows[0].id}/download`),
+          ...(['photo', 'creative', 'developer_logo'].includes(docType) ? {
+            public_url: toFullUrl(`/api/v1/projects/${project.id}/documents/${docResult.rows[0].id}/public`),
+          } : {}),
         });
       }
     };
@@ -241,7 +247,8 @@ const getProjectById = async (req, res, next) => {
       }));
       project.creatives = project.documents.filter(d => d.document_type === 'creative').map(d => ({
         ...d,
-        url: toFullUrl(`/api/v1/projects/${project.id}/documents/${d.id}/download`)
+        url: toFullUrl(`/api/v1/projects/${project.id}/documents/${d.id}/download`),
+        public_url: toFullUrl(`/api/v1/projects/${project.id}/documents/${d.id}/public`)
       }));
       project.payment_plans = project.documents.filter(d => d.document_type === 'payment_plan').map(d => ({
         ...d,
@@ -253,11 +260,13 @@ const getProjectById = async (req, res, next) => {
       }));
       project.photos = project.documents.filter(d => d.document_type === 'photo').map(d => ({
         ...d,
-        url: toFullUrl(`/api/v1/projects/${project.id}/documents/${d.id}/download`)
+        url: toFullUrl(`/api/v1/projects/${project.id}/documents/${d.id}/download`),
+        public_url: toFullUrl(`/api/v1/projects/${project.id}/documents/${d.id}/public`)
       }));
       project.developer_logo = project.documents.filter(d => d.document_type === 'developer_logo').map(d => ({
         ...d,
-        url: toFullUrl(`/api/v1/projects/${project.id}/documents/${d.id}/download`)
+        url: toFullUrl(`/api/v1/projects/${project.id}/documents/${d.id}/download`),
+        public_url: toFullUrl(`/api/v1/projects/${project.id}/documents/${d.id}/public`)
       }))[0] || null;
       delete project.documents;
     } else {
@@ -353,6 +362,9 @@ const updateProject = async (req, res, next) => {
         savedDocs.push({
           ...docResult.rows[0],
           url: toFullUrl(`/api/v1/projects/${id}/documents/${docResult.rows[0].id}/download`),
+          ...(['photo', 'creative', 'developer_logo'].includes(docType) ? {
+            public_url: toFullUrl(`/api/v1/projects/${id}/documents/${docResult.rows[0].id}/public`),
+          } : {}),
         });
       }
     };
