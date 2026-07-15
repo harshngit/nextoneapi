@@ -17,6 +17,7 @@
 const { pool } = require("../config/db");
 const { sendSuccess, paginate } = require("../utils/response");
 const AppError = require("../utils/AppError");
+const { resolveProjectId } = require("../utils/projectResolver");
 
 // ─── Helper ───────────────────────────────────────────────────────────────────
 
@@ -196,7 +197,7 @@ const getMySummary = async (req, res, next) => {
 const getMyLeads = async (req, res, next) => {
   try {
     const userId = req.user.id;
-    const { status, source, project_id, from, to, search } = req.query;
+    const { status, source, project_id, project, from, to, search } = req.query;
     const { page, per_page } = parsePage(req.query);
     const offset = (page - 1) * per_page;
 
@@ -206,7 +207,23 @@ const getMyLeads = async (req, res, next) => {
 
     if (status)     { conditions.push(`l.status = $${idx++}`);                   params.push(status); }
     if (source)     { conditions.push(`l.source ILIKE $${idx++}`);               params.push(`%${source}%`); }
-    if (project_id) { conditions.push(`l.project_id = $${idx++}`);               params.push(project_id); }
+    if (project_id) {
+      // Exact match on a known project id/name — never throws; a
+      // non-matching value just yields zero results instead of a 500.
+      try {
+        const resolvedProjectId = await resolveProjectId(project_id);
+        conditions.push(`l.project_id = $${idx++}`);
+        params.push(resolvedProjectId);
+      } catch (e) {
+        conditions.push("1 = 0");
+      }
+    }
+    if (project) {
+      // Free-text project search — matches the linked project's name OR the
+      // lead's free-text project_name_text. Partial, case-insensitive match.
+      conditions.push(`COALESCE(p.name, l.project_name_text) ILIKE $${idx++}`);
+      params.push(`%${project}%`);
+    }
     if (from)       { conditions.push(`l.created_at::date >= $${idx++}`);        params.push(from); }
     if (to)         { conditions.push(`l.created_at::date <= $${idx++}`);        params.push(to); }
     if (search) {
@@ -218,7 +235,7 @@ const getMyLeads = async (req, res, next) => {
 
     const [countResult, dataResult] = await Promise.all([
       pool.query(
-        `SELECT COUNT(*) FROM leads l ${where}`,
+        `SELECT COUNT(*) FROM leads l LEFT JOIN projects p ON p.id = l.project_id ${where}`,
         params
       ),
       pool.query(

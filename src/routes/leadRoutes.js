@@ -49,7 +49,19 @@ const { authenticate, authorize } = require("../middleware/auth");
  *         name: project_id
  *         schema:
  *           type: string
- *         description: Filter leads mapped to a specific project (accepts project UUID or name)
+ *         description: >
+ *           Exact-match filter by project UUID or exact project name. A value that
+ *           doesn't match any project returns zero results (no error).
+ *       - in: query
+ *         name: project
+ *         schema:
+ *           type: string
+ *         description: >
+ *           Free-text project search — partial, case-insensitive match against the
+ *           linked project's name OR the lead's free-text project name (for leads
+ *           whose project isn't in the projects table yet). Use this for a search
+ *           box; use project_id for an exact dropdown-style filter.
+ *         example: "Skyline"
  *       - in: query
  *         name: from
  *         schema:
