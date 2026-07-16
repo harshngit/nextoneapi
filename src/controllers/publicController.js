@@ -12,8 +12,6 @@ const AppError = require("../utils/AppError");
 const { notifyAdmins } = require("./notificationController");
 const emailService = require("../utils/emailService");
 
-const MAX_LEADS_PER_PHONE = 3;
-
 // ─── Helper — active admin/super_admin email addresses ────────────────────────
 const getAdminEmails = async () => {
   const result = await pool.query(
@@ -121,14 +119,6 @@ const submitProjectInquiry = async (req, res, next) => {
       [id]
     );
     if (!project.rows.length) return next(new AppError("Project not found", 404));
-
-    const phoneCount = await pool.query(
-      "SELECT COUNT(*) FROM leads WHERE phone = $1 AND is_archived = false",
-      [phone]
-    );
-    if (parseInt(phoneCount.rows[0].count) >= MAX_LEADS_PER_PHONE) {
-      return next(new AppError(`This phone number already has ${MAX_LEADS_PER_PHONE} leads`, 400));
-    }
 
     const result = await pool.query(
       `INSERT INTO leads (name, phone, email, source, project_id, budget, location_preference, configuration, status, created_by)
