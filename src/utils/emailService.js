@@ -527,6 +527,49 @@ const notifyBookingConfirmed = async ({ lead, project, closure, closedBy, adminE
 };
 
 // ════════════════════════════════════════════════════════════════════════════
+// WEBSITE INQUIRY RECEIVED
+//    → Confirmation email to the inquirer (if they gave an email)
+//    → Admin notification email
+// ════════════════════════════════════════════════════════════════════════════
+const notifyWebsiteInquiry = async ({ inquiry, adminEmails }) => {
+  const promises = [];
+
+  if (inquiry.email) {
+    const html = wrap(`
+      <h3 style="color:${BRAND};margin-top:0;">Thank you for reaching out!</h3>
+      <p style="color:#333;font-size:14px;">Dear <strong>${inquiry.name}</strong>,</p>
+      <p style="color:#555;font-size:14px;">We've received your enquiry and our team will get in touch with you shortly.</p>
+      ${table(
+        field('Your Name', inquiry.name)  +
+        field('Phone',     inquiry.phone) +
+        field('Email',     inquiry.email) +
+        field('Message',   inquiry.message || '—')
+      )}
+      <p style="color:#888;font-size:12px;">If you did not make this enquiry, please ignore this email.</p>
+    `);
+    promises.push(send({ to: inquiry.email, subject: `We've received your enquiry — Next One Realty`, html }));
+  }
+
+  if (adminEmails?.length) {
+    const html = wrap(`
+      <h3 style="color:${BRAND};margin-top:0;">New Website Inquiry</h3>
+      <p style="color:#555;font-size:14px;">A new inquiry was submitted on the website.</p>
+      ${table(
+        field('Name',    inquiry.name)  +
+        field('Phone',   inquiry.phone) +
+        field('Email',   inquiry.email || '—') +
+        field('Message', inquiry.message || '—') +
+        field('Source',  inquiry.source || '—')
+      )}
+      ${btn('View in CRM', `${CRM_URL}/website-inquiries`)}
+    `);
+    promises.push(send({ to: adminEmails, subject: `New Website Inquiry: ${inquiry.name} — ${inquiry.phone}`, html }));
+  }
+
+  await Promise.allSettled(promises);
+};
+
+// ════════════════════════════════════════════════════════════════════════════
 module.exports = {
   sendTestEmail,
   notifyLeadCreated,
@@ -541,4 +584,5 @@ module.exports = {
   notifySiteVisitFeedback,
   sendLeadProjectDetails,
   notifyBookingConfirmed,
+  notifyWebsiteInquiry,
 };

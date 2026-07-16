@@ -60,6 +60,8 @@ app.use("/api/v1/upload",        require("./routes/uploadRoutes"));
 app.use('/api/v1/projects',      projectDocumentsRoutes);
 app.use('/api/v1/phone-reveal',  phoneRevealRoutes);
 app.use('/api/v1/fcm', fcmRoutes);
+app.use('/api/v1/website-inquiries', require('./routes/websiteInquiryRoutes'));
+app.use('/api/v1/public',        require('./routes/publicRoutes'));
 
 // ─── 404 Handler ──────────────────────────────────────────────
 app.all("*", (req, res, next) => {
