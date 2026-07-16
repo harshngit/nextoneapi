@@ -131,7 +131,7 @@ const submitProjectInquiry = async (req, res, next) => {
     // Fire-and-forget: in-app/push notification to admins + email to admins
     // and the enquirer. None of this should block or fail the public response.
     notifyAdmins({
-      type: "lead_created",
+      type: "lead_new",
       title: "New Website Lead",
       message: `${lead.name} (${lead.phone}) enquired about "${project.rows[0].name}" on the website`,
       reference_id: lead.id,

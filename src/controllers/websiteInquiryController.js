@@ -62,7 +62,7 @@ const createInquiry = async (req, res, next) => {
     // Fire-and-forget: in-app/push notification to admins + email to admins
     // and the inquirer. None of this should block or fail the public response.
     notifyAdmins({
-      type: "website_inquiry",
+      type: "general",
       title: "New Website Inquiry",
       message: `${inquiry.name} (${inquiry.phone}) submitted an inquiry from the website`,
       reference_id: inquiry.id,
@@ -364,7 +364,7 @@ const convertInquiry = async (req, res, next) => {
       .catch(err => console.error("[Email] inquiry convert notify failed:", err.message));
 
     notifyAdmins({
-      type: "lead_created",
+      type: "lead_new",
       title: "Website Inquiry Converted",
       message: `A website inquiry was converted to a ${convert_to.replace("_", " ")} for "${lead.name}"`,
       reference_id: lead.id,
