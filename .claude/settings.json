@@ -32,7 +32,8 @@
       "Bash(node -e \"require\\('./src/routes/leadRoutes.js'\\); console.log\\('LOAD OK'\\);\")",
       "Bash(grep -n \"whatsapp_negotiation_sent\\\\|created_at.*TIMESTAMPTZ DEFAULT NOW\\(\\),$\" db/000_master_schema.sql)",
       "Bash(node -c src/controllers/bulkLeadsController.js)",
-      "Bash(node -e \"require\\('./src/controllers/bulkLeadsController.js'\\); console.log\\('LOAD OK'\\);\")"
+      "Bash(node -e \"require\\('./src/controllers/bulkLeadsController.js'\\); console.log\\('LOAD OK'\\);\")",
+      "Bash(node -c src/controllers/publicController.js)"
     ]
   }
 }

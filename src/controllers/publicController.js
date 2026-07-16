@@ -84,7 +84,7 @@ const getPublicProjectById = async (req, res, next) => {
     const docsResult = await pool.query(
       `SELECT id, document_type, file_name, file_path, file_size, mime_type
        FROM project_documents WHERE project_id = $1
-       ORDER BY created_at ASC`,
+       ORDER BY uploaded_at ASC`,
       [id]
     );
 
