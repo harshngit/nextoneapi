@@ -68,7 +68,7 @@ const TABLES = [
     pathColumn: 'file_path',
     isAbsolute: true,
     labelColumn: 'file_name',
-    contextSql: `SELECT d.id, d.file_path, d.file_name, d.document_type, d.created_at,
+    contextSql: `SELECT d.id, d.file_path, d.file_name, d.document_type, d.uploaded_at AS created_at,
                         p.name AS context
                  FROM project_documents d
                  LEFT JOIN projects p ON p.id = d.project_id
