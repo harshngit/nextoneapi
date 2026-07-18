@@ -620,6 +620,48 @@ router.delete("/:id", authenticate, leadController.deleteLead);
 
 /**
  * @swagger
+ * /api/v1/leads/{id}/payment-proof:
+ *   patch:
+ *     summary: Fast-update just the payment proof + amount on a lead
+ *     description: >
+ *       Dedicated shortcut for setting/updating payment_proof_url and
+ *       payment_proof_amount without resending the whole lead body via the
+ *       full PUT /:id endpoint. Sales executives can only update leads
+ *       assigned to them; Admin/Super Admin/Sales Manager can update any.
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               payment_proof_url:    { type: string, description: "Upload the file first via POST /api/v1/upload, then pass its URL here" }
+ *               payment_proof_amount: { type: string, example: "50000" }
+ *           example:
+ *             payment_proof_url: "https://api.nextonerealty.in/uploads/payment-proofs/xxx.jpg"
+ *             payment_proof_amount: "50000"
+ *     responses:
+ *       200:
+ *         description: Payment proof updated
+ *       400:
+ *         description: Neither field provided, or amount given without a proof URL
+ *       403:
+ *         description: Access denied — not your assigned lead
+ *       404:
+ *         description: Lead not found
+ */
+router.patch("/:id/payment-proof", authenticate, leadController.updateLeadPaymentProof);
+
+/**
+ * @swagger
  * /api/v1/leads/{id}/status:
  *   patch:
  *     summary: Update lead lifecycle status

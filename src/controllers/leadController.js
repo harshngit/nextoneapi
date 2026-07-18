@@ -703,6 +703,64 @@ const updateLead = async (req, res, next) => {
 };
 
 /**
+ * PATCH /api/v1/leads/:id/payment-proof
+ * Fast, dedicated endpoint to set/update just the payment proof + amount on
+ * a lead — same fields already supported by the full PUT /:id, just without
+ * needing to resend the whole lead body.
+ */
+const updateLeadPaymentProof = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { payment_proof_url, payment_proof_amount } = req.body;
+
+    if (payment_proof_url === undefined && payment_proof_amount === undefined) {
+      return next(new AppError('Provide payment_proof_url and/or payment_proof_amount', 400));
+    }
+
+    const existing = await pool.query(
+      "SELECT id, assigned_to, payment_proof_url FROM leads WHERE id = $1 AND is_archived = false", [id]
+    );
+    if (existing.rows.length === 0) return next(new AppError("Lead not found", 404));
+
+    const { role, id: callerId } = req.user;
+    if (role === "sales_executive" && existing.rows[0].assigned_to !== callerId) {
+      return next(new AppError("Access denied", 403));
+    }
+
+    const finalProofUrl = payment_proof_url !== undefined ? payment_proof_url : existing.rows[0].payment_proof_url;
+    if (payment_proof_amount !== undefined && payment_proof_amount && !finalProofUrl) {
+      return next(new AppError('payment_proof_url is required when payment_proof_amount is provided', 400));
+    }
+
+    const updates = []; const params = []; let idx = 1;
+    if (payment_proof_url !== undefined)    { updates.push(`payment_proof_url = $${idx++}`);    params.push(payment_proof_url || null); }
+    if (payment_proof_amount !== undefined) { updates.push(`payment_proof_amount = $${idx++}`); params.push(payment_proof_amount || null); }
+    updates.push(`updated_at = NOW()`);
+    params.push(id);
+
+    await client.query("BEGIN");
+
+    const result = await client.query(
+      `UPDATE leads SET ${updates.join(", ")} WHERE id = $${idx} RETURNING *`, params
+    );
+
+    if (payment_proof_url !== undefined && payment_proof_url !== existing.rows[0].payment_proof_url) {
+      await logActivity(client, id, "note", "Payment proof updated", callerId);
+    }
+
+    await client.query("COMMIT");
+
+    return sendSuccess(res, "Payment proof updated successfully", result.rows[0]);
+  } catch (err) {
+    await client.query("ROLLBACK");
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
+/**
  * DELETE /api/v1/leads/:id
  */
 const deleteLead = async (req, res, next) => {
@@ -1851,6 +1909,7 @@ module.exports = {
   createLead,
   getLeadById,
   updateLead,
+  updateLeadPaymentProof,
   deleteLead,
   updateLeadStatus,
   assignLead,
