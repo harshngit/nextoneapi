@@ -819,6 +819,24 @@ const updateLeadStatus = async (req, res, next) => {
       note || `Status changed from ${oldStatus} to ${status}`,
       callerId
     );
+
+    // Keep the site_visits row in sync — the monthly Target feature counts
+    // site_visits.status = 'done' independently of leads.status, so without
+    // this a lead marked "Site Visit Done" here never counts toward target.
+    if (status === 'site_visit_done') {
+      await client.query(
+        `UPDATE site_visits
+         SET status = 'done', updated_at = NOW()
+         WHERE id = (
+           SELECT id FROM site_visits
+           WHERE lead_id = $1 AND status IN ('scheduled', 'rescheduled')
+           ORDER BY visit_date DESC, created_at DESC
+           LIMIT 1
+         )`,
+        [id]
+      );
+    }
+
     await client.query("COMMIT");
 
     // ── Push + in-app notifications ───────────────────────────────────────────
