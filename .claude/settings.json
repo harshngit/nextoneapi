@@ -47,7 +47,8 @@
       "Bash(curl -s \"https://api.nextonerealty.in/api/v1/leads\")",
       "Bash(node -c src/controllers/commissionController.js)",
       "Bash(node -e \"const cc = require\\('./src/controllers/commissionController'\\); console.log\\('addCommission:', typeof cc.addCommission\\);\")",
-      "Bash(node -c src/controllers/advanceController.js)"
+      "Bash(node -c src/controllers/advanceController.js)",
+      "Bash(node -e \"require\\('./src/controllers/leadController'\\); console.log\\('LOAD OK'\\);\")"
     ]
   }
 }
