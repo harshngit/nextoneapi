@@ -1,6 +1,8 @@
 const express = require('express');
 const router  = express.Router();
 const ctrl    = require('../controllers/salaryController');
+const commissionCtrl = require('../controllers/commissionController');
+const advanceCtrl    = require('../controllers/advanceController');
 const { authenticate, authorize } = require('../middleware/auth');
 
 const ADMIN   = ['super_admin', 'admin'];
@@ -998,5 +1000,278 @@ router.get('/my-incentives', authenticate, ctrl.getMyIncentives);
  *         description: Incentive record not found
  */
 router.delete('/incentive/:id', authenticate, authorize(...ADMIN), ctrl.deleteIncentive);
+
+/**
+ * @swagger
+ * tags:
+ *   name: Commissions
+ *   description: Employee commission tracking, linked to a lead + project.
+ */
+
+/**
+ * @swagger
+ * /api/v1/salary/commission:
+ *   post:
+ *     summary: Record a commission for an employee (Admin/Super Admin)
+ *     tags: [Commissions]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [user_id, lead_id]
+ *             properties:
+ *               user_id:               { type: string, format: uuid }
+ *               lead_id:               { type: string, format: uuid }
+ *               project_id:            { type: string, format: uuid, description: "Optional — UUID or exact project name" }
+ *               project_name:          { type: string, description: "Optional free-text project name" }
+ *               commission_amount:     { type: number, example: 25000 }
+ *               commission_percentage: { type: number, example: 2.5 }
+ *               notes:                 { type: string }
+ *     responses:
+ *       201:
+ *         description: Commission recorded
+ *       400:
+ *         description: Missing required fields
+ *       404:
+ *         description: User or lead not found
+ */
+router.post('/commission', authenticate, authorize(...ADMIN), commissionCtrl.addCommission);
+
+/**
+ * @swagger
+ * /api/v1/salary/commissions:
+ *   get:
+ *     summary: List every employee's commissions (Admin/Super Admin)
+ *     tags: [Commissions]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: user_id
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: paid
+ *         schema: { type: boolean }
+ *       - in: query
+ *         name: from
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: to
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: per_page
+ *         schema: { type: integer, default: 20 }
+ *     responses:
+ *       200:
+ *         description: Commissions list returned
+ */
+router.get('/commissions', authenticate, authorize(...ADMIN), commissionCtrl.getAllCommissions);
+
+/**
+ * @swagger
+ * /api/v1/salary/commissions/user/{user_id}:
+ *   get:
+ *     summary: List one employee's commissions (Admin/Super Admin)
+ *     tags: [Commissions]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: user_id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Commissions list returned
+ */
+router.get('/commissions/user/:user_id', authenticate, authorize(...ADMIN), commissionCtrl.getUserCommissions);
+
+/**
+ * @swagger
+ * /api/v1/salary/my-commissions:
+ *   get:
+ *     summary: Get my own commissions
+ *     description: Every role can call this — always scoped to the logged-in user, never anyone else's.
+ *     tags: [Commissions]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: My commissions returned
+ */
+router.get('/my-commissions', authenticate, commissionCtrl.getMyCommissions);
+
+/**
+ * @swagger
+ * /api/v1/salary/commission/{id}/paid:
+ *   patch:
+ *     summary: Mark a commission as paid (Admin/Super Admin)
+ *     tags: [Commissions]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Commission marked as paid
+ *       404:
+ *         description: Commission record not found
+ */
+router.patch('/commission/:id/paid', authenticate, authorize(...ADMIN), commissionCtrl.markCommissionPaid);
+
+/**
+ * @swagger
+ * /api/v1/salary/commission/{id}:
+ *   delete:
+ *     summary: Delete a commission record (Admin/Super Admin)
+ *     tags: [Commissions]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Commission record deleted
+ *       404:
+ *         description: Commission record not found
+ */
+router.delete('/commission/:id', authenticate, authorize(...ADMIN), commissionCtrl.deleteCommission);
+
+/**
+ * @swagger
+ * tags:
+ *   name: Advances
+ *   description: Employee advance payment tracking.
+ */
+
+/**
+ * @swagger
+ * /api/v1/salary/advance:
+ *   post:
+ *     summary: Record an advance payment for an employee (Admin/Super Admin)
+ *     tags: [Advances]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [user_id, advance_date, amount]
+ *             properties:
+ *               user_id:               { type: string, format: uuid }
+ *               advance_date:          { type: string, format: date }
+ *               amount:                { type: number, example: 10000 }
+ *               transaction_reference: { type: string, example: "TXN123456789" }
+ *               payment_proof_url:     { type: string, description: "Upload the file first via POST /api/v1/upload, then pass its URL here" }
+ *               notes:                 { type: string }
+ *     responses:
+ *       201:
+ *         description: Advance payment recorded
+ *       400:
+ *         description: Missing required fields
+ *       404:
+ *         description: User not found
+ */
+router.post('/advance', authenticate, authorize(...ADMIN), advanceCtrl.addAdvance);
+
+/**
+ * @swagger
+ * /api/v1/salary/advances:
+ *   get:
+ *     summary: List every employee's advance payments (Admin/Super Admin)
+ *     tags: [Advances]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: user_id
+ *         schema: { type: string, format: uuid }
+ *       - in: query
+ *         name: from
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: to
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: per_page
+ *         schema: { type: integer, default: 20 }
+ *     responses:
+ *       200:
+ *         description: Advance payments list returned
+ */
+router.get('/advances', authenticate, authorize(...ADMIN), advanceCtrl.getAllAdvances);
+
+/**
+ * @swagger
+ * /api/v1/salary/advances/user/{user_id}:
+ *   get:
+ *     summary: List one employee's advance payments (Admin/Super Admin)
+ *     tags: [Advances]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: user_id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Advance payments list returned
+ */
+router.get('/advances/user/:user_id', authenticate, authorize(...ADMIN), advanceCtrl.getUserAdvances);
+
+/**
+ * @swagger
+ * /api/v1/salary/my-advances:
+ *   get:
+ *     summary: Get my own advance payments
+ *     description: Every role can call this — always scoped to the logged-in user, never anyone else's.
+ *     tags: [Advances]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: My advance payments returned
+ */
+router.get('/my-advances', authenticate, advanceCtrl.getMyAdvances);
+
+/**
+ * @swagger
+ * /api/v1/salary/advance/{id}:
+ *   delete:
+ *     summary: Delete an advance payment record (Admin/Super Admin)
+ *     tags: [Advances]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: Advance payment record deleted
+ *       404:
+ *         description: Advance payment record not found
+ */
+router.delete('/advance/:id', authenticate, authorize(...ADMIN), advanceCtrl.deleteAdvance);
 
 module.exports = router;
