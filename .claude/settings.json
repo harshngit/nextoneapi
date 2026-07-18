@@ -41,7 +41,10 @@
       "Bash(git commit -m ' *)",
       "Bash(git push *)",
       "Bash(node -c scripts/reconcile-orphaned-documents.js)",
-      "Bash(node -c scripts/list-document-status.js)"
+      "Bash(node -c scripts/list-document-status.js)",
+      "Bash(curl -s -o /dev/null -w \"HTTP_STATUS:%{http_code}\\\\n\" \"https://api.nextonerealty.in/api/v1/leads/fa0ff192-16dd-475c-a04d-a2605bd2f695\")",
+      "Bash(curl -s \"https://api.nextonerealty.in/api/v1/leads/fa0ff192-16dd-475c-a04d-a2605bd2f695\")",
+      "Bash(curl -s \"https://api.nextonerealty.in/api/v1/leads\")"
     ]
   }
 }
