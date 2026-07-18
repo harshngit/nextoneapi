@@ -18,7 +18,10 @@ const parseRow = (r) => ({
 // ─── POST /api/v1/salary/commission (Admin/Super Admin) ───────────────────────
 const addCommission = async (req, res, next) => {
   try {
-    const { user_id, lead_id, project_id, project_name, commission_amount, commission_percentage, notes } = req.body;
+    const { user_id, lead_id, project_id, project_name, commission_amount, commission_percentage, notes, paid } = req.body;
+    // Filling the commission form marks it paid immediately by default —
+    // pass paid: false explicitly if it should stay pending instead.
+    const isPaid = paid === undefined ? true : !!paid;
 
     if (!user_id || !lead_id) {
       return next(new AppError('user_id and lead_id are required', 400));
@@ -49,12 +52,13 @@ const addCommission = async (req, res, next) => {
 
     const result = await pool.query(
       `INSERT INTO employee_commissions
-         (user_id, lead_id, project_id, project_name_text, commission_amount, commission_percentage, notes, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         (user_id, lead_id, project_id, project_name_text, commission_amount, commission_percentage, notes, paid, paid_date, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        RETURNING *`,
       [
         user_id, lead_id, resolvedProjectId, resolvedProjectNameText,
-        commission_amount ?? null, commission_percentage ?? null, notes || null, req.user.id,
+        commission_amount ?? null, commission_percentage ?? null, notes || null,
+        isPaid, isPaid ? new Date() : null, req.user.id,
       ]
     );
 
