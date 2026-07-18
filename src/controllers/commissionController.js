@@ -8,6 +8,7 @@ const { pool } = require('../config/db');
 const { sendSuccess, paginate } = require('../utils/response');
 const AppError = require('../utils/AppError');
 const { resolveProjectId, resolveProjectName } = require('../utils/projectResolver');
+const { createNotification } = require('./notificationController');
 
 const parseRow = (r) => ({
   ...r,
@@ -62,7 +63,21 @@ const addCommission = async (req, res, next) => {
       ]
     );
 
-    return sendSuccess(res, 'Commission recorded successfully', parseRow(result.rows[0]), 201);
+    const commission = result.rows[0];
+
+    // Push notification to the employee who earned it — not the admin who created it.
+    createNotification(user_id, {
+      type: 'commission_credited',
+      title: 'Commission Credited',
+      message: isPaid
+        ? `You've been credited a commission${commission.commission_amount ? ` of ₹${commission.commission_amount}` : ''}${commission.commission_percentage ? ` (${commission.commission_percentage}%)` : ''}.`
+        : `A commission has been recorded for you${commission.commission_amount ? ` — ₹${commission.commission_amount}` : ''}${commission.commission_percentage ? ` (${commission.commission_percentage}%)` : ''}.`,
+      reference_id: commission.id,
+      reference_type: 'commission',
+      metadata: { commission_id: commission.id, lead_id, paid: isPaid },
+    }).catch(() => {});
+
+    return sendSuccess(res, 'Commission recorded successfully', parseRow(commission), 201);
   } catch (err) {
     next(err);
   }

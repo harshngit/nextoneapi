@@ -7,6 +7,7 @@
 const { pool } = require('../config/db');
 const { sendSuccess, paginate } = require('../utils/response');
 const AppError = require('../utils/AppError');
+const { createNotification } = require('./notificationController');
 
 const parseRow = (r) => ({
   ...r,
@@ -36,7 +37,19 @@ const addAdvance = async (req, res, next) => {
       [user_id, advance_date, amount, transaction_reference || null, payment_proof_url || null, notes || null, req.user.id]
     );
 
-    return sendSuccess(res, 'Advance payment recorded successfully', parseRow(result.rows[0]), 201);
+    const advance = result.rows[0];
+
+    // Push notification to the employee who received it — not the admin who created it.
+    createNotification(user_id, {
+      type: 'payment_received',
+      title: 'Advance Payment Recorded',
+      message: `An advance payment of ₹${advance.amount} has been recorded for you (dated ${advance_date}).`,
+      reference_id: advance.id,
+      reference_type: 'advance',
+      metadata: { advance_id: advance.id, amount: advance.amount },
+    }).catch(() => {});
+
+    return sendSuccess(res, 'Advance payment recorded successfully', parseRow(advance), 201);
   } catch (err) {
     next(err);
   }
