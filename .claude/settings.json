@@ -34,7 +34,14 @@
       "Bash(node -c src/controllers/bulkLeadsController.js)",
       "Bash(node -e \"require\\('./src/controllers/bulkLeadsController.js'\\); console.log\\('LOAD OK'\\);\")",
       "Bash(node -c src/controllers/publicController.js)",
-      "Bash(node -e \"require\\('./src/controllers/publicController'\\); console.log\\('LOAD OK'\\);\")"
+      "Bash(node -e \"require\\('./src/controllers/publicController'\\); console.log\\('LOAD OK'\\);\")",
+      "Bash(git log *)",
+      "Bash(git rm *)",
+      "Bash(git reset *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(node -c scripts/reconcile-orphaned-documents.js)",
+      "Bash(node -c scripts/list-document-status.js)"
     ]
   }
 }
