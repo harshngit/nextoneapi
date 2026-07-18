@@ -19,6 +19,20 @@ const toFullUrl = (relativePath) => {
   return `${BACKEND_URL}${relativePath.startsWith("/") ? "" : "/"}${relativePath}`;
 };
 
+// project_documents.file_path is a full OS-absolute path (e.g.
+// "/var/www/nextoneapi/uploads/projects/xxx/creatives/yyy.jpg"), NOT a
+// URL-relative one like brochure_url/video_url are — so it needs the
+// server's own filesystem prefix stripped before it can become a public URL.
+const toPublicFileUrl = (absolutePath) => {
+  if (!absolutePath) return absolutePath;
+  if (/^https?:\/\//i.test(absolutePath)) return absolutePath;
+  const normalized = absolutePath.replace(/\\/g, "/");
+  const marker = "/uploads/";
+  const idx = normalized.indexOf(marker);
+  const relative = idx === -1 ? normalized : normalized.slice(idx);
+  return `${BACKEND_URL}${relative.startsWith("/") ? "" : "/"}${relative}`;
+};
+
 // ─── Helper — active admin/super_admin email addresses ────────────────────────
 const getAdminEmails = async () => {
   const result = await pool.query(
@@ -101,7 +115,7 @@ const getPublicProjectById = async (req, res, next) => {
        ORDER BY uploaded_at ASC`,
       [id]
     );
-    docsResult.rows.forEach(doc => { doc.file_path = toFullUrl(doc.file_path); });
+    docsResult.rows.forEach(doc => { doc.file_path = toPublicFileUrl(doc.file_path); });
 
     const grouped = { photos: [], videos: [], creatives: [], unit_plans: [], payment_plans: [], developer_logo: null };
     for (const doc of docsResult.rows) {
