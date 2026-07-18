@@ -46,7 +46,8 @@
       "Bash(curl -s \"https://api.nextonerealty.in/api/v1/leads/fa0ff192-16dd-475c-a04d-a2605bd2f695\")",
       "Bash(curl -s \"https://api.nextonerealty.in/api/v1/leads\")",
       "Bash(node -c src/controllers/commissionController.js)",
-      "Bash(node -e \"const cc = require\\('./src/controllers/commissionController'\\); console.log\\('addCommission:', typeof cc.addCommission\\);\")"
+      "Bash(node -e \"const cc = require\\('./src/controllers/commissionController'\\); console.log\\('addCommission:', typeof cc.addCommission\\);\")",
+      "Bash(node -c src/controllers/advanceController.js)"
     ]
   }
 }
