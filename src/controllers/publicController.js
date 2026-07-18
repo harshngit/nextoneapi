@@ -12,6 +12,13 @@ const AppError = require("../utils/AppError");
 const { notifyAdmins } = require("./notificationController");
 const emailService = require("../utils/emailService");
 
+const BACKEND_URL = (process.env.BACKEND_URL || "").replace(/\/+$/, "");
+const toFullUrl = (relativePath) => {
+  if (!relativePath) return relativePath;
+  if (/^https?:\/\//i.test(relativePath)) return relativePath;
+  return `${BACKEND_URL}${relativePath.startsWith("/") ? "" : "/"}${relativePath}`;
+};
+
 // ─── Helper — active admin/super_admin email addresses ────────────────────────
 const getAdminEmails = async () => {
   const result = await pool.query(
@@ -61,6 +68,12 @@ const getPublicProjects = async (req, res, next) => {
       [...params, parseInt(per_page), offset]
     );
 
+    dataResult.rows.forEach(row => {
+      row.brochure_url = toFullUrl(row.brochure_url);
+      row.video_url     = toFullUrl(row.video_url);
+      row.payment_plan  = toFullUrl(row.payment_plan);
+    });
+
     return res.json(paginate(dataResult.rows, total, parseInt(page), parseInt(per_page)));
   } catch (err) {
     next(err);
@@ -78,6 +91,9 @@ const getPublicProjectById = async (req, res, next) => {
     );
     if (!result.rows.length) return next(new AppError("Project not found", 404));
     const project = result.rows[0];
+    project.brochure_url = toFullUrl(project.brochure_url);
+    project.video_url     = toFullUrl(project.video_url);
+    project.payment_plan  = toFullUrl(project.payment_plan);
 
     const docsResult = await pool.query(
       `SELECT id, document_type, file_name, file_path, file_size, mime_type
@@ -85,6 +101,7 @@ const getPublicProjectById = async (req, res, next) => {
        ORDER BY uploaded_at ASC`,
       [id]
     );
+    docsResult.rows.forEach(doc => { doc.file_path = toFullUrl(doc.file_path); });
 
     const grouped = { photos: [], videos: [], creatives: [], unit_plans: [], payment_plans: [], developer_logo: null };
     for (const doc of docsResult.rows) {
