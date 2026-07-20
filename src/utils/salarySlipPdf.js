@@ -29,6 +29,12 @@ const PAGE_HEIGHT = 6250;
 
 const money = (n) => `${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} rs`;
 
+// "sales_manager" -> "Sales Manager"
+const formatRole = (role) => {
+  if (!role) return '—';
+  return role.split('_').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+};
+
 // auth_signature_url is stored as a full public URL — pdfkit needs the
 // real local file path instead.
 const urlToLocalPath = (url) => {
@@ -79,10 +85,12 @@ const renderSalarySlipPdf = (slip, outputStream) => {
   eraseZone(doc, { x: 430, y: 1385, w: 1900, h: 215 });
   writeText(doc, slip.employee_name || '—', { x: 470, y: 1410, w: 1800 }, { size: 130, bold: true });
 
-  // ── Month / Position / Pay Date — blank in template, no erase needed ───────
-  writeText(doc, `${monthName} ${slip.year}`, { x: 1030, y: 1660, w: 1350 }, { size: 78 });
-  writeText(doc, slip.role || '—',            { x: 1030, y: 1798, w: 1350 }, { size: 78 });
-  writeText(doc, payDate,                     { x: 1030, y: 1936, w: 1350 }, { size: 78 });
+  // ── Month / Position / Pay Date — blank in template, no erase needed.
+  // y nudged down ~25px from the label's own top so the value's baseline
+  // lines up with the bold label text instead of floating above it ──────────
+  writeText(doc, `${monthName} ${slip.year}`, { x: 1030, y: 1685, w: 1350 }, { size: 78 });
+  writeText(doc, formatRole(slip.role),       { x: 1030, y: 1823, w: 1350 }, { size: 78 });
+  writeText(doc, payDate,                     { x: 1030, y: 1961, w: 1350 }, { size: 78 });
 
   // ── Earnings table amount column — erase the cell interior only, kept well
   // clear of the table borders/divider (rows: header-bottom 3033, divider

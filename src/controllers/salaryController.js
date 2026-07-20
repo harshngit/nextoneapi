@@ -633,6 +633,81 @@ const getSlipById = async (req, res, next) => {
   } catch (err) { next(err) }
 }
 
+// ─── 6a2. EDIT AN EXISTING SALARY SLIP (Admin) ───────────────────────────────
+/**
+ * PATCH /api/v1/salary/slips/:id
+ * Body: any subset of { basic_salary, incentive_amount, deductions,
+ *                        payment_mode, pay_date, auth_signature, notes }
+ *
+ * For correcting a slip's numbers/details without re-running the whole
+ * attendance-based calculation. present_days/absent_days/leave_days/
+ * working_days are left untouched — only basic_salary (-> monthly_salary),
+ * incentive_amount, and deductions actually change the money fields, and
+ * final_salary/total_payout are recomputed from them.
+ */
+const updateSalarySlip = async (req, res, next) => {
+  try {
+    const { id } = req.params
+    const {
+      basic_salary, incentive_amount, deductions,
+      payment_mode, pay_date, auth_signature, notes,
+    } = req.body
+
+    const existing = await pool.query('SELECT * FROM salary_slips WHERE id = $1', [id])
+    if (!existing.rows.length) return next(new AppError('Salary slip not found', 404))
+    const slip = existing.rows[0]
+
+    const monthlySalary = basic_salary !== undefined ? parseFloat(basic_salary) : parseFloat(slip.monthly_salary)
+    if (isNaN(monthlySalary) || monthlySalary < 0) {
+      return next(new AppError('basic_salary must be a non-negative number', 400))
+    }
+    const presentDays  = parseFloat(slip.present_days)
+    const workingDays  = slip.working_days
+    const perDaySalary = parseFloat((monthlySalary / workingDays).toFixed(2))
+    const earnedSalary = parseFloat((perDaySalary * presentDays).toFixed(2))
+    const deductionAmt = deductions !== undefined ? parseFloat(deductions) || 0 : parseFloat(slip.deductions)
+    const finalSalary  = parseFloat((earnedSalary - deductionAmt).toFixed(2))
+    const incentiveAmt = incentive_amount !== undefined ? parseFloat(incentive_amount) || 0 : parseFloat(slip.incentive_amount || 0)
+    const totalPayout  = parseFloat((finalSalary + incentiveAmt).toFixed(2))
+
+    const result = await pool.query(
+      `UPDATE salary_slips SET
+         monthly_salary      = $1,
+         per_day_salary      = $2,
+         earned_salary        = $3,
+         deductions           = $4,
+         final_salary         = $5,
+         incentive_amount     = $6,
+         total_payout         = $7,
+         payment_mode         = COALESCE($8, payment_mode),
+         pay_date             = COALESCE($9, pay_date),
+         auth_signature_url   = COALESCE($10, auth_signature_url),
+         notes                = COALESCE($11, notes),
+         updated_at           = NOW()
+       WHERE id = $12
+       RETURNING *`,
+      [
+        monthlySalary, perDaySalary, earnedSalary, deductionAmt, finalSalary,
+        incentiveAmt, totalPayout, payment_mode || null, pay_date || null,
+        auth_signature || null, notes !== undefined ? notes : null, id,
+      ]
+    )
+
+    const updated = result.rows[0]
+    return sendSuccess(res, 'Salary slip updated successfully', {
+      ...updated,
+      monthly_salary:   parseFloat(updated.monthly_salary),
+      per_day_salary:   parseFloat(updated.per_day_salary),
+      earned_salary:    parseFloat(updated.earned_salary),
+      deductions:       parseFloat(updated.deductions),
+      final_salary:     parseFloat(updated.final_salary),
+      incentive_amount: parseFloat(updated.incentive_amount || 0),
+      total_payout:     parseFloat(updated.total_payout),
+      pdf_url:          `${BACKEND_URL}/api/v1/salary/slips/${updated.id}/pdf`,
+    })
+  } catch (err) { next(err) }
+}
+
 // ─── 6b. DOWNLOAD ONE SALARY SLIP AS PDF ─────────────────────────────────────
 /**
  * GET /api/v1/salary/slips/:id/pdf
@@ -954,6 +1029,7 @@ module.exports = {
   getUserSalarySlips,
   getMySalary,
   getSlipById,
+  updateSalarySlip,
   downloadSalarySlipPdf,
   bulkDownloadSalarySlipsPdf,
   getSalaryHistory,

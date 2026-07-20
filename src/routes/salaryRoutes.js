@@ -600,6 +600,50 @@ router.get('/slips/:id', authenticate, ctrl.getSlipById);
 
 /**
  * @swagger
+ * /api/v1/salary/slips/{id}:
+ *   patch:
+ *     summary: Edit an existing salary slip (Admin/Super Admin)
+ *     description: >
+ *       Corrects a slip's numbers/details without re-running the
+ *       attendance-based calculation — present_days/working_days are left
+ *       as-is. final_salary and total_payout are recomputed from whatever
+ *       you send.
+ *     tags: [Salary]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               basic_salary:     { type: number }
+ *               incentive_amount: { type: number }
+ *               deductions:       { type: number }
+ *               payment_mode:     { type: string }
+ *               pay_date:         { type: string, format: date }
+ *               auth_signature:   { type: string }
+ *               notes:            { type: string }
+ *           example:
+ *             basic_salary: 32000
+ *             incentive_amount: 4000
+ *             notes: "Corrected after payroll review"
+ *     responses:
+ *       200:
+ *         description: Salary slip updated
+ *       404:
+ *         description: Slip not found
+ */
+router.patch('/slips/:id', authenticate, authorize(...ADMIN), ctrl.updateSalarySlip);
+
+/**
+ * @swagger
  * /api/v1/salary/slips/{id}/pdf:
  *   get:
  *     summary: Download a salary slip as a PDF
