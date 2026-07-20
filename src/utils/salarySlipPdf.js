@@ -2,39 +2,42 @@
  * salarySlipPdf.js — Nextone Reality
  *
  * Renders a salary slip PDF using the Canva-designed background
- * (assets/templates/Pay Slip.png) with dynamic values overlaid on top.
- * The PNG is a flattened export (sample values are baked into the image),
- * so each dynamic field is first "erased" with a white rectangle before
- * the real value is written on top of it.
+ * (assets/templates/Salary Slip.png) with dynamic values overlaid on top.
+ * The PNG is a flattened export — some fields have sample values baked
+ * into the image (e.g. the employee name, the amount figures), so those
+ * are first "erased" with a white rectangle before the real value is
+ * written on top. Month / Position / Pay Date are blank in this template,
+ * so those are written directly with no erase step.
  */
 
 const path = require('path');
 const PDFDocument = require('pdfkit');
 
-const TEMPLATE_PATH = path.join(__dirname, '..', '..', 'assets', 'templates', 'Pay Slip.png');
+const TEMPLATE_PATH = path.join(__dirname, '..', '..', 'assets', 'templates', 'Salary Slip.png');
 
-// Template PNG is 1414 x 2000 px — the PDF page is built at that exact
-// pixel size so these coordinates map 1:1 with the image.
-const PAGE_WIDTH  = 1414;
-const PAGE_HEIGHT = 2000;
+// Source PNG is 4419 x 6250 px — the PDF page is built at that exact pixel
+// size. Coordinates below are authored in the 1414 x 2000 preview space
+// (what a human reviews) and scaled up by this factor to match the source.
+const SCALE = 3.13;
+const PAGE_WIDTH  = 4419;
+const PAGE_HEIGHT = 6250;
 
-const LABEL_VALUE_X = 390; // where "value" text starts, right after "Label :"
-const INFO_FIELD_WIDTH = 550;
-const INFO_FIELD_HEIGHT = 32;
+const s = (n) => n * SCALE; // scale a single value
+const box = (x, y, w, h) => ({ x: s(x), y: s(y), w: s(w), h: s(h) });
 
-const AMOUNT_COL_CENTER_X = 967;
-const AMOUNT_COL_WIDTH = 280;
+const money = (n) => `${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} rs`;
 
-const money = (n) => `$${Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-
-// Draws a white rectangle to cover the baked-in sample text, then writes
-// the real value on top of it.
-const eraseAndWrite = (doc, text, x, y, width, { align = 'left', size = 20, bold = false, height = INFO_FIELD_HEIGHT } = {}) => {
-  doc.save();
-  doc.rect(x - 4, y - 4, width, height).fill('#ffffff');
-  doc.restore();
-  doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(size).fillColor('#231f20');
-  doc.text(text, x, y, { width, align });
+// Draws a white rectangle to cover baked-in sample text, then writes the
+// real value on top of it. Skip the erase step for fields that are blank
+// in the template (pass erase: false).
+const writeField = (doc, text, { x, y, w, h }, { align = 'left', size = 20, bold = false, erase = true } = {}) => {
+  if (erase) {
+    doc.save();
+    doc.rect(x - s(4), y - s(4), w, h).fill('#ffffff');
+    doc.restore();
+  }
+  doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(s(size)).fillColor('#231f20');
+  doc.text(text, x, y, { width: w, align });
 };
 
 /**
@@ -62,21 +65,20 @@ const renderSalarySlipPdf = (slip, outputStream) => {
     ? parseFloat(slip.total_payout)
     : totalEarnings - (parseFloat(slip.deductions) || 0);
 
-  // ── Info block ────────────────────────────────────────────────────────────
-  eraseAndWrite(doc, `${monthName} ${slip.year}`,      LABEL_VALUE_X, 470, INFO_FIELD_WIDTH);
-  eraseAndWrite(doc, slip.employee_name || '—',         LABEL_VALUE_X, 505, INFO_FIELD_WIDTH);
-  eraseAndWrite(doc, slip.employee_code || '—',         LABEL_VALUE_X, 540, INFO_FIELD_WIDTH);
-  eraseAndWrite(doc, slip.role || '—',                  LABEL_VALUE_X, 575, INFO_FIELD_WIDTH);
-  eraseAndWrite(doc, payDate,                           LABEL_VALUE_X, 610, INFO_FIELD_WIDTH);
+  // ── Employee name (bold, baked-in sample — needs erase) ────────────────────
+  writeField(doc, slip.employee_name || '—', box(143, 448, 500, 55), { size: 34, bold: true });
 
-  // ── Earnings table (amount column only — labels stay static) ───────────────
-  eraseAndWrite(doc, money(basicSalary),   AMOUNT_COL_CENTER_X - AMOUNT_COL_WIDTH / 2, 975,  AMOUNT_COL_WIDTH, { align: 'center' });
-  eraseAndWrite(doc, money(incentive),     AMOUNT_COL_CENTER_X - AMOUNT_COL_WIDTH / 2, 1030, AMOUNT_COL_WIDTH, { align: 'center' });
-  eraseAndWrite(doc, money(totalEarnings), AMOUNT_COL_CENTER_X - AMOUNT_COL_WIDTH / 2, 1085, AMOUNT_COL_WIDTH, { align: 'center', bold: true });
+  // ── Month / Position / Pay Date — blank in template, no erase needed ───────
+  writeField(doc, `${monthName} ${slip.year}`, box(300, 533, 350, 26), { size: 20, erase: false });
+  writeField(doc, slip.role || '—',            box(300, 568, 350, 26), { size: 20, erase: false });
+  writeField(doc, payDate,                     box(300, 603, 350, 26), { size: 20, erase: false });
 
-  // ── Net Pay / Payment Mode ──────────────────────────────────────────────────
-  eraseAndWrite(doc, money(netPay),               LABEL_VALUE_X, 1245, INFO_FIELD_WIDTH, { bold: true });
-  eraseAndWrite(doc, slip.payment_mode || 'Bank Transfer', LABEL_VALUE_X, 1280, INFO_FIELD_WIDTH, { bold: true });
+  // ── Earnings table amount column (labels stay static) ───────────────────────
+  writeField(doc, money(basicSalary), box(875, 1010, 210, 40), { size: 22 });
+  writeField(doc, money(incentive),   box(875, 1163, 210, 40), { size: 22 });
+
+  // ── Total Earnings (bottom, large bold — baked-in sample) ──────────────────
+  writeField(doc, money(netPay), box(617, 1848, 320, 60), { size: 36, bold: true });
 
   doc.end();
 };
