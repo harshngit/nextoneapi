@@ -84,11 +84,13 @@ const renderSalarySlipPdf = (slip, outputStream) => {
   writeText(doc, slip.role || '—',            { x: 1030, y: 1798, w: 1350 }, { size: 78 });
   writeText(doc, payDate,                     { x: 1030, y: 1936, w: 1350 }, { size: 78 });
 
-  // ── Earnings table amount column — erase the whole cell, labels stay static ─
-  eraseZone(doc, { x: 2600, y: 3040, w: 1395, h: 470 }); // Basic Salary cell
+  // ── Earnings table amount column — erase the cell interior only, kept well
+  // clear of the table borders/divider (rows: header-bottom 3033, divider
+  // 3517, table-bottom 4001) so no border line gets painted over ──────────
+  eraseZone(doc, { x: 2630, y: 3075, w: 1330, h: 395 }); // Basic Salary cell
   writeText(doc, money(basicSalary), { x: 2660, y: 3225, w: 1300 }, { size: 95 });
 
-  eraseZone(doc, { x: 2600, y: 3524, w: 1395, h: 470 }); // Incentives cell
+  eraseZone(doc, { x: 2630, y: 3560, w: 1330, h: 395 }); // Incentives cell
   writeText(doc, money(incentive),   { x: 2660, y: 3709, w: 1300 }, { size: 95 });
 
   // ── Total Earnings (bottom, large bold — baked-in sample) ──────────────────
