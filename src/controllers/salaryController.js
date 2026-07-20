@@ -27,6 +27,9 @@ const { pool }      = require('../config/db')
 const { sendSuccess } = require('../utils/response')
 const AppError      = require('../utils/AppError')
 const { createNotification, notifyAdmins } = require('./notificationController')
+const { renderSalarySlipPdf } = require('../utils/salarySlipPdf')
+const { ZipArchive } = require('archiver')
+const { PassThrough } = require('stream')
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -202,11 +205,23 @@ const getAllEmployeeSalaries = async (req, res, next) => {
 // ─── 3. GENERATE SALARY SLIP (Admin) ─────────────────────────────────────────
 /**
  * POST /api/v1/salary/generate
- * Body: { user_id, month, year, deductions?, notes?, working_days_override? }
+ * Body: {
+ *   user_id, month, year, deductions?, notes?, working_days_override?,
+ *   basic_salary?, incentive_amount?, payment_mode?, pay_date?
+ * }
  *
  * Calculates earned salary from attendance for the given month/year.
  * working_days_override allows admin to manually set the working days
  * (e.g. for months with holidays).
+ *
+ * basic_salary?    — overrides the employee's set monthly salary for just
+ *                     this slip (e.g. a one-off adjustment). Defaults to
+ *                     whatever's set via POST /api/v1/salary/set.
+ * incentive_amount? — added on top for the PDF's "Incentive" line and the
+ *                     take-home total_payout. Defaults to 0.
+ * payment_mode?     — shown on the PDF slip. Defaults to "Bank Transfer".
+ * pay_date?         — shown on the PDF slip. Defaults to the last day of
+ *                     the given month.
  */
 const generateSalarySlip = async (req, res, next) => {
   try {
@@ -215,6 +230,10 @@ const generateSalarySlip = async (req, res, next) => {
       deductions = 0,
       notes,
       working_days_override,
+      basic_salary,
+      incentive_amount = 0,
+      payment_mode = 'Bank Transfer',
+      pay_date,
     } = req.body
 
     if (!user_id) return next(new AppError('user_id is required', 400))
@@ -233,12 +252,15 @@ const generateSalarySlip = async (req, res, next) => {
     )
     if (!userChk.rows.length) return next(new AppError('Employee not found', 404))
 
-    // Get active salary
-    const salary = await getActiveSalary(user_id)
-    if (!salary) {
-      return next(new AppError(
-        `No salary has been set for this employee. Set a salary first via POST /api/v1/salary/set`, 400
-      ))
+    // Get active salary (skipped entirely when basic_salary overrides it)
+    let salary = null
+    if (basic_salary === undefined) {
+      salary = await getActiveSalary(user_id)
+      if (!salary) {
+        return next(new AppError(
+          `No salary has been set for this employee. Set a salary first via POST /api/v1/salary/set, or pass basic_salary directly.`, 400
+        ))
+      }
     }
 
     // Date range for the month
@@ -281,38 +303,50 @@ const generateSalarySlip = async (req, res, next) => {
       return next(new AppError('working_days must be greater than 0', 400))
     }
 
-    const monthlySalary = parseFloat(salary.monthly_salary)
+    const monthlySalary = basic_salary !== undefined ? parseFloat(basic_salary) : parseFloat(salary.monthly_salary)
+    if (isNaN(monthlySalary) || monthlySalary < 0) {
+      return next(new AppError('basic_salary must be a non-negative number', 400))
+    }
     const perDaySalary  = parseFloat((monthlySalary / workingDays).toFixed(2))
     const earnedSalary  = parseFloat((perDaySalary * presentDays).toFixed(2))
     const deductionAmt  = parseFloat(deductions) || 0
     const finalSalary   = parseFloat((earnedSalary - deductionAmt).toFixed(2))
+    const incentiveAmt  = parseFloat(incentive_amount) || 0
+    const totalPayout   = parseFloat((finalSalary + incentiveAmt).toFixed(2))
+    const finalPayDate  = pay_date || new Date(y, m, 0).toISOString().split('T')[0] // last day of month
 
     // Upsert slip (overwrite if already generated for this month)
     const slip = await pool.query(
       `INSERT INTO salary_slips
          (user_id, month, year, monthly_salary, working_days, present_days,
           absent_days, leave_days, per_day_salary, earned_salary,
-          deductions, final_salary, generated_by, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+          deductions, final_salary, incentive_amount, total_payout,
+          payment_mode, pay_date, generated_by, notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
        ON CONFLICT (user_id, month, year)
        DO UPDATE SET
-         monthly_salary = EXCLUDED.monthly_salary,
-         working_days   = EXCLUDED.working_days,
-         present_days   = EXCLUDED.present_days,
-         absent_days    = EXCLUDED.absent_days,
-         leave_days     = EXCLUDED.leave_days,
-         per_day_salary = EXCLUDED.per_day_salary,
-         earned_salary  = EXCLUDED.earned_salary,
-         deductions     = EXCLUDED.deductions,
-         final_salary   = EXCLUDED.final_salary,
-         generated_by   = EXCLUDED.generated_by,
-         notes          = EXCLUDED.notes,
-         updated_at     = NOW()
+         monthly_salary   = EXCLUDED.monthly_salary,
+         working_days     = EXCLUDED.working_days,
+         present_days     = EXCLUDED.present_days,
+         absent_days      = EXCLUDED.absent_days,
+         leave_days       = EXCLUDED.leave_days,
+         per_day_salary   = EXCLUDED.per_day_salary,
+         earned_salary    = EXCLUDED.earned_salary,
+         deductions       = EXCLUDED.deductions,
+         final_salary     = EXCLUDED.final_salary,
+         incentive_amount = EXCLUDED.incentive_amount,
+         total_payout     = EXCLUDED.total_payout,
+         payment_mode     = EXCLUDED.payment_mode,
+         pay_date         = EXCLUDED.pay_date,
+         generated_by     = EXCLUDED.generated_by,
+         notes            = EXCLUDED.notes,
+         updated_at       = NOW()
        RETURNING *`,
       [
         user_id, m, y, monthlySalary, workingDays, presentDays,
         absentDays, leaveDays, perDaySalary, earnedSalary,
-        deductionAmt, finalSalary, req.user.id, notes || null,
+        deductionAmt, finalSalary, incentiveAmt, totalPayout,
+        payment_mode, finalPayDate, req.user.id, notes || null,
       ]
     )
 
@@ -362,6 +396,10 @@ const generateSalarySlip = async (req, res, next) => {
         earned_salary:   earnedSalary,
         deductions:      deductionAmt,
         final_salary:    finalSalary,
+        incentive_amount: incentiveAmt,
+        total_payout:    totalPayout,
+        payment_mode,
+        pay_date:        finalPayDate,
         period:          { from: start, to: end },
       },
     }, 201)
@@ -537,6 +575,94 @@ const getSlipById = async (req, res, next) => {
       absent_days:    parseFloat(slip.absent_days),
       leave_days:     parseFloat(slip.leave_days),
     })
+  } catch (err) { next(err) }
+}
+
+// ─── 6b. DOWNLOAD ONE SALARY SLIP AS PDF ─────────────────────────────────────
+/**
+ * GET /api/v1/salary/slips/:id/pdf
+ * Renders the Canva-designed salary slip template with this slip's data.
+ * Same access rule as getSlipById: sales_executive can only download their own.
+ */
+const downloadSalarySlipPdf = async (req, res, next) => {
+  try {
+    const { id } = req.params
+    const { role, id: callerId } = req.user
+
+    const result = await pool.query(
+      `SELECT ss.*, CONCAT(u.first_name,' ',u.last_name) AS employee_name, u.role AS role
+       FROM salary_slips ss
+       JOIN users u ON u.id = ss.user_id
+       WHERE ss.id = $1`,
+      [id]
+    )
+    if (!result.rows.length) return next(new AppError('Salary slip not found', 404))
+
+    const slip = result.rows[0]
+    if (role === 'sales_executive' && slip.user_id !== callerId) {
+      return next(new AppError('Access denied', 403))
+    }
+
+    const monthName = new Date(slip.year, slip.month - 1).toLocaleString('en-US', { month: 'long' })
+    res.setHeader('Content-Type', 'application/pdf')
+    res.setHeader('Content-Disposition', `attachment; filename="${slip.employee_name.replace(/\s+/g, '_')}_${monthName}_${slip.year}.pdf"`)
+
+    renderSalarySlipPdf(slip, res)
+  } catch (err) { next(err) }
+}
+
+// ─── 6c. BULK-DOWNLOAD SALARY SLIPS AS A ZIP OF PDFS (Admin) ─────────────────
+/**
+ * POST /api/v1/salary/slips/bulk-pdf
+ * Body: { month, year, user_ids? }
+ * Generates a PDF for every already-generated slip matching month/year
+ * (optionally scoped to user_ids), zipped into one download.
+ */
+const bulkDownloadSalarySlipsPdf = async (req, res, next) => {
+  try {
+    const { month, year, user_ids } = req.body
+    if (!month || !year) return next(new AppError('month and year are required', 400))
+
+    const m = parseInt(month)
+    const y = parseInt(year)
+
+    let query = `
+      SELECT ss.*, CONCAT(u.first_name,' ',u.last_name) AS employee_name, u.role AS role
+      FROM salary_slips ss
+      JOIN users u ON u.id = ss.user_id
+      WHERE ss.month = $1 AND ss.year = $2
+    `
+    const params = [m, y]
+    if (Array.isArray(user_ids) && user_ids.length) {
+      query += ` AND ss.user_id = ANY($3::uuid[])`
+      params.push(user_ids)
+    }
+
+    const result = await pool.query(query, params)
+    if (!result.rows.length) {
+      return next(new AppError('No generated salary slips found for this month/year', 404))
+    }
+
+    const archive = new ZipArchive({ zlib: { level: 9 } })
+    const monthName = new Date(y, m - 1).toLocaleString('en-US', { month: 'long' })
+
+    res.setHeader('Content-Type', 'application/zip')
+    res.setHeader('Content-Disposition', `attachment; filename="Salary_Slips_${monthName}_${y}.zip"`)
+    archive.pipe(res)
+
+    for (const slip of result.rows) {
+      const stream = new PassThrough()
+      const chunks = []
+      stream.on('data', (c) => chunks.push(c))
+      await new Promise((resolve, reject) => {
+        stream.on('end', resolve)
+        stream.on('error', reject)
+        renderSalarySlipPdf(slip, stream)
+      })
+      archive.append(Buffer.concat(chunks), { name: `${slip.employee_name.replace(/\s+/g, '_')}_${monthName}_${y}.pdf` })
+    }
+
+    await archive.finalize()
   } catch (err) { next(err) }
 }
 
@@ -750,6 +876,8 @@ module.exports = {
   getSalarySlips,
   getMySalary,
   getSlipById,
+  downloadSalarySlipPdf,
+  bulkDownloadSalarySlipsPdf,
   getSalaryHistory,
   getMySalaryHistory,
 }

@@ -493,6 +493,72 @@ router.get('/slips', authenticate, authorize(...ADMIN), ctrl.getSalarySlips);
  */
 router.get('/slips/:id', authenticate, ctrl.getSlipById);
 
+/**
+ * @swagger
+ * /api/v1/salary/slips/{id}/pdf:
+ *   get:
+ *     summary: Download a salary slip as a PDF
+ *     description: >
+ *       Renders the Nextone Realty salary slip template with this slip's
+ *       data. Admin can download any slip. Employee can only download their own.
+ *     tags: [Salary]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     responses:
+ *       200:
+ *         description: The PDF file
+ *         content:
+ *           application/pdf:
+ *             schema: { type: string, format: binary }
+ *       403:
+ *         description: Access denied
+ *       404:
+ *         description: Slip not found
+ */
+router.get('/slips/:id/pdf', authenticate, ctrl.downloadSalarySlipPdf);
+
+/**
+ * @swagger
+ * /api/v1/salary/slips/bulk-pdf:
+ *   post:
+ *     summary: Download all generated salary slips for a month as a ZIP of PDFs (Admin/Super Admin)
+ *     description: >
+ *       Every slip must already exist (generated via POST /generate or
+ *       /generate-all) — this only renders the PDFs, it does not compute
+ *       new slips.
+ *     tags: [Salary]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [month, year]
+ *             properties:
+ *               month:    { type: integer, example: 7 }
+ *               year:     { type: integer, example: 2026 }
+ *               user_ids:
+ *                 type: array
+ *                 items: { type: string, format: uuid }
+ *                 description: Optional — scope to specific employees, otherwise every generated slip for the month
+ *     responses:
+ *       200:
+ *         description: ZIP file containing one PDF per employee
+ *         content:
+ *           application/zip:
+ *             schema: { type: string, format: binary }
+ *       404:
+ *         description: No generated slips found for this month/year
+ */
+router.post('/slips/bulk-pdf', authenticate, authorize(...ADMIN), ctrl.bulkDownloadSalarySlipsPdf);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // EMPLOYEE — VIEW OWN SALARY
 // ─────────────────────────────────────────────────────────────────────────────
