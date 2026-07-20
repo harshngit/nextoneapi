@@ -4,6 +4,7 @@ const ctrl    = require('../controllers/salaryController');
 const commissionCtrl = require('../controllers/commissionController');
 const advanceCtrl    = require('../controllers/advanceController');
 const { authenticate, authorize } = require('../middleware/auth');
+const { uploadSignature } = require('../middleware/uploadMiddleware');
 
 const ADMIN   = ['super_admin', 'admin'];
 const MANAGER = ['super_admin', 'admin', 'sales_manager'];
@@ -108,6 +109,49 @@ const MANAGER = ['super_admin', 'admin', 'sales_manager'];
  *         description: Employee not found
  */
 router.post('/set', authenticate, authorize(...ADMIN), ctrl.setEmployeeSalary);
+
+/**
+ * @swagger
+ * /api/v1/salary/upload-signature:
+ *   post:
+ *     summary: Upload an authorized-signature image (Admin/Super Admin)
+ *     description: >
+ *       Full URL: POST https://api.nextonerealty.in/api/v1/salary/upload-signature
+ *
+ *       Uploads a signature image (JPEG/PNG/WEBP). Returns a URL — pass it
+ *       as `auth_signature` in POST /api/v1/salary/generate to have it
+ *       printed on that slip's PDF.
+ *     tags: [Salary]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *                 description: Signature image (accepts any field name)
+ *     responses:
+ *       201:
+ *         description: Signature uploaded
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Signature uploaded successfully"
+ *               data:
+ *                 file_name: "signature.png"
+ *                 file_size: 18234
+ *                 mime_type: "image/png"
+ *                 url: "https://api.nextonerealty.in/uploads/salary/signatures/1784600000000_signature.png"
+ *       400:
+ *         description: No file uploaded, or wrong file type
+ */
+router.post('/upload-signature', authenticate, authorize(...ADMIN), uploadSignature, ctrl.uploadSalarySignature);
 
 /**
  * @swagger
@@ -355,8 +399,28 @@ router.get('/user/:user_id', authenticate, authorize(...ADMIN), ctrl.getUserSala
  *                 example: 2026
  *               deductions:
  *                 type: number
- *                 description: Any manual deduction amount in INR
- *                 example: 1000
+ *                 description: Optional — any manual deduction amount. Leave it out entirely if there's none.
+ *                 example: 0
+ *               basic_salary:
+ *                 type: number
+ *                 description: Optional — overrides the employee's set monthly salary for just this slip
+ *                 example: 30000
+ *               incentive_amount:
+ *                 type: number
+ *                 description: Optional — shown on the PDF's Incentives line. Defaults to 0.
+ *                 example: 5000
+ *               payment_mode:
+ *                 type: string
+ *                 example: "Bank Transfer"
+ *               pay_date:
+ *                 type: string
+ *                 format: date
+ *                 description: Optional — defaults to the last day of the given month
+ *                 example: "2026-06-30"
+ *               auth_signature:
+ *                 type: string
+ *                 description: Optional — URL returned by POST /api/v1/salary/upload-signature, printed on the PDF
+ *                 example: "https://api.nextonerealty.in/uploads/salary/signatures/1784600000000_signature.png"
  *               working_days_override:
  *                 type: integer
  *                 description: Override the default Mon–Fri count (e.g. for holidays)

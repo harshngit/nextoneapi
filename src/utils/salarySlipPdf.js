@@ -11,9 +11,22 @@
  */
 
 const path = require('path');
+const fs = require('fs');
 const PDFDocument = require('pdfkit');
 
 const TEMPLATE_PATH = path.join(__dirname, '..', '..', 'assets', 'templates', 'Salary Slip.png');
+
+// auth_signature_url is stored as a full public URL (e.g.
+// https://api.nextonerealty.in/uploads/salary/signatures/xxx.png) — pdfkit
+// needs the real local file path instead, so strip everything up to and
+// including the domain and resolve the rest against the uploads root.
+const urlToLocalPath = (url) => {
+  if (!url) return null;
+  const marker = '/uploads/';
+  const idx = url.indexOf(marker);
+  if (idx === -1) return null;
+  return path.join(process.cwd(), url.slice(idx));
+};
 
 // Source PNG is 4419 x 6250 px — the PDF page is built at that exact pixel
 // size. Coordinates below are authored in the 1414 x 2000 preview space
@@ -79,6 +92,17 @@ const renderSalarySlipPdf = (slip, outputStream) => {
 
   // ── Total Earnings (bottom, large bold — baked-in sample) ──────────────────
   writeField(doc, money(netPay), box(617, 1848, 320, 60), { size: 36, bold: true });
+
+  // ── Authorized signature (optional) — sits in the blank space just above
+  // the "Santosh Kanojiya / Founder" line ──────────────────────────────────
+  const signaturePath = urlToLocalPath(slip.auth_signature_url);
+  if (signaturePath && fs.existsSync(signaturePath)) {
+    try {
+      doc.image(signaturePath, s(143), s(1745), { fit: [s(300), s(100)], align: 'left' });
+    } catch (e) {
+      // Corrupt/unreadable signature file — skip it rather than fail the whole PDF.
+    }
+  }
 
   doc.end();
 };

@@ -31,6 +31,18 @@ const { renderSalarySlipPdf } = require('../utils/salarySlipPdf')
 const { ZipArchive } = require('archiver')
 const { PassThrough } = require('stream')
 
+const BACKEND_URL = (process.env.BACKEND_URL || '').replace(/\/+$/, '')
+// Builds the public URL from the real absolute disk path multer reports —
+// never a hardcoded folder guess, so it can't drift out of sync.
+const toRawFileUrl = (absolutePath) => {
+  if (!absolutePath) return absolutePath
+  const normalized = absolutePath.replace(/\\/g, '/')
+  const marker = '/uploads/'
+  const idx = normalized.indexOf(marker)
+  const relative = idx === -1 ? normalized : normalized.slice(idx)
+  return `${BACKEND_URL}${relative.startsWith('/') ? '' : '/'}${relative}`
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Count Mon–Fri days in a given month/year */
@@ -202,6 +214,26 @@ const getAllEmployeeSalaries = async (req, res, next) => {
   } catch (err) { next(err) }
 }
 
+// ─── 2b. UPLOAD AUTHORIZED SIGNATURE (Admin) ─────────────────────────────────
+/**
+ * POST /api/v1/salary/upload-signature
+ * Single image upload (any field name). Returns a URL — pass that as
+ * auth_signature when calling POST /api/v1/salary/generate.
+ */
+const uploadSalarySignature = async (req, res, next) => {
+  try {
+    const file = req.file || (req.files && req.files[0])
+    if (!file) return next(new AppError('No signature image uploaded', 400))
+
+    return sendSuccess(res, 'Signature uploaded successfully', {
+      file_name: file.originalname,
+      file_size: file.size,
+      mime_type: file.mimetype,
+      url: toRawFileUrl(file.path),
+    }, 201)
+  } catch (err) { next(err) }
+}
+
 // ─── 3. GENERATE SALARY SLIP (Admin) ─────────────────────────────────────────
 /**
  * POST /api/v1/salary/generate
@@ -234,6 +266,7 @@ const generateSalarySlip = async (req, res, next) => {
       incentive_amount = 0,
       payment_mode = 'Bank Transfer',
       pay_date,
+      auth_signature,
     } = req.body
 
     if (!user_id) return next(new AppError('user_id is required', 400))
@@ -321,32 +354,33 @@ const generateSalarySlip = async (req, res, next) => {
          (user_id, month, year, monthly_salary, working_days, present_days,
           absent_days, leave_days, per_day_salary, earned_salary,
           deductions, final_salary, incentive_amount, total_payout,
-          payment_mode, pay_date, generated_by, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+          payment_mode, pay_date, auth_signature_url, generated_by, notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
        ON CONFLICT (user_id, month, year)
        DO UPDATE SET
-         monthly_salary   = EXCLUDED.monthly_salary,
-         working_days     = EXCLUDED.working_days,
-         present_days     = EXCLUDED.present_days,
-         absent_days      = EXCLUDED.absent_days,
-         leave_days       = EXCLUDED.leave_days,
-         per_day_salary   = EXCLUDED.per_day_salary,
-         earned_salary    = EXCLUDED.earned_salary,
-         deductions       = EXCLUDED.deductions,
-         final_salary     = EXCLUDED.final_salary,
-         incentive_amount = EXCLUDED.incentive_amount,
-         total_payout     = EXCLUDED.total_payout,
-         payment_mode     = EXCLUDED.payment_mode,
-         pay_date         = EXCLUDED.pay_date,
-         generated_by     = EXCLUDED.generated_by,
-         notes            = EXCLUDED.notes,
-         updated_at       = NOW()
+         monthly_salary      = EXCLUDED.monthly_salary,
+         working_days        = EXCLUDED.working_days,
+         present_days        = EXCLUDED.present_days,
+         absent_days         = EXCLUDED.absent_days,
+         leave_days          = EXCLUDED.leave_days,
+         per_day_salary      = EXCLUDED.per_day_salary,
+         earned_salary       = EXCLUDED.earned_salary,
+         deductions          = EXCLUDED.deductions,
+         final_salary        = EXCLUDED.final_salary,
+         incentive_amount    = EXCLUDED.incentive_amount,
+         total_payout        = EXCLUDED.total_payout,
+         payment_mode        = EXCLUDED.payment_mode,
+         pay_date            = EXCLUDED.pay_date,
+         auth_signature_url  = EXCLUDED.auth_signature_url,
+         generated_by        = EXCLUDED.generated_by,
+         notes               = EXCLUDED.notes,
+         updated_at          = NOW()
        RETURNING *`,
       [
         user_id, m, y, monthlySalary, workingDays, presentDays,
         absentDays, leaveDays, perDaySalary, earnedSalary,
         deductionAmt, finalSalary, incentiveAmt, totalPayout,
-        payment_mode, finalPayDate, req.user.id, notes || null,
+        payment_mode, finalPayDate, auth_signature || null, req.user.id, notes || null,
       ]
     )
 
@@ -449,14 +483,17 @@ const getSalarySlips = async (req, res, next) => {
       success: true,
       data:    data.rows.map(r => ({
         ...r,
-        monthly_salary: parseFloat(r.monthly_salary),
-        per_day_salary: parseFloat(r.per_day_salary),
-        earned_salary:  parseFloat(r.earned_salary),
-        deductions:     parseFloat(r.deductions),
-        final_salary:   parseFloat(r.final_salary),
-        present_days:   parseFloat(r.present_days),
-        absent_days:    parseFloat(r.absent_days),
-        leave_days:     parseFloat(r.leave_days),
+        monthly_salary:   parseFloat(r.monthly_salary),
+        per_day_salary:   parseFloat(r.per_day_salary),
+        earned_salary:    parseFloat(r.earned_salary),
+        deductions:       parseFloat(r.deductions),
+        final_salary:     parseFloat(r.final_salary),
+        present_days:     parseFloat(r.present_days),
+        absent_days:      parseFloat(r.absent_days),
+        leave_days:       parseFloat(r.leave_days),
+        incentive_amount: r.incentive_amount !== null ? parseFloat(r.incentive_amount) : 0,
+        total_payout:     r.total_payout !== null ? parseFloat(r.total_payout) : null,
+        pdf_url:          `${BACKEND_URL}/api/v1/salary/slips/${r.id}/pdf`,
       })),
       pagination: {
         total, page: parseInt(page), per_page: parseInt(per_page),
@@ -512,21 +549,26 @@ const getMySalary = async (req, res, next) => {
           }
         : null,
       salary_slips: slips.rows.map(r => ({
-        id:             r.id,
-        month:          r.month,
-        year:           r.year,
-        month_label:    monthName(r.month, r.year),
-        monthly_salary: parseFloat(r.monthly_salary),
-        working_days:   r.working_days,
-        present_days:   parseFloat(r.present_days),
-        absent_days:    parseFloat(r.absent_days),
-        leave_days:     parseFloat(r.leave_days),
-        per_day_salary: parseFloat(r.per_day_salary),
-        earned_salary:  parseFloat(r.earned_salary),
-        deductions:     parseFloat(r.deductions),
-        final_salary:   parseFloat(r.final_salary),
-        notes:          r.notes,
-        generated_at:   r.created_at,
+        id:               r.id,
+        month:            r.month,
+        year:             r.year,
+        month_label:      monthName(r.month, r.year),
+        monthly_salary:   parseFloat(r.monthly_salary),
+        working_days:     r.working_days,
+        present_days:     parseFloat(r.present_days),
+        absent_days:      parseFloat(r.absent_days),
+        leave_days:       parseFloat(r.leave_days),
+        per_day_salary:   parseFloat(r.per_day_salary),
+        earned_salary:    parseFloat(r.earned_salary),
+        deductions:       parseFloat(r.deductions),
+        final_salary:     parseFloat(r.final_salary),
+        incentive_amount: r.incentive_amount !== null ? parseFloat(r.incentive_amount) : 0,
+        total_payout:     r.total_payout !== null ? parseFloat(r.total_payout) : null,
+        payment_mode:     r.payment_mode,
+        pay_date:         r.pay_date,
+        notes:            r.notes,
+        generated_at:     r.created_at,
+        pdf_url:          `${BACKEND_URL}/api/v1/salary/slips/${r.id}/pdf`,
       })),
     })
   } catch (err) { next(err) }
@@ -566,14 +608,17 @@ const getSlipById = async (req, res, next) => {
 
     return sendSuccess(res, 'Salary slip fetched', {
       ...slip,
-      monthly_salary: parseFloat(slip.monthly_salary),
-      per_day_salary: parseFloat(slip.per_day_salary),
-      earned_salary:  parseFloat(slip.earned_salary),
-      deductions:     parseFloat(slip.deductions),
-      final_salary:   parseFloat(slip.final_salary),
-      present_days:   parseFloat(slip.present_days),
-      absent_days:    parseFloat(slip.absent_days),
-      leave_days:     parseFloat(slip.leave_days),
+      monthly_salary:   parseFloat(slip.monthly_salary),
+      per_day_salary:   parseFloat(slip.per_day_salary),
+      earned_salary:    parseFloat(slip.earned_salary),
+      deductions:       parseFloat(slip.deductions),
+      final_salary:     parseFloat(slip.final_salary),
+      present_days:     parseFloat(slip.present_days),
+      absent_days:      parseFloat(slip.absent_days),
+      leave_days:       parseFloat(slip.leave_days),
+      incentive_amount: slip.incentive_amount !== null ? parseFloat(slip.incentive_amount) : 0,
+      total_payout:     slip.total_payout !== null ? parseFloat(slip.total_payout) : null,
+      pdf_url:          `${BACKEND_URL}/api/v1/salary/slips/${slip.id}/pdf`,
     })
   } catch (err) { next(err) }
 }
@@ -871,6 +916,7 @@ const generateAllSalarySlips = async (req, res, next) => {
 module.exports = {
   setEmployeeSalary,
   getAllEmployeeSalaries,
+  uploadSalarySignature,
   generateSalarySlip,
   generateAllSalarySlips,
   getSalarySlips,

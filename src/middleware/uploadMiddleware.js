@@ -113,6 +113,37 @@ const uploadStandalone = (docType) => multer({
   limits: { fileSize: 50 * 1024 * 1024 },
 }).any();
 
+// ── Storage engine for salary slip authorized-signature images ────────────────
+// Fixed folder (uploads/salary/signatures) regardless of the client's chosen
+// form field name — same fix applied to the standalone project-doc uploads.
+const signatureStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(process.cwd(), 'uploads', 'salary', 'signatures');
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const timestamp = Date.now();
+    const sanitized = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    cb(null, `${timestamp}_${sanitized}`);
+  },
+});
+
+const signatureFileFilter = (req, file, cb) => {
+  const allowed = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+  if (allowed.includes(file.mimetype)) {
+    cb(null, true);
+  } else {
+    cb(new AppError('Only JPEG, PNG, or WEBP images are allowed for a signature', 400), false);
+  }
+};
+
+const uploadSignature = multer({
+  storage: signatureStorage,
+  fileFilter: signatureFileFilter,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB max
+}).any();
+
 // ── Storage engine for lead voice recordings ───────────────────────────────────
 const leadVoiceStorage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -329,6 +360,7 @@ module.exports = {
   uploadVideo,
   uploadPhoto,
   uploadDeveloperLogo,
+  uploadSignature,
   uploadLeadVoice,
   uploadPaymentProofFile,
   uploadLeadPhotoFile,
