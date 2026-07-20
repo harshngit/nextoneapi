@@ -49,7 +49,9 @@
       "Bash(node -e \"const cc = require\\('./src/controllers/commissionController'\\); console.log\\('addCommission:', typeof cc.addCommission\\);\")",
       "Bash(node -c src/controllers/advanceController.js)",
       "Bash(node -e \"require\\('./src/controllers/leadController'\\); console.log\\('LOAD OK'\\);\")",
-      "Bash(grep -n \"toFullUrl\\(\\\\`/uploads\\\\|toRawFileUrl\" src/controllers/projectDocumentsController.js)"
+      "Bash(grep -n \"toFullUrl\\(\\\\`/uploads\\\\|toRawFileUrl\" src/controllers/projectDocumentsController.js)",
+      "Bash(grep -n \"commission_percentage: { type: number, example: 2.5 }\\\\|commission/{id}/paid:\\\\|summary: Mark a commission as paid\" d:/Clients/nextone/backend/src/routes/salaryRoutes.js)",
+      "Bash(node -c src/routes/salaryRoutes.js)"
     ]
   }
 }
