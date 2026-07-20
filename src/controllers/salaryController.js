@@ -56,6 +56,30 @@ const countWorkingDays = (year, month) => {
   return count
 }
 
+/** Sum of employee_incentives for one user/month/year — pulled automatically
+ *  onto the slip, never taken from the request body. */
+const getMonthlyIncentiveTotal = async (userId, month, year) => {
+  const r = await pool.query(
+    `SELECT COALESCE(SUM(amount), 0) AS total FROM employee_incentives
+     WHERE user_id = $1 AND month = $2 AND year = $3`,
+    [userId, month, year]
+  )
+  return parseFloat(r.rows[0].total) || 0
+}
+
+/** Same, but for many users at once — returns a Map<user_id, total>. */
+const getMonthlyIncentiveTotals = async (userIds, month, year) => {
+  const r = await pool.query(
+    `SELECT user_id, COALESCE(SUM(amount), 0) AS total FROM employee_incentives
+     WHERE user_id = ANY($1::uuid[]) AND month = $2 AND year = $3
+     GROUP BY user_id`,
+    [userIds, month, year]
+  )
+  const map = new Map()
+  r.rows.forEach(row => map.set(row.user_id, parseFloat(row.total) || 0))
+  return map
+}
+
 /** Get latest active salary for a user */
 const getActiveSalary = async (userId) => {
   const r = await pool.query(
@@ -239,7 +263,7 @@ const uploadSalarySignature = async (req, res, next) => {
  * POST /api/v1/salary/generate
  * Body: {
  *   user_id, month, year, deductions?, notes?, working_days_override?,
- *   basic_salary?, incentive_amount?, payment_mode?, pay_date?
+ *   basic_salary?, payment_mode?, pay_date?, auth_signature?
  * }
  *
  * Calculates earned salary from attendance for the given month/year.
@@ -249,8 +273,10 @@ const uploadSalarySignature = async (req, res, next) => {
  * basic_salary?    — overrides the employee's set monthly salary for just
  *                     this slip (e.g. a one-off adjustment). Defaults to
  *                     whatever's set via POST /api/v1/salary/set.
- * incentive_amount? — added on top for the PDF's "Incentive" line and the
- *                     take-home total_payout. Defaults to 0.
+ * Incentive is NOT taken from the request — it's the sum of every
+ * employee_incentives row already recorded for this user/month/year
+ * (added via POST /api/v1/salary/incentive), so it always reflects
+ * whatever's on file rather than something typed in here.
  * payment_mode?     — shown on the PDF slip. Defaults to "Bank Transfer".
  * pay_date?         — shown on the PDF slip. Defaults to the last day of
  *                     the given month.
@@ -263,7 +289,6 @@ const generateSalarySlip = async (req, res, next) => {
       notes,
       working_days_override,
       basic_salary,
-      incentive_amount = 0,
       payment_mode = 'Bank Transfer',
       pay_date,
       auth_signature,
@@ -344,7 +369,7 @@ const generateSalarySlip = async (req, res, next) => {
     const earnedSalary  = parseFloat((perDaySalary * presentDays).toFixed(2))
     const deductionAmt  = parseFloat(deductions) || 0
     const finalSalary   = parseFloat((earnedSalary - deductionAmt).toFixed(2))
-    const incentiveAmt  = parseFloat(incentive_amount) || 0
+    const incentiveAmt  = await getMonthlyIncentiveTotal(user_id, m, y)
     const totalPayout   = parseFloat((finalSalary + incentiveAmt).toFixed(2))
     const finalPayDate  = pay_date || new Date(y, m, 0).toISOString().split('T')[0] // last day of month
 
@@ -636,20 +661,23 @@ const getSlipById = async (req, res, next) => {
 // ─── 6a2. EDIT AN EXISTING SALARY SLIP (Admin) ───────────────────────────────
 /**
  * PATCH /api/v1/salary/slips/:id
- * Body: any subset of { basic_salary, incentive_amount, deductions,
+ * Body: any subset of { basic_salary, deductions,
  *                        payment_mode, pay_date, auth_signature, notes }
  *
  * For correcting a slip's numbers/details without re-running the whole
  * attendance-based calculation. present_days/absent_days/leave_days/
- * working_days are left untouched — only basic_salary (-> monthly_salary),
- * incentive_amount, and deductions actually change the money fields, and
- * final_salary/total_payout are recomputed from them.
+ * working_days are left untouched — only basic_salary (-> monthly_salary)
+ * and deductions actually change the money fields, and final_salary/
+ * total_payout are recomputed from them. Incentive is always re-pulled
+ * fresh from employee_incentives for this slip's user/month/year — not
+ * something you can set here — so editing a slip also picks up any
+ * incentive added/changed since it was generated.
  */
 const updateSalarySlip = async (req, res, next) => {
   try {
     const { id } = req.params
     const {
-      basic_salary, incentive_amount, deductions,
+      basic_salary, deductions,
       payment_mode, pay_date, auth_signature, notes,
     } = req.body
 
@@ -667,7 +695,7 @@ const updateSalarySlip = async (req, res, next) => {
     const earnedSalary = parseFloat((perDaySalary * presentDays).toFixed(2))
     const deductionAmt = deductions !== undefined ? parseFloat(deductions) || 0 : parseFloat(slip.deductions)
     const finalSalary  = parseFloat((earnedSalary - deductionAmt).toFixed(2))
-    const incentiveAmt = incentive_amount !== undefined ? parseFloat(incentive_amount) || 0 : parseFloat(slip.incentive_amount || 0)
+    const incentiveAmt = await getMonthlyIncentiveTotal(slip.user_id, slip.month, slip.year)
     const totalPayout  = parseFloat((finalSalary + incentiveAmt).toFixed(2))
 
     const result = await pool.query(
@@ -873,7 +901,6 @@ const generateAllSalarySlips = async (req, res, next) => {
     const {
       month, year,
       deductions_map = {},
-      incentive_map = {},
       payment_mode = 'Bank Transfer',
       pay_date,
       auth_signature,
@@ -934,6 +961,10 @@ const generateAllSalarySlips = async (req, res, next) => {
     const attMap = {}
     attResult.rows.forEach(r => { attMap[r.user_id] = r })
 
+    // Incentive per employee is pulled from employee_incentives, never from
+    // the request — same rule as the single-slip generate endpoint.
+    const incentiveMap = await getMonthlyIncentiveTotals(employees.rows.map(e => e.id), m, y)
+
     const results  = []
     const failures = []
 
@@ -954,7 +985,7 @@ const generateAllSalarySlips = async (req, res, next) => {
         const earnedSalary  = parseFloat((perDaySalary * presentDays).toFixed(2))
         const deductionAmt  = parseFloat(deductions_map[emp.id] || 0)
         const finalSalary   = parseFloat((earnedSalary - deductionAmt).toFixed(2))
-        const incentiveAmt  = parseFloat(incentive_map[emp.id] || 0)
+        const incentiveAmt  = incentiveMap.get(emp.id) || 0
         const totalPayout   = parseFloat((finalSalary + incentiveAmt).toFixed(2))
 
         await pool.query(

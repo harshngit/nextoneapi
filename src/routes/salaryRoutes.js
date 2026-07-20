@@ -377,6 +377,9 @@ router.get('/user/:user_id', authenticate, authorize(...ADMIN), ctrl.getUserSala
  *       Formula: (monthly_salary / working_days) × present_days - deductions
  *       present_days = present + late + (half_day × 0.5)
  *       If a slip already exists for that month, it will be regenerated/overwritten.
+ *       Incentive is NOT a request field — it's automatically the sum of
+ *       every employee_incentives row already recorded for this
+ *       user/month/year (add those via POST /api/v1/salary/incentive).
  *     tags: [Salary]
  *     security:
  *       - BearerAuth: []
@@ -398,9 +401,6 @@ router.get('/user/:user_id', authenticate, authorize(...ADMIN), ctrl.getUserSala
  *               basic_salary:
  *                 type: number
  *                 description: Optional — overrides the employee's set monthly salary for just this slip
- *               incentive_amount:
- *                 type: number
- *                 description: Optional — shown on the PDF's Incentives line. Defaults to 0.
  *               pay_date:
  *                 type: string
  *                 format: date
@@ -424,7 +424,6 @@ router.get('/user/:user_id', authenticate, authorize(...ADMIN), ctrl.getUserSala
  *             month: 6
  *             year: 2026
  *             basic_salary: 30000
- *             incentive_amount: 5000
  *             pay_date: "2026-06-30"
  *             auth_signature: "https://api.nextonerealty.in/uploads/salary/signatures/1784600000000_signature.png"
  *             notes: "June 2026 salary"
@@ -457,7 +456,9 @@ router.post('/generate', authenticate, authorize(...ADMIN), ctrl.generateSalaryS
  *     summary: Generate salary slips for ALL employees for a month (Admin)
  *     description: >
  *       Bulk generates salary slips for all employees who have a salary set.
- *       Existing slips for the month are overwritten.
+ *       Existing slips for the month are overwritten. Each employee's
+ *       incentive is automatically the sum of their employee_incentives
+ *       rows for this month/year — not a request field.
  *     tags: [Salary]
  *     security:
  *       - BearerAuth: []
@@ -473,9 +474,6 @@ router.post('/generate', authenticate, authorize(...ADMIN), ctrl.generateSalaryS
  *                 type: integer
  *               year:
  *                 type: integer
- *               incentive_map:
- *                 type: object
- *                 description: Optional — per-user incentive amounts keyed by user UUID (missing users default to 0)
  *               payment_mode:
  *                 type: string
  *                 description: Optional — applied to every slip in this batch. Defaults to "Bank Transfer"
@@ -497,7 +495,6 @@ router.post('/generate', authenticate, authorize(...ADMIN), ctrl.generateSalaryS
  *           example:
  *             month: 6
  *             year: 2026
- *             incentive_map: { "user-uuid-001": 5000, "user-uuid-002": 2000 }
  *             pay_date: "2026-06-30"
  *             auth_signature: "https://api.nextonerealty.in/uploads/salary/signatures/1784600000000_signature.png"
  *             notes: "June 2026 salary — bulk run"
@@ -607,7 +604,9 @@ router.get('/slips/:id', authenticate, ctrl.getSlipById);
  *       Corrects a slip's numbers/details without re-running the
  *       attendance-based calculation — present_days/working_days are left
  *       as-is. final_salary and total_payout are recomputed from whatever
- *       you send.
+ *       you send. Incentive is always re-pulled fresh from
+ *       employee_incentives for this slip's user/month/year — not a
+ *       request field — so editing also picks up any incentive change.
  *     tags: [Salary]
  *     security:
  *       - BearerAuth: []
@@ -624,7 +623,6 @@ router.get('/slips/:id', authenticate, ctrl.getSlipById);
  *             type: object
  *             properties:
  *               basic_salary:     { type: number }
- *               incentive_amount: { type: number }
  *               deductions:       { type: number }
  *               payment_mode:     { type: string }
  *               pay_date:         { type: string, format: date }
@@ -632,7 +630,6 @@ router.get('/slips/:id', authenticate, ctrl.getSlipById);
  *               notes:            { type: string }
  *           example:
  *             basic_salary: 32000
- *             incentive_amount: 4000
  *             notes: "Corrected after payroll review"
  *     responses:
  *       200:
