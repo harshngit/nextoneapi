@@ -167,17 +167,25 @@ const getMyCommissions = async (req, res, next) => {
 };
 
 // ─── PATCH /api/v1/salary/commission/:id/paid (Admin/Super Admin) ─────────────
+// Body: { paid?: boolean } — defaults to true (mark paid) when omitted, so
+// existing "just mark paid" callers keep working; pass paid: false to flip
+// a commission back to pending.
 const markCommissionPaid = async (req, res, next) => {
   try {
     const { id } = req.params;
+    const { paid } = req.body;
+    const isPaid = paid === undefined ? true : !!paid;
+
     const existing = await pool.query('SELECT id FROM employee_commissions WHERE id = $1', [id]);
     if (!existing.rows.length) return next(new AppError('Commission record not found', 404));
 
     const result = await pool.query(
-      `UPDATE employee_commissions SET paid = true, paid_date = NOW(), updated_at = NOW() WHERE id = $1 RETURNING *`,
-      [id]
+      `UPDATE employee_commissions
+       SET paid = $1, paid_date = $2, updated_at = NOW()
+       WHERE id = $3 RETURNING *`,
+      [isPaid, isPaid ? new Date() : null, id]
     );
-    return sendSuccess(res, 'Commission marked as paid', parseRow(result.rows[0]));
+    return sendSuccess(res, isPaid ? 'Commission marked as paid' : 'Commission marked as unpaid', parseRow(result.rows[0]));
   } catch (err) {
     next(err);
   }

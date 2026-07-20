@@ -1031,6 +1031,7 @@ router.delete('/incentive/:id', authenticate, authorize(...ADMIN), ctrl.deleteIn
  *               commission_amount:     { type: number, example: 25000 }
  *               commission_percentage: { type: number, example: 2.5 }
  *               notes:                 { type: string }
+ *               paid:                  { type: boolean, default: true, description: "Defaults to true (paid immediately). Pass false to leave it pending instead." }
  *     responses:
  *       201:
  *         description: Commission recorded
@@ -1112,7 +1113,11 @@ router.get('/my-commissions', authenticate, commissionCtrl.getMyCommissions);
  * @swagger
  * /api/v1/salary/commission/{id}/paid:
  *   patch:
- *     summary: Mark a commission as paid (Admin/Super Admin)
+ *     summary: Change a commission's paid/unpaid status (Admin/Super Admin)
+ *     description: >
+ *       Body is optional — omit it (or send no body) to mark paid, matching
+ *       the old one-way behavior. Pass { "paid": false } to flip it back to
+ *       pending, or { "paid": true } explicitly.
  *     tags: [Commissions]
  *     security:
  *       - BearerAuth: []
@@ -1121,9 +1126,17 @@ router.get('/my-commissions', authenticate, commissionCtrl.getMyCommissions);
  *         name: id
  *         required: true
  *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               paid: { type: boolean, default: true, example: false }
  *     responses:
  *       200:
- *         description: Commission marked as paid
+ *         description: Commission paid status updated
  *       404:
  *         description: Commission record not found
  */
