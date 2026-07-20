@@ -51,7 +51,11 @@
       "Bash(node -e \"require\\('./src/controllers/leadController'\\); console.log\\('LOAD OK'\\);\")",
       "Bash(grep -n \"toFullUrl\\(\\\\`/uploads\\\\|toRawFileUrl\" src/controllers/projectDocumentsController.js)",
       "Bash(grep -n \"commission_percentage: { type: number, example: 2.5 }\\\\|commission/{id}/paid:\\\\|summary: Mark a commission as paid\" d:/Clients/nextone/backend/src/routes/salaryRoutes.js)",
-      "Bash(node -c src/routes/salaryRoutes.js)"
+      "Bash(node -c src/routes/salaryRoutes.js)",
+      "Bash(node -c src/utils/salarySlipPdf.js)",
+      "Bash(mkdir -p \"/c/Users/Lenovo/AppData/Local/Temp/claude/d--Clients-nextone-backend/b4090147-63f4-4ee4-ab67-aff43a61fa57/scratchpad\")",
+      "Bash(pdftoppm -v)",
+      "Read(//c/Users/Lenovo/AppData/Local/Temp/claude/d--Clients-nextone-backend/b4090147-63f4-4ee4-ab67-aff43a61fa57/scratchpad/**)"
     ]
   }
 }
