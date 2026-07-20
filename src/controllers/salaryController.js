@@ -503,6 +503,16 @@ const getSalarySlips = async (req, res, next) => {
   } catch (err) { next(err) }
 }
 
+// ─── 4b. SALARY SLIPS FOR ONE EMPLOYEE (Admin) ───────────────────────────────
+/**
+ * GET /api/v1/salary/slips/user/:user_id
+ * Same data as GET /slips?user_id=..., as a dedicated path for convenience.
+ */
+const getUserSalarySlips = (req, res, next) => {
+  req.query.user_id = req.params.user_id
+  return getSalarySlips(req, res, next)
+}
+
 // ─── 5. MY SALARY — Employee sees their own ──────────────────────────────────
 /**
  * GET /api/v1/salary/my-salary
@@ -785,7 +795,16 @@ const getMySalaryHistory = async (req, res, next) => {
  */
 const generateAllSalarySlips = async (req, res, next) => {
   try {
-    const { month, year, deductions_map = {}, working_days_override, notes } = req.body
+    const {
+      month, year,
+      deductions_map = {},
+      incentive_map = {},
+      payment_mode = 'Bank Transfer',
+      pay_date,
+      auth_signature,
+      working_days_override,
+      notes,
+    } = req.body
 
     if (!month || !year) return next(new AppError('month and year are required', 400))
 
@@ -818,6 +837,7 @@ const generateAllSalarySlips = async (req, res, next) => {
       ? parseInt(working_days_override)
       : countWorkingDays(y, m)
     const monthName    = new Date(y, m - 1).toLocaleString('en-IN', { month: 'long' })
+    const finalPayDate = pay_date || end // last day of month by default
 
     // Fetch attendance for ALL employees in one query.
     // late_by_minutes > 5 means check-in was after 10:35 AM → half day (50% cut).
@@ -859,42 +879,53 @@ const generateAllSalarySlips = async (req, res, next) => {
         const earnedSalary  = parseFloat((perDaySalary * presentDays).toFixed(2))
         const deductionAmt  = parseFloat(deductions_map[emp.id] || 0)
         const finalSalary   = parseFloat((earnedSalary - deductionAmt).toFixed(2))
+        const incentiveAmt  = parseFloat(incentive_map[emp.id] || 0)
+        const totalPayout   = parseFloat((finalSalary + incentiveAmt).toFixed(2))
 
         await pool.query(
           `INSERT INTO salary_slips
              (user_id, month, year, monthly_salary, working_days, present_days,
               absent_days, leave_days, per_day_salary, earned_salary,
-              deductions, final_salary, generated_by, notes)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+              deductions, final_salary, incentive_amount, total_payout,
+              payment_mode, pay_date, auth_signature_url, generated_by, notes)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
            ON CONFLICT (user_id, month, year)
            DO UPDATE SET
-             monthly_salary = EXCLUDED.monthly_salary,
-             working_days   = EXCLUDED.working_days,
-             present_days   = EXCLUDED.present_days,
-             absent_days    = EXCLUDED.absent_days,
-             leave_days     = EXCLUDED.leave_days,
-             per_day_salary = EXCLUDED.per_day_salary,
-             earned_salary  = EXCLUDED.earned_salary,
-             deductions     = EXCLUDED.deductions,
-             final_salary   = EXCLUDED.final_salary,
-             generated_by   = EXCLUDED.generated_by,
-             notes          = EXCLUDED.notes,
-             updated_at     = NOW()`,
+             monthly_salary     = EXCLUDED.monthly_salary,
+             working_days       = EXCLUDED.working_days,
+             present_days       = EXCLUDED.present_days,
+             absent_days        = EXCLUDED.absent_days,
+             leave_days         = EXCLUDED.leave_days,
+             per_day_salary     = EXCLUDED.per_day_salary,
+             earned_salary      = EXCLUDED.earned_salary,
+             deductions         = EXCLUDED.deductions,
+             final_salary       = EXCLUDED.final_salary,
+             incentive_amount   = EXCLUDED.incentive_amount,
+             total_payout       = EXCLUDED.total_payout,
+             payment_mode       = EXCLUDED.payment_mode,
+             pay_date           = EXCLUDED.pay_date,
+             auth_signature_url = EXCLUDED.auth_signature_url,
+             generated_by       = EXCLUDED.generated_by,
+             notes              = EXCLUDED.notes,
+             updated_at         = NOW()`,
           [
             emp.id, m, y, monthlySalary, workingDays, presentDays,
             absentDays, leaveDays, perDaySalary, earnedSalary,
-            deductionAmt, finalSalary, req.user.id, notes || null,
+            deductionAmt, finalSalary, incentiveAmt, totalPayout,
+            payment_mode, finalPayDate, auth_signature || null, req.user.id, notes || null,
           ]
         )
 
         results.push({
-          user_id:       emp.id,
-          full_name:     emp.full_name,
-          monthly_salary: monthlySalary,
-          present_days:  presentDays,
-          earned_salary: earnedSalary,
-          deductions:    deductionAmt,
-          final_salary:  finalSalary,
+          user_id:          emp.id,
+          full_name:        emp.full_name,
+          monthly_salary:   monthlySalary,
+          present_days:     presentDays,
+          earned_salary:    earnedSalary,
+          deductions:       deductionAmt,
+          final_salary:     finalSalary,
+          incentive_amount: incentiveAmt,
+          total_payout:     totalPayout,
         })
       } catch (empErr) {
         failures.push({ user_id: emp.id, full_name: emp.full_name, error: empErr.message })
@@ -920,6 +951,7 @@ module.exports = {
   generateSalarySlip,
   generateAllSalarySlips,
   getSalarySlips,
+  getUserSalarySlips,
   getMySalary,
   getSlipById,
   downloadSalarySlipPdf,

@@ -393,41 +393,41 @@ router.get('/user/:user_id', authenticate, authorize(...ADMIN), ctrl.getUserSala
  *                 format: uuid
  *               month:
  *                 type: integer
- *                 example: 6
  *               year:
  *                 type: integer
- *                 example: 2026
- *               deductions:
- *                 type: number
- *                 description: Optional — any manual deduction amount. Leave it out entirely if there's none.
- *                 example: 0
  *               basic_salary:
  *                 type: number
  *                 description: Optional — overrides the employee's set monthly salary for just this slip
- *                 example: 30000
  *               incentive_amount:
  *                 type: number
  *                 description: Optional — shown on the PDF's Incentives line. Defaults to 0.
- *                 example: 5000
- *               payment_mode:
- *                 type: string
- *                 example: "Bank Transfer"
  *               pay_date:
  *                 type: string
  *                 format: date
  *                 description: Optional — defaults to the last day of the given month
- *                 example: "2026-06-30"
  *               auth_signature:
  *                 type: string
  *                 description: Optional — URL returned by POST /api/v1/salary/upload-signature, printed on the PDF
- *                 example: "https://api.nextonerealty.in/uploads/salary/signatures/1784600000000_signature.png"
- *               working_days_override:
- *                 type: integer
- *                 description: Override the default Mon–Fri count (e.g. for holidays)
- *                 example: 22
  *               notes:
  *                 type: string
- *                 example: "June 2026 salary"
+ *               deductions:
+ *                 type: number
+ *                 description: Optional, rarely needed — any manual deduction amount. Leave it out entirely if there's none.
+ *               payment_mode:
+ *                 type: string
+ *                 description: Optional — defaults to "Bank Transfer"
+ *               working_days_override:
+ *                 type: integer
+ *                 description: Optional — override the default Mon–Fri count (e.g. for holidays)
+ *           example:
+ *             user_id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+ *             month: 6
+ *             year: 2026
+ *             basic_salary: 30000
+ *             incentive_amount: 5000
+ *             pay_date: "2026-06-30"
+ *             auth_signature: "https://api.nextonerealty.in/uploads/salary/signatures/1784600000000_signature.png"
+ *             notes: "June 2026 salary"
  *     responses:
  *       201:
  *         description: Salary slip generated
@@ -471,19 +471,36 @@ router.post('/generate', authenticate, authorize(...ADMIN), ctrl.generateSalaryS
  *             properties:
  *               month:
  *                 type: integer
- *                 example: 6
  *               year:
  *                 type: integer
- *                 example: 2026
- *               working_days_override:
- *                 type: integer
- *                 description: Apply same override to all employees
- *               deductions_map:
+ *               incentive_map:
  *                 type: object
- *                 description: Per-user deduction amounts keyed by user UUID.
- *                 example: { "user-uuid-001": 500, "user-uuid-002": 0 }
+ *                 description: Optional — per-user incentive amounts keyed by user UUID (missing users default to 0)
+ *               payment_mode:
+ *                 type: string
+ *                 description: Optional — applied to every slip in this batch. Defaults to "Bank Transfer"
+ *               pay_date:
+ *                 type: string
+ *                 format: date
+ *                 description: Optional — applied to every slip in this batch. Defaults to the last day of the month
+ *               auth_signature:
+ *                 type: string
+ *                 description: Optional — URL from POST /api/v1/salary/upload-signature, applied to every slip in this batch
  *               notes:
  *                 type: string
+ *               deductions_map:
+ *                 type: object
+ *                 description: Optional, rarely needed — per-user deduction amounts keyed by user UUID
+ *               working_days_override:
+ *                 type: integer
+ *                 description: Optional — apply the same override to all employees
+ *           example:
+ *             month: 6
+ *             year: 2026
+ *             incentive_map: { "user-uuid-001": 5000, "user-uuid-002": 2000 }
+ *             pay_date: "2026-06-30"
+ *             auth_signature: "https://api.nextonerealty.in/uploads/salary/signatures/1784600000000_signature.png"
+ *             notes: "June 2026 salary — bulk run"
  *     responses:
  *       201:
  *         description: Bulk slips generated
@@ -530,6 +547,30 @@ router.post('/generate-all', authenticate, authorize(...ADMIN), ctrl.generateAll
  *         description: Paginated salary slips with total_payout
  */
 router.get('/slips', authenticate, authorize(...ADMIN), ctrl.getSalarySlips);
+
+/**
+ * @swagger
+ * /api/v1/salary/slips/user/{user_id}:
+ *   get:
+ *     summary: Get all salary slips for one employee (Admin)
+ *     description: Same data as GET /slips?user_id=..., as a dedicated path.
+ *     tags: [Salary]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: user_id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *       - { in: query, name: month,    schema: { type: integer }, example: 6 }
+ *       - { in: query, name: year,     schema: { type: integer }, example: 2026 }
+ *       - { in: query, name: page,     schema: { type: integer, default: 1 } }
+ *       - { in: query, name: per_page, schema: { type: integer, default: 20 } }
+ *     responses:
+ *       200:
+ *         description: Paginated salary slips for this employee
+ */
+router.get('/slips/user/:user_id', authenticate, authorize(...ADMIN), ctrl.getUserSalarySlips);
 
 /**
  * @swagger
