@@ -5,9 +5,16 @@
  * (assets/templates/Salary Slip.png) with dynamic values overlaid on top.
  * The PNG is a flattened export — some fields have sample values baked
  * into the image (e.g. the employee name, the amount figures), so those
- * are first "erased" with a white rectangle before the real value is
- * written on top. Month / Position / Pay Date are blank in this template,
- * so those are written directly with no erase step.
+ * are first "erased" with a white rectangle sized to the WHOLE field/cell
+ * (not just the new text) before the real value is written on top —
+ * this guarantees the old baked-in value can never peek through.
+ * Month / Position / Pay Date are blank in this template, so those are
+ * written directly with no erase step.
+ *
+ * Coordinates below were measured directly against the source PNG
+ * (4419 x 6250 px) using a pixel grid overlay, not eyeballed from a
+ * downscaled preview — see scratchpad grid images from the coordinate
+ * calibration pass if these ever need re-measuring.
  */
 
 const path = require('path');
@@ -16,10 +23,14 @@ const PDFDocument = require('pdfkit');
 
 const TEMPLATE_PATH = path.join(__dirname, '..', '..', 'assets', 'templates', 'Salary Slip.png');
 
-// auth_signature_url is stored as a full public URL (e.g.
-// https://api.nextonerealty.in/uploads/salary/signatures/xxx.png) — pdfkit
-// needs the real local file path instead, so strip everything up to and
-// including the domain and resolve the rest against the uploads root.
+// Source PNG dimensions — the PDF page is built at this exact pixel size.
+const PAGE_WIDTH  = 4419;
+const PAGE_HEIGHT = 6250;
+
+const money = (n) => `${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} rs`;
+
+// auth_signature_url is stored as a full public URL — pdfkit needs the
+// real local file path instead.
 const urlToLocalPath = (url) => {
   if (!url) return null;
   const marker = '/uploads/';
@@ -28,28 +39,14 @@ const urlToLocalPath = (url) => {
   return path.join(process.cwd(), url.slice(idx));
 };
 
-// Source PNG is 4419 x 6250 px — the PDF page is built at that exact pixel
-// size. Coordinates below are authored in the 1414 x 2000 preview space
-// (what a human reviews) and scaled up by this factor to match the source.
-const SCALE = 3.13;
-const PAGE_WIDTH  = 4419;
-const PAGE_HEIGHT = 6250;
+const eraseZone = (doc, { x, y, w, h }) => {
+  doc.save();
+  doc.rect(x, y, w, h).fill('#ffffff');
+  doc.restore();
+};
 
-const s = (n) => n * SCALE; // scale a single value
-const box = (x, y, w, h) => ({ x: s(x), y: s(y), w: s(w), h: s(h) });
-
-const money = (n) => `${Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} rs`;
-
-// Draws a white rectangle to cover baked-in sample text, then writes the
-// real value on top of it. Skip the erase step for fields that are blank
-// in the template (pass erase: false).
-const writeField = (doc, text, { x, y, w, h }, { align = 'left', size = 20, bold = false, erase = true } = {}) => {
-  if (erase) {
-    doc.save();
-    doc.rect(x - s(4), y - s(4), w, h).fill('#ffffff');
-    doc.restore();
-  }
-  doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(s(size)).fillColor('#231f20');
+const writeText = (doc, text, { x, y, w }, { align = 'left', size = 60, bold = false } = {}) => {
+  doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(size).fillColor('#231f20');
   doc.text(text, x, y, { width: w, align });
 };
 
@@ -78,27 +75,33 @@ const renderSalarySlipPdf = (slip, outputStream) => {
     ? parseFloat(slip.total_payout)
     : totalEarnings - (parseFloat(slip.deductions) || 0);
 
-  // ── Employee name (bold, baked-in sample — needs erase) ────────────────────
-  writeField(doc, slip.employee_name || '—', box(143, 448, 500, 55), { size: 34, bold: true });
+  // ── Employee name — baked-in sample ("Rachel Akinwale"), needs erase ───────
+  eraseZone(doc, { x: 430, y: 1385, w: 1900, h: 215 });
+  writeText(doc, slip.employee_name || '—', { x: 470, y: 1410, w: 1800 }, { size: 130, bold: true });
 
   // ── Month / Position / Pay Date — blank in template, no erase needed ───────
-  writeField(doc, `${monthName} ${slip.year}`, box(300, 533, 350, 26), { size: 20, erase: false });
-  writeField(doc, slip.role || '—',            box(300, 568, 350, 26), { size: 20, erase: false });
-  writeField(doc, payDate,                     box(300, 603, 350, 26), { size: 20, erase: false });
+  writeText(doc, `${monthName} ${slip.year}`, { x: 1030, y: 1660, w: 1350 }, { size: 78 });
+  writeText(doc, slip.role || '—',            { x: 1030, y: 1798, w: 1350 }, { size: 78 });
+  writeText(doc, payDate,                     { x: 1030, y: 1936, w: 1350 }, { size: 78 });
 
-  // ── Earnings table amount column (labels stay static) ───────────────────────
-  writeField(doc, money(basicSalary), box(875, 1010, 210, 40), { size: 22 });
-  writeField(doc, money(incentive),   box(875, 1163, 210, 40), { size: 22 });
+  // ── Earnings table amount column — erase the whole cell, labels stay static ─
+  eraseZone(doc, { x: 2600, y: 3040, w: 1395, h: 470 }); // Basic Salary cell
+  writeText(doc, money(basicSalary), { x: 2660, y: 3225, w: 1300 }, { size: 95 });
+
+  eraseZone(doc, { x: 2600, y: 3524, w: 1395, h: 470 }); // Incentives cell
+  writeText(doc, money(incentive),   { x: 2660, y: 3709, w: 1300 }, { size: 95 });
 
   // ── Total Earnings (bottom, large bold — baked-in sample) ──────────────────
-  writeField(doc, money(netPay), box(617, 1848, 320, 60), { size: 36, bold: true });
+  // Width kept under ~3070 so it doesn't touch the "Thank You" panel's left edge.
+  eraseZone(doc, { x: 1895, y: 5340, w: 1150, h: 260 });
+  writeText(doc, money(netPay), { x: 1918, y: 5400, w: 1100 }, { size: 130, bold: true });
 
-  // ── Authorized signature (optional) — sits in the blank space just above
-  // the "Santosh Kanojiya / Founder" line ──────────────────────────────────
+  // ── Authorized signature (optional) — blank space above the
+  // "Santosh Kanojiya / Founder" line ─────────────────────────────────────────
   const signaturePath = urlToLocalPath(slip.auth_signature_url);
   if (signaturePath && fs.existsSync(signaturePath)) {
     try {
-      doc.image(signaturePath, s(143), s(1745), { fit: [s(300), s(100)], align: 'left' });
+      doc.image(signaturePath, 442, 5050, { fit: [900, 380], align: 'left' });
     } catch (e) {
       // Corrupt/unreadable signature file — skip it rather than fail the whole PDF.
     }
