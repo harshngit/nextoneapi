@@ -89,6 +89,30 @@ const uploadProjectDocs = multer({
   limits: { fileSize: 50 * 1024 * 1024 }, // 50 MB max per file
 });
 
+// ── Storage engine for standalone (no project id yet) single-file uploads ─────
+// Unlike projectDocStorage above, the destination folder here is FIXED per
+// endpoint — it never depends on the client's chosen form field name, so the
+// URL these standalone endpoints hand back always matches where the file
+// actually landed on disk.
+const standaloneStorageFor = (docType) => multer.diskStorage({
+  destination: (req, file, cb) => {
+    const dir = path.join(process.cwd(), 'uploads', 'projects', 'temp', docType);
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename: (req, file, cb) => {
+    const timestamp = Date.now();
+    const sanitized = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    cb(null, `${timestamp}_${sanitized}`);
+  },
+});
+
+const uploadStandalone = (docType) => multer({
+  storage: standaloneStorageFor(docType),
+  fileFilter: projectDocFilter,
+  limits: { fileSize: 50 * 1024 * 1024 },
+}).any();
+
 // ── Storage engine for lead voice recordings ───────────────────────────────────
 const leadVoiceStorage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -263,34 +287,35 @@ const uploadProjectDocuments = uploadProjectDocs.fields([
 ]);
 
 /**
- * Single file upload for unit plan (accepts any field name)
+ * Single file upload for unit plan (accepts any field name — always lands
+ * in uploads/projects/temp/unit_plans regardless of the field name used)
  */
-const uploadUnitPlan = uploadProjectDocs.any();
+const uploadUnitPlan = uploadStandalone('unit_plans');
 
 /**
  * Single file upload for creative (accepts any field name)
  */
-const uploadCreative = uploadProjectDocs.any();
+const uploadCreative = uploadStandalone('creatives');
 
 /**
  * Single file upload for payment plan (accepts any field name)
  */
-const uploadPaymentPlan = uploadProjectDocs.any();
+const uploadPaymentPlan = uploadStandalone('payment_plans');
 
 /**
  * Single file upload for video (accepts any field name)
  */
-const uploadVideo = uploadProjectDocs.any();
+const uploadVideo = uploadStandalone('videos');
 
 /**
  * Single file upload for a project photo (accepts any field name)
  */
-const uploadPhoto = uploadProjectDocs.any();
+const uploadPhoto = uploadStandalone('photos');
 
 /**
  * Single file upload for a developer logo (accepts any field name)
  */
-const uploadDeveloperLogo = uploadProjectDocs.any();
+const uploadDeveloperLogo = uploadStandalone('developer_logo');
 
 const uploadSingleFile = uploadGeneric.single('file');
 const uploadMultipleFiles = uploadGeneric.array('files', 10);

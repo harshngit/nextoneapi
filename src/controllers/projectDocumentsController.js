@@ -23,6 +23,18 @@ const toFullUrl = (relativePath) => {
   return `${BACKEND_URL}${relativePath.startsWith('/') ? '' : '/'}${relativePath}`;
 };
 
+// Builds the public static-file URL straight from the real absolute disk
+// path multer reports (file.path) — never a hardcoded folder guess, so it
+// can never drift out of sync with wherever the file actually landed.
+const toRawFileUrl = (absolutePath) => {
+  if (!absolutePath) return absolutePath;
+  const normalized = absolutePath.replace(/\\/g, '/');
+  const marker = '/uploads/';
+  const idx = normalized.indexOf(marker);
+  const relative = idx === -1 ? normalized : normalized.slice(idx);
+  return toFullUrl(relative);
+};
+
 // Document types safe to expose without auth — meant to be embedded directly
 // in <img src>. unit_plan / payment_plan / video stay auth-only (downloaded
 // via explicit user action through /download, not rendered inline).
@@ -631,7 +643,7 @@ const uploadStandaloneUnitPlan = async (req, res, next) => {
       file_path: file.path.replace(/\\/g, '/'),
       file_size: file.size,
       mime_type: file.mimetype,
-      url: toFullUrl(`/uploads/projects/temp/unit_plans/${file.filename}`),
+      url: toRawFileUrl(file.path),
       document_type: 'unit_plan'
     };
 
@@ -657,7 +669,7 @@ const uploadStandaloneCreative = async (req, res, next) => {
       file_path: file.path.replace(/\\/g, '/'),
       file_size: file.size,
       mime_type: file.mimetype,
-      url: toFullUrl(`/uploads/projects/temp/creatives/${file.filename}`),
+      url: toRawFileUrl(file.path),
       document_type: 'creative'
     };
 
@@ -683,7 +695,7 @@ const uploadStandalonePaymentPlan = async (req, res, next) => {
       file_path: file.path.replace(/\\/g, '/'),
       file_size: file.size,
       mime_type: file.mimetype,
-      url: toFullUrl(`/uploads/projects/temp/payment_plans/${file.filename}`),
+      url: toRawFileUrl(file.path),
       document_type: 'payment_plan'
     };
 
@@ -709,7 +721,7 @@ const uploadStandaloneVideo = async (req, res, next) => {
       file_path: file.path.replace(/\\/g, '/'),
       file_size: file.size,
       mime_type: file.mimetype,
-      url: toFullUrl(`/uploads/projects/temp/videos/${file.filename}`),
+      url: toRawFileUrl(file.path),
       document_type: 'video'
     };
 
@@ -735,7 +747,7 @@ const uploadStandalonePhoto = async (req, res, next) => {
       file_path: file.path.replace(/\\/g, '/'),
       file_size: file.size,
       mime_type: file.mimetype,
-      url: toFullUrl(`/uploads/projects/temp/photos/${file.filename}`),
+      url: toRawFileUrl(file.path),
       document_type: 'photo'
     };
 
@@ -761,7 +773,7 @@ const uploadStandaloneDeveloperLogo = async (req, res, next) => {
       file_path: file.path.replace(/\\/g, '/'),
       file_size: file.size,
       mime_type: file.mimetype,
-      url: toFullUrl(`/uploads/projects/temp/developer_logo/${file.filename}`),
+      url: toRawFileUrl(file.path),
       document_type: 'developer_logo'
     };
 
