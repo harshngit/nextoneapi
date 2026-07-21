@@ -65,7 +65,7 @@ const getAllRevisits = async (req, res, next) => {
               sr.status, sr.transport_arranged, sr.reason, sr.notes, sr.created_at,
               sr.closing_person, sr.closing_manager,
               l.name AS lead_name, l.phone AS lead_phone,
-              p.name AS project_name, p.city AS project_city,
+              COALESCE(p.name, sr.project_name_text) AS project_name, p.city AS project_city,
               CONCAT(u.first_name,' ',u.last_name) AS assigned_to_name,
               rf.rating, rf.client_reaction, rf.next_step
        FROM site_revisits sr
@@ -126,14 +126,17 @@ const createRevisit = async (req, res, next) => {
 
     await client.query('BEGIN');
 
-    // 1. Create the re-visit
+    // 1. Create the re-visit — inherits project_id/project_name_text from the
+    // original visit as-is. The original visit may itself have a NULL
+    // project_id with a free-text project_name_text (unmatched project name),
+    // which is why project_id here is nullable too (migration 058).
     const result = await client.query(
       `INSERT INTO site_revisits
-         (original_visit_id, lead_id, project_id, visit_date, visit_time,
+         (original_visit_id, lead_id, project_id, project_name_text, visit_date, visit_time,
           assigned_to, status, transport_arranged, reason, notes, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,'scheduled',$7,$8,$9,$10)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'scheduled',$8,$9,$10,$11)
        RETURNING *`,
-      [original_visit_id, orig.lead_id, orig.project_id, visit_date, visit_time,
+      [original_visit_id, orig.lead_id, orig.project_id, orig.project_name_text, visit_date, visit_time,
        execId, transport_arranged || false, reason || null, notes || null, req.user.id]
     );
 
@@ -158,7 +161,7 @@ const createRevisit = async (req, res, next) => {
     setImmediate(async () => {
       try {
         const revisitId   = result.rows[0].id;
-        const projectName = orig.project_name || 'project';
+        const projectName = orig.project_name || orig.project_name_text || 'project';
 
         if (execId) {
           await createNotification(execId, {
@@ -209,7 +212,7 @@ const createRevisit = async (req, res, next) => {
         if (assigneeEmail || orig.lead_email) {
           await emailService.notifySiteVisitScheduled({
             lead:         { id: orig.lead_id, name: orig.lead_name, phone: orig.lead_phone, email: orig.lead_email },
-            project:      { id: orig.project_id, name: orig.project_name },
+            project:      { id: orig.project_id, name: orig.project_name || orig.project_name_text },
             visit:        { visit_date, visit_time },
             assignedTo:   assigneeName,
             scheduledBy:  scheduledByRow.rows[0]?.name || 'System',
@@ -228,7 +231,7 @@ const createRevisit = async (req, res, next) => {
         await whatsappService.sendRevisitConfirmation({
           leadName:    orig.lead_name,
           leadPhone:   orig.lead_phone,
-          projectName: orig.project_name || 'the project',
+          projectName: orig.project_name || orig.project_name_text || 'the project',
           visitDate:   visit_date,
           visitTime:   visit_time,
         });
@@ -253,7 +256,7 @@ const getRevisitById = async (req, res, next) => {
     const result = await pool.query(
       `SELECT sr.*,
               l.name AS lead_name, l.phone AS lead_phone, l.email AS lead_email,
-              p.name AS project_name, p.address AS project_address, p.city AS project_city,
+              COALESCE(p.name, sr.project_name_text) AS project_name, p.address AS project_address, p.city AS project_city,
               CONCAT(u.first_name,' ',u.last_name) AS assigned_to_name,
               rf.rating, rf.client_reaction, rf.interested_in, rf.next_step, rf.remarks AS feedback_remarks,
               sv.visit_date AS original_visit_date, sv.visit_time AS original_visit_time
@@ -354,7 +357,7 @@ const updateRevisitStatus = async (req, res, next) => {
 
     const existing = await pool.query(
       `SELECT sr.*, l.name AS lead_name, l.phone AS lead_phone,
-              p.name AS project_name,
+              COALESCE(p.name, sr.project_name_text) AS project_name,
               CONCAT(u.first_name,' ',u.last_name) AS assigned_name,
               u.email AS assigned_email
        FROM site_revisits sr
@@ -516,7 +519,7 @@ const submitRevisitFeedback = async (req, res, next) => {
     }
 
     const revisit = await pool.query(
-      `SELECT sr.*, l.name AS lead_name, p.name AS project_name
+      `SELECT sr.*, l.name AS lead_name, COALESCE(p.name, sr.project_name_text) AS project_name
        FROM site_revisits sr
        LEFT JOIN leads    l ON l.id = sr.lead_id
        LEFT JOIN projects p ON p.id = sr.project_id
