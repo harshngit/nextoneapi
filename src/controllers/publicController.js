@@ -33,12 +33,18 @@ const toPublicFileUrl = (absolutePath) => {
   return `${BACKEND_URL}${relative.startsWith("/") ? "" : "/"}${relative}`;
 };
 
+// Every website lead notification always reaches this inbox, regardless of
+// who's registered as admin in the system.
+const WEBSITE_INQUIRY_NOTIFY_EMAIL = "nextonerealty77@gmail.com";
+
 // ─── Helper — active admin/super_admin email addresses ────────────────────────
 const getAdminEmails = async () => {
   const result = await pool.query(
     "SELECT email FROM users WHERE role IN ('admin','super_admin') AND is_active = true"
   );
-  return result.rows.map(r => r.email);
+  const emails = new Set(result.rows.map(r => r.email));
+  emails.add(WEBSITE_INQUIRY_NOTIFY_EMAIL);
+  return [...emails];
 };
 
 const PUBLIC_PROJECT_FIELDS = `
