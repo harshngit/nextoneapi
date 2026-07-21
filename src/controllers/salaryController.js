@@ -32,16 +32,6 @@ const { ZipArchive } = require('archiver')
 const { PassThrough } = require('stream')
 
 const BACKEND_URL = (process.env.BACKEND_URL || '').replace(/\/+$/, '')
-// Builds the public URL from the real absolute disk path multer reports —
-// never a hardcoded folder guess, so it can't drift out of sync.
-const toRawFileUrl = (absolutePath) => {
-  if (!absolutePath) return absolutePath
-  const normalized = absolutePath.replace(/\\/g, '/')
-  const marker = '/uploads/'
-  const idx = normalized.indexOf(marker)
-  const relative = idx === -1 ? normalized : normalized.slice(idx)
-  return `${BACKEND_URL}${relative.startsWith('/') ? '' : '/'}${relative}`
-}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -235,27 +225,6 @@ const getAllEmployeeSalaries = async (req, res, next) => {
         salary_set: !!r.monthly_salary,
       })),
     })
-  } catch (err) { next(err) }
-}
-
-// ─── 2b. UPLOAD AUTHORIZED SIGNATURE (Admin) ─────────────────────────────────
-/**
- * POST /api/v1/salary/upload-signature
- * Single image upload (any field name). Returns a URL — pass that as
- * auth_signature when calling PATCH /api/v1/salary/slips/:id, if a specific
- * slip needs a signature other than the default (assets/templates/sign.png).
- */
-const uploadSalarySignature = async (req, res, next) => {
-  try {
-    const file = req.file || (req.files && req.files[0])
-    if (!file) return next(new AppError('No signature image uploaded', 400))
-
-    return sendSuccess(res, 'Signature uploaded successfully', {
-      file_name: file.originalname,
-      file_size: file.size,
-      mime_type: file.mimetype,
-      url: toRawFileUrl(file.path),
-    }, 201)
   } catch (err) { next(err) }
 }
 
@@ -668,7 +637,7 @@ const getSlipById = async (req, res, next) => {
 /**
  * PATCH /api/v1/salary/slips/:id
  * Body: any subset of { basic_salary, deductions,
- *                        payment_mode, pay_date, auth_signature, notes }
+ *                        payment_mode, pay_date, notes }
  *
  * For correcting a slip's numbers/details without re-running the whole
  * attendance-based calculation. present_days/absent_days/leave_days/
@@ -677,14 +646,15 @@ const getSlipById = async (req, res, next) => {
  * total_payout are recomputed from them. Incentive is always re-pulled
  * fresh from employee_incentives for this slip's user/month/year — not
  * something you can set here — so editing a slip also picks up any
- * incentive added/changed since it was generated.
+ * incentive added/changed since it was generated. The PDF signature is
+ * always assets/templates/sign.png — it's hardcoded, not settable via API.
  */
 const updateSalarySlip = async (req, res, next) => {
   try {
     const { id } = req.params
     const {
       basic_salary, deductions,
-      payment_mode, pay_date, auth_signature, notes,
+      payment_mode, pay_date, notes,
     } = req.body
 
     const existing = await pool.query('SELECT * FROM salary_slips WHERE id = $1', [id])
@@ -715,15 +685,14 @@ const updateSalarySlip = async (req, res, next) => {
          total_payout         = $7,
          payment_mode         = COALESCE($8, payment_mode),
          pay_date             = COALESCE($9, pay_date),
-         auth_signature_url   = COALESCE($10, auth_signature_url),
-         notes                = COALESCE($11, notes),
+         notes                = COALESCE($10, notes),
          updated_at           = NOW()
-       WHERE id = $12
+       WHERE id = $11
        RETURNING *`,
       [
         monthlySalary, perDaySalary, earnedSalary, deductionAmt, finalSalary,
         incentiveAmt, totalPayout, payment_mode || null, pay_date || null,
-        auth_signature || null, notes !== undefined ? notes : null, id,
+        notes !== undefined ? notes : null, id,
       ]
     )
 
@@ -1060,7 +1029,6 @@ const generateAllSalarySlips = async (req, res, next) => {
 module.exports = {
   setEmployeeSalary,
   getAllEmployeeSalaries,
-  uploadSalarySignature,
   generateSalarySlip,
   generateAllSalarySlips,
   getSalarySlips,

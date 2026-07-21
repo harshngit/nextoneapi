@@ -4,7 +4,6 @@ const ctrl    = require('../controllers/salaryController');
 const commissionCtrl = require('../controllers/commissionController');
 const advanceCtrl    = require('../controllers/advanceController');
 const { authenticate, authorize } = require('../middleware/auth');
-const { uploadSignature } = require('../middleware/uploadMiddleware');
 
 const ADMIN   = ['super_admin', 'admin'];
 const MANAGER = ['super_admin', 'admin', 'sales_manager'];
@@ -109,50 +108,6 @@ const MANAGER = ['super_admin', 'admin', 'sales_manager'];
  *         description: Employee not found
  */
 router.post('/set', authenticate, authorize(...ADMIN), ctrl.setEmployeeSalary);
-
-/**
- * @swagger
- * /api/v1/salary/upload-signature:
- *   post:
- *     summary: Upload an authorized-signature image (Admin/Super Admin)
- *     description: >
- *       Full URL: POST https://api.nextonerealty.in/api/v1/salary/upload-signature
- *
- *       Uploads a signature image (JPEG/PNG/WEBP). Returns a URL — pass it
- *       as `auth_signature` in PATCH /api/v1/salary/slips/{id} if a specific
- *       slip needs a different signature than the default
- *       (every PDF uses assets/templates/sign.png unless overridden).
- *     tags: [Salary]
- *     security:
- *       - BearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         multipart/form-data:
- *           schema:
- *             type: object
- *             properties:
- *               file:
- *                 type: string
- *                 format: binary
- *                 description: Signature image (accepts any field name)
- *     responses:
- *       201:
- *         description: Signature uploaded
- *         content:
- *           application/json:
- *             example:
- *               success: true
- *               message: "Signature uploaded successfully"
- *               data:
- *                 file_name: "signature.png"
- *                 file_size: 18234
- *                 mime_type: "image/png"
- *                 url: "https://api.nextonerealty.in/uploads/salary/signatures/1784600000000_signature.png"
- *       400:
- *         description: No file uploaded, or wrong file type
- */
-router.post('/upload-signature', authenticate, authorize(...ADMIN), uploadSignature, ctrl.uploadSalarySignature);
 
 /**
  * @swagger
@@ -606,6 +561,8 @@ router.get('/slips/:id', authenticate, ctrl.getSlipById);
  *       you send. Incentive is always re-pulled fresh from
  *       employee_incentives for this slip's user/month/year — not a
  *       request field — so editing also picks up any incentive change.
+ *       The PDF signature is always assets/templates/sign.png — hardcoded,
+ *       not settable here.
  *     tags: [Salary]
  *     security:
  *       - BearerAuth: []
@@ -625,7 +582,6 @@ router.get('/slips/:id', authenticate, ctrl.getSlipById);
  *               deductions:       { type: number }
  *               payment_mode:     { type: string }
  *               pay_date:         { type: string, format: date }
- *               auth_signature:   { type: string }
  *               notes:            { type: string }
  *           example:
  *             basic_salary: 32000
