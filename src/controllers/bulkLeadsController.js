@@ -40,7 +40,7 @@ const MAX_LEADS_PER_PHONE = 3;
  * Creates a very-hidden worksheet whose column A holds the dropdown values,
  * then attaches a list data-validation to the target range on the main sheet.
  */
-const addDropdown = (workbook, mainSheet, targetRange, sheetName, values, promptTitle, promptMsg) => {
+const addDropdown = (workbook, mainSheet, targetRange, sheetName, values, promptTitle, promptMsg, errorStyle = 'stop') => {
   const hidden = workbook.addWorksheet(sheetName);
   hidden.state = 'veryHidden';
   values.forEach((v, i) => { hidden.getCell(i + 1, 1).value = v; });
@@ -50,8 +50,11 @@ const addDropdown = (workbook, mainSheet, targetRange, sheetName, values, prompt
     allowBlank:       true,
     formulae:         [`${sheetName}!$A$1:$A$${values.length}`],
     showErrorMessage: true,
+    errorStyle,
     errorTitle:       'Invalid value',
-    error:            `Please select a value from the dropdown list.`,
+    error:            errorStyle === 'warning'
+      ? `This value isn't in the dropdown list — you can still type a custom value if needed.`
+      : `Please select a value from the dropdown list.`,
     showInputMessage: true,
     promptTitle:      promptTitle,
     prompt:           promptMsg,
@@ -186,10 +189,13 @@ const downloadLeadTemplate = async (req, res, next) => {
         'Source', 'Select the lead source from the list.');
     }
 
-    // Col G (7) — Project Name
+    // Col G (7) — Project Name. errorStyle 'warning' (not the default 'stop')
+    // so a name typed that isn't in the dropdown is still accepted — it's
+    // stored as free text on the lead if it doesn't match an existing project.
     if (projectList.length) {
       addDropdown(workbook, ws, 'G2:G1000', '_Projects', projectList,
-        'Project Name', 'Select a project from the list.');
+        'Project Name', 'Select a project from the list, or type a name if it is not listed.',
+        'warning');
     }
 
     // Col H (8) — Status
@@ -217,22 +223,24 @@ const downloadLeadTemplate = async (req, res, next) => {
       '',
       'REQUIRED FIELDS (marked with *):',
       '  • Name             (column A) — Lead full name',
-      '  • Phone Number     (column B) — 10-digit Indian mobile number',
-      '  • Budget           (column E) — Enter budget range, e.g. "60-80 Lakhs"',
-      '  • Location         (column F) — Area preference, e.g. "Andheri West"',
-      '  • Configuration    (column J) — Unit type from dropdown, e.g. "2BHK"',
+      '  • Phone Number     (column B) — any format accepted, including international numbers with a country code',
       '',
       'OPTIONAL FIELDS:',
-      '  • Alternate Phone  (column C) — 10-digit number',
-      '  • Source           (column D) — Select from dropdown (admin-configured)',
-      '  • Project Name     (column G) — Select from dropdown of active projects',
-      '  • Status           (column H) — Select from dropdown (defaults to "new" if blank)',
-      '  • Assign To        (column I) — Select team member from dropdown',
+      '  • Alternate Phone  (column C) — any format accepted, same as Phone Number',
+      '  • Source           (column D) — select from dropdown (admin-configured)',
+      '  • Budget           (column E) — free text, e.g. "60-80 Lakhs"',
+      '  • Location         (column F) — free text, e.g. "Andheri West"',
+      '  • Project Name     (column G) — select from the dropdown OR just type a name —',
+      '                        if it does not match an existing project, it is saved as-is on the lead',
+      '  • Status           (column H) — select from dropdown (defaults to "new" if blank)',
+      '  • Assign To        (column I) — select team member from dropdown',
+      '  • Configuration    (column J) — select from dropdown, e.g. "2BHK"',
       '',
       'DROPDOWN FIELDS:',
       '  Source, Project Name, Status, Assign To, and Configuration all have',
       '  live dropdowns pulled from the system at the time of template download.',
-      '  If your value is not in the dropdown, ask your admin to add it.',
+      '  Project Name additionally accepts free text if your value is not listed;',
+      '  the other dropdowns should have their value added by an admin first.',
       '',
       'ASSIGNMENT RULES:',
       '  • Assign To (col I): assigns that specific lead to that user',
@@ -240,10 +248,9 @@ const downloadLeadTemplate = async (req, res, next) => {
       '  • If neither is set, leads are created as unassigned',
       '',
       'VALIDATION RULES:',
-      '  • Phone: must be exactly 10 digits',
-      '  • Alternate Phone: must be 10 digits if provided',
+      '  • Only Name and Phone Number are required — rows missing either are skipped',
+      '  • Phone / Alternate Phone: no format restriction — international numbers are fine',
       '  • A phone number can be used on at most 3 leads — further rows with the same number are skipped',
-      '  • Name, Budget, Location and Configuration are required — rows missing them are skipped',
       '',
       'NOTE: Do not rename or reorder columns. Save as .xlsx before uploading.',
     ];
@@ -331,7 +338,6 @@ const bulkUploadLeads = async (req, res, next) => {
     const leads   = [];
     const errors  = [];
     const skipped = [];
-    const phoneRe = /^[0-9]{10}$/;
 
     // ── Parse rows ────────────────────────────────────────────────────────
     // Column mapping (1-indexed):
@@ -366,15 +372,9 @@ const bulkUploadLeads = async (req, res, next) => {
         return;
       }
 
-      if (!phoneRe.test(phone)) {
-        errors.push({ row: rowNum, error: 'Phone Number must be exactly 10 digits' });
-        return;
-      }
-
-      if (altPhone && !phoneRe.test(altPhone)) {
-        errors.push({ row: rowNum, error: 'Alternate Phone must be exactly 10 digits if provided' });
-        return;
-      }
+      // No format validation on phone/alternate phone — international numbers
+      // (country codes, varying lengths) are accepted as-is, same as the
+      // regular POST /api/v1/leads API.
 
       // Source: accept if in config or leave as-is (admin may have typed a valid one)
       const resolvedSource = source
@@ -384,10 +384,17 @@ const bulkUploadLeads = async (req, res, next) => {
       // Status: default to 'new' if not recognised
       if (!validStatuses.has(status)) status = 'new';
 
-      // Project
+      // Project — dropdown match wins; if the typed name doesn't match any
+      // existing project, keep it as free text rather than discarding it.
       let projectId = null;
+      let projectNameText = null;
       if (projectName) {
-        projectId = projectMap.get(projectName.toLowerCase().trim()) || null;
+        const matchedId = projectMap.get(projectName.toLowerCase().trim());
+        if (matchedId) {
+          projectId = matchedId;
+        } else {
+          projectNameText = projectName.trim();
+        }
       }
 
       // Per-row assign_to — match by full name
@@ -404,6 +411,7 @@ const bulkUploadLeads = async (req, res, next) => {
         budget,
         location_preference: location,
         project_id:      projectId,
+        project_name_text: projectNameText,
         status,
         configuration,
         rowAssignTo,
@@ -443,9 +451,9 @@ const bulkUploadLeads = async (req, res, next) => {
         const result = await client.query(
           `INSERT INTO leads
              (name, phone, alternate_phone_number, source, budget,
-              location_preference, project_id, status, configuration,
+              location_preference, project_id, project_name_text, status, configuration,
               assigned_to, created_by)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
            RETURNING *`,
           [
             lead.name,
@@ -455,6 +463,7 @@ const bulkUploadLeads = async (req, res, next) => {
             lead.budget,
             lead.location_preference,
             lead.project_id,
+            lead.project_name_text,
             lead.status,
             lead.configuration,
             finalAssignTo,

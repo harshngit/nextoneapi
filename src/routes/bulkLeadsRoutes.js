@@ -34,21 +34,25 @@ const ADMIN = ['super_admin', 'admin'];
  *       | Col | Header | Type | Required |
  *       |-----|--------|------|----------|
  *       | A | Name | Free text | ✅ Yes |
- *       | B | Phone Number | 10-digit number | ✅ Yes |
- *       | C | Alternate Phone | 10-digit number | No |
+ *       | B | Phone Number | Any format — international numbers OK | ✅ Yes |
+ *       | C | Alternate Phone | Any format — international numbers OK | No |
  *       | D | Source | **Dropdown** (from lead_sources config) | No |
  *       | E | Budget | Free text (e.g. "60-80 Lakhs") | No |
  *       | F | Location Preference | Free text (e.g. "Andheri West") | No |
- *       | G | Project Name | **Dropdown** (active projects) | No |
+ *       | G | Project Name | **Dropdown, or type a free-text name** (active projects) | No |
  *       | H | Status | **Dropdown** (from lead_statuses config) | No — defaults to "new" |
  *       | I | Assign To | **Dropdown** (non-super_admin users) | No |
  *       | J | Configuration | **Dropdown** (unique configs across all projects, e.g. 1BHK / 2BHK) | No |
  *
  *       All dropdown lists are fetched **live from the database** each time the template is
- *       downloaded, so they always reflect the latest admin configuration.
+ *       downloaded, so they always reflect the latest admin configuration. Project Name's
+ *       dropdown is a soft (warning-style) validation — typing a name that isn't listed is
+ *       still accepted and stored as free text on the lead (matches the regular lead APIs'
+ *       project_name_text fallback) instead of being silently dropped.
  *
  *       **Required fields for a row to be accepted on upload:**
- *       Name, Phone Number only — everything else is optional.
+ *       Name, Phone Number only — everything else is optional. Phone / Alternate Phone have
+ *       no format validation — international numbers are accepted as-is.
  *     tags: [Bulk Leads]
  *     security:
  *       - BearerAuth: []
@@ -78,10 +82,14 @@ router.get('/template', authenticate, downloadLeadTemplate);
  *
  *       **Validation:**
  *       - Rows missing any required field are rejected with an error entry
- *       - Phone and Alternate Phone must be exactly 10 digits
+ *       - Phone and Alternate Phone accept any format — no digit-count check,
+ *         international numbers are fine
  *       - A phone number can be used on at most 3 leads total (e.g. interested in
  *         multiple projects); rows that would exceed this are skipped, not errored
  *       - Status defaults to "new" if blank or unrecognised
+ *       - Project Name: matched against existing projects (case-insensitive);
+ *         if it doesn't match anything, the typed text is kept on the lead as
+ *         free text instead of being discarded
  *
  *       **Assignment priority:**
  *       1. `assign_to` UUID in the request body → all leads assigned to this user
