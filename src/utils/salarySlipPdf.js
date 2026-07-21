@@ -113,7 +113,7 @@ const renderSalarySlipPdf = (slip, outputStream) => {
   const signaturePath = urlToLocalPath(slip.auth_signature_url) || DEFAULT_SIGNATURE_PATH;
   if (signaturePath && fs.existsSync(signaturePath)) {
     try {
-      doc.image(signaturePath, 442, 5050, { fit: [900, 380], align: 'left' });
+      doc.image(signaturePath, 380, 4680, { fit: [780, 780], align: 'left' });
     } catch (e) {
       // Corrupt/unreadable signature file — skip it rather than fail the whole PDF.
     }
