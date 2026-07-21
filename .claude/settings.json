@@ -55,7 +55,14 @@
       "Bash(node -c src/utils/salarySlipPdf.js)",
       "Bash(mkdir -p \"/c/Users/Lenovo/AppData/Local/Temp/claude/d--Clients-nextone-backend/b4090147-63f4-4ee4-ab67-aff43a61fa57/scratchpad\")",
       "Bash(pdftoppm -v)",
-      "Read(//c/Users/Lenovo/AppData/Local/Temp/claude/d--Clients-nextone-backend/b4090147-63f4-4ee4-ab67-aff43a61fa57/scratchpad/**)"
+      "Read(//c/Users/Lenovo/AppData/Local/Temp/claude/d--Clients-nextone-backend/b4090147-63f4-4ee4-ab67-aff43a61fa57/scratchpad/**)",
+      "Bash(grep -n \"// ─── 3. GENERATE SALARY SLIP\" d:/Clients/nextone/backend/src/controllers/salaryController.js)",
+      "Bash(npm ls *)",
+      "Bash(node -e *)",
+      "Bash(git checkout *)",
+      "Bash(node -c src/routes/bulkLeadsRoutes.js)",
+      "Bash(node -c src/controllers/siteRevisitController.js)",
+      "Bash(node -c db/000_master_schema.sql)"
     ]
   }
 }
