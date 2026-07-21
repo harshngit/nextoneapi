@@ -242,7 +242,8 @@ const getAllEmployeeSalaries = async (req, res, next) => {
 /**
  * POST /api/v1/salary/upload-signature
  * Single image upload (any field name). Returns a URL — pass that as
- * auth_signature when calling POST /api/v1/salary/generate.
+ * auth_signature when calling PATCH /api/v1/salary/slips/:id, if a specific
+ * slip needs a signature other than the default (assets/templates/sign.png).
  */
 const uploadSalarySignature = async (req, res, next) => {
   try {
@@ -263,7 +264,7 @@ const uploadSalarySignature = async (req, res, next) => {
  * POST /api/v1/salary/generate
  * Body: {
  *   user_id, month, year, deductions?, notes?, working_days_override?,
- *   basic_salary?, payment_mode?, pay_date?, auth_signature?
+ *   basic_salary?, payment_mode?, pay_date?
  * }
  *
  * Calculates earned salary from attendance for the given month/year.
@@ -280,6 +281,9 @@ const uploadSalarySignature = async (req, res, next) => {
  * payment_mode?     — shown on the PDF slip. Defaults to "Bank Transfer".
  * pay_date?         — shown on the PDF slip. Defaults to the last day of
  *                     the given month.
+ * The PDF signature is always assets/templates/sign.png by default — it's
+ * not a request field here; use PATCH /slips/:id if a specific slip ever
+ * needs a different signature.
  */
 const generateSalarySlip = async (req, res, next) => {
   try {
@@ -291,7 +295,6 @@ const generateSalarySlip = async (req, res, next) => {
       basic_salary,
       payment_mode = 'Bank Transfer',
       pay_date,
-      auth_signature,
     } = req.body
 
     if (!user_id) return next(new AppError('user_id is required', 400))
@@ -373,14 +376,18 @@ const generateSalarySlip = async (req, res, next) => {
     const totalPayout   = parseFloat((finalSalary + incentiveAmt).toFixed(2))
     const finalPayDate  = pay_date || new Date(y, m, 0).toISOString().split('T')[0] // last day of month
 
-    // Upsert slip (overwrite if already generated for this month)
+    // Upsert slip (overwrite if already generated for this month).
+    // auth_signature_url is deliberately untouched here — it stays whatever
+    // it already was (null for a new row, falling back to the default
+    // assets/templates/sign.png at PDF-render time) unless someone sets a
+    // per-slip override via PATCH /slips/:id.
     const slip = await pool.query(
       `INSERT INTO salary_slips
          (user_id, month, year, monthly_salary, working_days, present_days,
           absent_days, leave_days, per_day_salary, earned_salary,
           deductions, final_salary, incentive_amount, total_payout,
-          payment_mode, pay_date, auth_signature_url, generated_by, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+          payment_mode, pay_date, generated_by, notes)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
        ON CONFLICT (user_id, month, year)
        DO UPDATE SET
          monthly_salary      = EXCLUDED.monthly_salary,
@@ -396,7 +403,6 @@ const generateSalarySlip = async (req, res, next) => {
          total_payout        = EXCLUDED.total_payout,
          payment_mode        = EXCLUDED.payment_mode,
          pay_date            = EXCLUDED.pay_date,
-         auth_signature_url  = EXCLUDED.auth_signature_url,
          generated_by        = EXCLUDED.generated_by,
          notes               = EXCLUDED.notes,
          updated_at          = NOW()
@@ -405,7 +411,7 @@ const generateSalarySlip = async (req, res, next) => {
         user_id, m, y, monthlySalary, workingDays, presentDays,
         absentDays, leaveDays, perDaySalary, earnedSalary,
         deductionAmt, finalSalary, incentiveAmt, totalPayout,
-        payment_mode, finalPayDate, auth_signature || null, req.user.id, notes || null,
+        payment_mode, finalPayDate, req.user.id, notes || null,
       ]
     )
 
@@ -903,7 +909,6 @@ const generateAllSalarySlips = async (req, res, next) => {
       deductions_map = {},
       payment_mode = 'Bank Transfer',
       pay_date,
-      auth_signature,
       working_days_override,
       notes,
     } = req.body
@@ -988,13 +993,16 @@ const generateAllSalarySlips = async (req, res, next) => {
         const incentiveAmt  = incentiveMap.get(emp.id) || 0
         const totalPayout   = parseFloat((finalSalary + incentiveAmt).toFixed(2))
 
+        // auth_signature_url is deliberately untouched — falls back to the
+        // default assets/templates/sign.png at PDF-render time unless a
+        // per-slip override was set later via PATCH /slips/:id.
         await pool.query(
           `INSERT INTO salary_slips
              (user_id, month, year, monthly_salary, working_days, present_days,
               absent_days, leave_days, per_day_salary, earned_salary,
               deductions, final_salary, incentive_amount, total_payout,
-              payment_mode, pay_date, auth_signature_url, generated_by, notes)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+              payment_mode, pay_date, generated_by, notes)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
            ON CONFLICT (user_id, month, year)
            DO UPDATE SET
              monthly_salary     = EXCLUDED.monthly_salary,
@@ -1010,7 +1018,6 @@ const generateAllSalarySlips = async (req, res, next) => {
              total_payout       = EXCLUDED.total_payout,
              payment_mode       = EXCLUDED.payment_mode,
              pay_date           = EXCLUDED.pay_date,
-             auth_signature_url = EXCLUDED.auth_signature_url,
              generated_by       = EXCLUDED.generated_by,
              notes              = EXCLUDED.notes,
              updated_at         = NOW()`,
@@ -1018,7 +1025,7 @@ const generateAllSalarySlips = async (req, res, next) => {
             emp.id, m, y, monthlySalary, workingDays, presentDays,
             absentDays, leaveDays, perDaySalary, earnedSalary,
             deductionAmt, finalSalary, incentiveAmt, totalPayout,
-            payment_mode, finalPayDate, auth_signature || null, req.user.id, notes || null,
+            payment_mode, finalPayDate, req.user.id, notes || null,
           ]
         )
 

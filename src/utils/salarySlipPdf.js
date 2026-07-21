@@ -22,6 +22,8 @@ const fs = require('fs');
 const PDFDocument = require('pdfkit');
 
 const TEMPLATE_PATH = path.join(__dirname, '..', '..', 'assets', 'templates', 'Salary Slip.png');
+// Used automatically whenever a slip has no auth_signature_url of its own.
+const DEFAULT_SIGNATURE_PATH = path.join(__dirname, '..', '..', 'assets', 'templates', 'sign.png');
 
 // Source PNG dimensions — the PDF page is built at this exact pixel size.
 const PAGE_WIDTH  = 4419;
@@ -76,10 +78,9 @@ const renderSalarySlipPdf = (slip, outputStream) => {
 
   const basicSalary = parseFloat(slip.monthly_salary) || 0;
   const incentive   = parseFloat(slip.incentive_amount) || 0;
+  // Total Earnings shown on the slip is always exactly Basic Salary + Incentives —
+  // deductions are tracked in the DB but not subtracted from this figure.
   const totalEarnings = basicSalary + incentive;
-  const netPay = slip.total_payout !== undefined && slip.total_payout !== null
-    ? parseFloat(slip.total_payout)
-    : totalEarnings - (parseFloat(slip.deductions) || 0);
 
   // ── Employee name — baked-in sample ("Rachel Akinwale"), needs erase ───────
   eraseZone(doc, { x: 430, y: 1385, w: 1900, h: 215 });
@@ -104,11 +105,12 @@ const renderSalarySlipPdf = (slip, outputStream) => {
   // ── Total Earnings (bottom, large bold — baked-in sample) ──────────────────
   // Width kept under ~3070 so it doesn't touch the "Thank You" panel's left edge.
   eraseZone(doc, { x: 1895, y: 5340, w: 1150, h: 260 });
-  writeText(doc, money(netPay), { x: 1918, y: 5400, w: 1100 }, { size: 130, bold: true });
+  writeText(doc, money(totalEarnings), { x: 1918, y: 5400, w: 1100 }, { size: 130, bold: true });
 
-  // ── Authorized signature (optional) — blank space above the
-  // "Santosh Kanojiya / Founder" line ─────────────────────────────────────────
-  const signaturePath = urlToLocalPath(slip.auth_signature_url);
+  // ── Authorized signature — blank space above the "Founder" line. Falls
+  // back to the default signature (assets/templates/sign.png) whenever the
+  // slip doesn't have its own auth_signature_url ─────────────────────────────
+  const signaturePath = urlToLocalPath(slip.auth_signature_url) || DEFAULT_SIGNATURE_PATH;
   if (signaturePath && fs.existsSync(signaturePath)) {
     try {
       doc.image(signaturePath, 442, 5050, { fit: [900, 380], align: 'left' });

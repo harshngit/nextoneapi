@@ -119,8 +119,9 @@ router.post('/set', authenticate, authorize(...ADMIN), ctrl.setEmployeeSalary);
  *       Full URL: POST https://api.nextonerealty.in/api/v1/salary/upload-signature
  *
  *       Uploads a signature image (JPEG/PNG/WEBP). Returns a URL — pass it
- *       as `auth_signature` in POST /api/v1/salary/generate to have it
- *       printed on that slip's PDF.
+ *       as `auth_signature` in PATCH /api/v1/salary/slips/{id} if a specific
+ *       slip needs a different signature than the default
+ *       (every PDF uses assets/templates/sign.png unless overridden).
  *     tags: [Salary]
  *     security:
  *       - BearerAuth: []
@@ -380,6 +381,10 @@ router.get('/user/:user_id', authenticate, authorize(...ADMIN), ctrl.getUserSala
  *       Incentive is NOT a request field — it's automatically the sum of
  *       every employee_incentives row already recorded for this
  *       user/month/year (add those via POST /api/v1/salary/incentive).
+ *       The PDF's "Total Earnings" is always Basic Salary + Incentives
+ *       (deductions are tracked but not subtracted from that figure), and
+ *       every PDF uses assets/templates/sign.png as the signature by
+ *       default — not a request field here either.
  *     tags: [Salary]
  *     security:
  *       - BearerAuth: []
@@ -405,9 +410,6 @@ router.get('/user/:user_id', authenticate, authorize(...ADMIN), ctrl.getUserSala
  *                 type: string
  *                 format: date
  *                 description: Optional — defaults to the last day of the given month
- *               auth_signature:
- *                 type: string
- *                 description: Optional — URL returned by POST /api/v1/salary/upload-signature, printed on the PDF
  *               notes:
  *                 type: string
  *               deductions:
@@ -425,7 +427,6 @@ router.get('/user/:user_id', authenticate, authorize(...ADMIN), ctrl.getUserSala
  *             year: 2026
  *             basic_salary: 30000
  *             pay_date: "2026-06-30"
- *             auth_signature: "https://api.nextonerealty.in/uploads/salary/signatures/1784600000000_signature.png"
  *             notes: "June 2026 salary"
  *     responses:
  *       201:
@@ -458,7 +459,9 @@ router.post('/generate', authenticate, authorize(...ADMIN), ctrl.generateSalaryS
  *       Bulk generates salary slips for all employees who have a salary set.
  *       Existing slips for the month are overwritten. Each employee's
  *       incentive is automatically the sum of their employee_incentives
- *       rows for this month/year — not a request field.
+ *       rows for this month/year — not a request field. Every PDF's "Total
+ *       Earnings" is Basic Salary + Incentives, and the signature is
+ *       assets/templates/sign.png by default (not a request field here).
  *     tags: [Salary]
  *     security:
  *       - BearerAuth: []
@@ -481,9 +484,6 @@ router.post('/generate', authenticate, authorize(...ADMIN), ctrl.generateSalaryS
  *                 type: string
  *                 format: date
  *                 description: Optional — applied to every slip in this batch. Defaults to the last day of the month
- *               auth_signature:
- *                 type: string
- *                 description: Optional — URL from POST /api/v1/salary/upload-signature, applied to every slip in this batch
  *               notes:
  *                 type: string
  *               deductions_map:
@@ -496,7 +496,6 @@ router.post('/generate', authenticate, authorize(...ADMIN), ctrl.generateSalaryS
  *             month: 6
  *             year: 2026
  *             pay_date: "2026-06-30"
- *             auth_signature: "https://api.nextonerealty.in/uploads/salary/signatures/1784600000000_signature.png"
  *             notes: "June 2026 salary — bulk run"
  *     responses:
  *       201:
