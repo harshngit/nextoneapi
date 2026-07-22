@@ -10,7 +10,6 @@
 const { pool }        = require('../config/db');
 const { sendSuccess, paginate } = require('../utils/response');
 const AppError        = require('../utils/AppError');
-const emailService    = require('../utils/emailService');
 const whatsappService = require('../utils/whatsappService');
 const { createNotification, notifyAdmins } = require('./notificationController');
 const { getTeamIds, ADMIN_ROLES, LEAF_ROLES } = require('../utils/teamUtils');
@@ -199,29 +198,8 @@ const createRevisit = async (req, res, next) => {
       }
     });
 
-    // ── Email notification ────────────────────────────────────────────────────
-    setImmediate(async () => {
-      try {
-        const scheduledByRow = await pool.query(
-          `SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1`, [req.user.id]
-        );
-        const adminEmailsRes = await pool.query(
-          "SELECT email FROM users WHERE role IN ('admin','super_admin') AND is_active = true"
-        );
-        const adminEmails = adminEmailsRes.rows.map(r => r.email);
-        if (assigneeEmail || orig.lead_email) {
-          await emailService.notifySiteVisitScheduled({
-            lead:         { id: orig.lead_id, name: orig.lead_name, phone: orig.lead_phone, email: orig.lead_email },
-            project:      { id: orig.project_id, name: orig.project_name || orig.project_name_text },
-            visit:        { visit_date, visit_time },
-            assignedTo:   assigneeName,
-            scheduledBy:  scheduledByRow.rows[0]?.name || 'System',
-            assigneeEmail,
-            adminEmails,
-          });
-        }
-      } catch (e) { console.error('[Email] createRevisit notification failed:', e.message); }
-    });
+    // NOTE: the "site visit scheduled" email (notifySiteVisitScheduled) was
+    // removed on purpose.
 
     // ── 📱 WhatsApp — re-visit confirmation to the client ─────────────────────
     setImmediate(async () => {
@@ -452,24 +430,8 @@ const updateRevisitStatus = async (req, res, next) => {
       }
     });
 
-    // ── Email ──────────────────────────────────────────────────────────────────
-    setImmediate(async () => {
-      try {
-        const updatedByRow = await pool.query(
-          `SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1`, [req.user.id]
-        );
-        await emailService.notifySiteVisitStatusChanged({
-          lead:          { id: rv.lead_id, name: rv.lead_name, phone: rv.lead_phone },
-          project:       { name: rv.project_name },
-          visit:         { visit_date: rv.visit_date, visit_time: rv.visit_time },
-          oldStatus, newStatus: status,
-          updatedBy:     updatedByRow.rows[0]?.name || 'System',
-          note:          note || null,
-          assigneeEmail: rv.assigned_email,
-          adminEmails:   [],
-        });
-      } catch (e) { console.error('[Email] updateRevisitStatus failed:', e.message); }
-    });
+    // NOTE: the "site visit status changed" email (notifySiteVisitStatusChanged)
+    // was removed on purpose.
 
     return sendSuccess(res, `Re-visit marked as ${status}`);
   } catch (err) {

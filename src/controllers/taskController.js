@@ -146,33 +146,8 @@ const createTask = async (req, res, next) => {
       metadata:       { lead_name: lead.rows[0]?.name, priority: task.priority },
     });
 
-    // ── ✉ Email after successful DB insert ───────────────────────────────────
-    setImmediate(async () => {
-      try {
-        // Fetch assignee details
-        const assigneeRow = await pool.query(
-          "SELECT email, CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1",
-          [execId]
-        );
-        if (!assigneeRow.rows.length || !assigneeRow.rows[0].email) return;
-
-        const createdByRow = await pool.query(
-          "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1",
-          [req.user.id]
-        );
-
-        await emailService.notifyFollowUpCreated({
-          task:          { ...task },
-          lead:          { ...lead.rows[0] },
-          assigneeName:  assigneeRow.rows[0].name,
-          createdBy:     createdByRow.rows[0]?.name || "System",
-          assigneeEmail: assigneeRow.rows[0].email,
-        });
-      } catch (emailErr) {
-        console.error("[Email] createTask notification failed:", emailErr.message);
-      }
-    });
-    // ─────────────────────────────────────────────────────────────────────────
+    // NOTE: the "follow-up created" email (notifyFollowUpCreated) was removed
+    // on purpose.
 
     // ── 📱 WhatsApp — client-facing "we'll be in touch" message ──────────────
     // Distinct from the internal staff email above — this goes to the LEAD's

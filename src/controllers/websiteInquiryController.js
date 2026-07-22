@@ -350,24 +350,8 @@ const convertInquiry = async (req, res, next) => {
 
     await client.query("COMMIT");
 
-    // Fire-and-forget: same admin email + in-app/push notification pattern
-    // used by the regular "create lead" flow, plus a welcome email to the
-    // client if they gave one.
-    getAdminEmails()
-      .then(async adminEmails => {
-        const converter = await pool.query(
-          "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1",
-          [req.user.id]
-        );
-        return emailService.notifyLeadCreated({
-          lead,
-          assignedTo: null,
-          createdBy: converter.rows[0]?.name || "Staff",
-          assigneeEmail: null,
-          adminEmails,
-        });
-      })
-      .catch(err => console.error("[Email] inquiry convert notify failed:", err.message));
+    // NOTE: the "new lead created" email (notifyLeadCreated) was removed on
+    // purpose — the in-app/push notification below still fires.
 
     notifyAdmins({
       type: "lead_new",

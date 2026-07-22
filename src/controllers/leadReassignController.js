@@ -401,16 +401,8 @@ const bulkReassignLeads = async (req, res, next) => {
           metadata:       { count, assigned_to: newAssignee.id, reason: reason || null },
         });
 
-        // Email (existing)
-        if (newAssignee.email) {
-          await emailService.notifyBulkLeadsAssigned({
-            assigneeName:  newAssigneeName,
-            assigneeEmail: newAssignee.email,
-            leadsCount:    count,
-            performedBy:   performerName,
-            reason:        reason || null,
-          });
-        }
+        // NOTE: the "bulk leads assigned" email (notifyBulkLeadsAssigned) was
+        // removed on purpose — the in-app/push notifications above still fire.
       } catch (err) {
         console.error('[Notification/Email] Bulk reassignment failed:', err.message);
       }

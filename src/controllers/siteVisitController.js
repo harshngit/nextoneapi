@@ -9,7 +9,6 @@
 const { pool }        = require('../config/db');
 const { sendSuccess, paginate } = require('../utils/response');
 const AppError        = require('../utils/AppError');
-const emailService    = require('../utils/emailService');
 const { createNotification, notifyAdmins } = require('./notificationController');
 const { getTeamIds, ADMIN_ROLES, LEAF_ROLES } = require('../utils/teamUtils');
 const { resolveProjectId, resolveProjectName } = require('../utils/projectResolver');
@@ -186,29 +185,8 @@ const createSiteVisit = async (req, res, next) => {
       }
     });
 
-    // ── Email notification ────────────────────────────────────────────────────
-    setImmediate(async () => {
-      try {
-        const scheduledByRow = await pool.query(
-          `SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1`, [req.user.id]
-        );
-        
-        const adminEmailsRes = await pool.query(
-          "SELECT email FROM users WHERE role IN ('admin','super_admin') AND is_active = true"
-        );
-        const adminEmails = adminEmailsRes.rows.map(r => r.email);
-
-        await emailService.notifySiteVisitScheduled({
-          lead:         { id: lead_id, name: lead.name, phone: lead.phone, email: lead.email },
-          project:      { id: resolvedProjectId, name: projectDisplayName || 'project' },
-          visit:        { visit_date, visit_time },
-          assignedTo:   lead.assigned_name,
-          scheduledBy:  scheduledByRow.rows[0]?.name || 'System',
-          assigneeEmail: lead.assigned_email,
-          adminEmails,
-        });
-      } catch (e) { console.error('[Email] createSiteVisit notification failed:', e.message); }
-    });
+    // NOTE: the "site visit scheduled" email (notifySiteVisitScheduled) was
+    // removed on purpose.
 
     return sendSuccess(res, 'Site visit scheduled successfully', result.rows[0], 201);
   } catch (err) {

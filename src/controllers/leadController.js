@@ -63,22 +63,6 @@ const logActivity = async (client, leadId, type, note, performedBy) => {
   );
 };
 
-// ─── Helper — fetch assignee + admin emails ───────────────────────────────────
-const getEmailContext = async (assignedToId) => {
-  const emailData = { assigneeEmail: null, adminEmails: [] };
-  if (assignedToId) {
-    const assignee = await pool.query(
-      "SELECT email FROM users WHERE id = $1 AND is_active = true", [assignedToId]
-    );
-    if (assignee.rows.length) emailData.assigneeEmail = assignee.rows[0].email;
-  }
-  const admins = await pool.query(
-    "SELECT email FROM users WHERE role IN ('admin','super_admin') AND is_active = true"
-  );
-  emailData.adminEmails = admins.rows.map(r => r.email);
-  return emailData;
-};
-
 // ─── Helper — fetch full lead (explicit aliases, NO column collision) ─────────
 //
 // ROOT BUG FIX: Using `l.*` with `u.email AS assigned_email` caused the pg
@@ -423,22 +407,10 @@ const createLead = async (req, res, next) => {
         const fullLead = await fetchLeadWithProject(lead.id);
         if (!fullLead) return;  // null guard
 
-        const { adminEmails } = await getEmailContext(null);
-        const creatorRow = await pool.query(
-          "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1",
-          [req.user.id]
-        );
+        // NOTE: the "new lead created" welcome/admin email (notifyLeadCreated)
+        // was removed on purpose — only the assignment email below still fires.
 
-        // → Internal staff + → Client welcome email
-        await emailService.notifyLeadCreated({
-          lead:          fullLead,           // fullLead.email = client email ✅
-          assignedTo:    fullLead.assigned_name  || null,
-          createdBy:     creatorRow.rows[0]?.name || "System",
-          assigneeEmail: fullLead.assigned_email || null,
-          adminEmails,
-        });
-
-        // Dedicated assignment email to the exec (separate from the welcome email)
+        // Dedicated assignment email to the exec
         if (assigned_to && fullLead.assigned_email) {
           const assignerRow = await pool.query(
             "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1",
@@ -889,30 +861,8 @@ const updateLeadStatus = async (req, res, next) => {
       }
     });
 
-    // ── ✉ Email ───────────────────────────────────────────────────────────────
-    setImmediate(async () => {
-      try {
-        const fullLead = await fetchLeadWithProject(id);
-        if (!fullLead) return;
-        const { adminEmails } = await getEmailContext(null);
-        const changedByRow = await pool.query(
-          "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1", [callerId]
-        );
-        await emailService.notifyLeadStatusChanged({
-          lead:          fullLead,
-          oldStatus,
-          newStatus:     status,
-          changedBy:     changedByRow.rows[0]?.name || "System",
-          note:          note || null,
-          assignedTo:    fullLead.assigned_name  || null,
-          assigneeEmail: fullLead.assigned_email || null,
-          adminEmails,
-        });
-      } catch (emailErr) {
-        console.error("[Email] updateLeadStatus notification failed:", emailErr.message);
-      }
-    });
-    // ─────────────────────────────────────────────────────────────────────────
+    // NOTE: the "lead status changed" email (notifyLeadStatusChanged) was
+    // removed on purpose.
 
     // ── 📱 WhatsApp — only for the two client-meaningful statuses below.
     // 'site_visit_scheduled' and 'booked' are deliberately NOT covered here —
@@ -1211,30 +1161,8 @@ const convertLead = async (req, res, next) => {
       }
     });
 
-    // ── ✉ Email ───────────────────────────────────────────────────────────────
-    setImmediate(async () => {
-      try {
-        const fullLead = await fetchLeadWithProject(id);
-        if (!fullLead) return;
-        const { adminEmails } = await getEmailContext(null);
-        const convertedByRow  = await pool.query(
-          "SELECT CONCAT(first_name,' ',last_name) AS name FROM users WHERE id = $1", [callerId]
-        );
-        await emailService.notifyLeadStatusChanged({
-          lead:          fullLead,
-          oldStatus,
-          newStatus:     "booked",
-          changedBy:     convertedByRow.rows[0]?.name || "System",
-          note:          note || "Lead converted to booking",
-          assignedTo:    fullLead.assigned_name  || null,
-          assigneeEmail: fullLead.assigned_email || null,
-          adminEmails,
-        });
-      } catch (emailErr) {
-        console.error("[Email] convertLead notification failed:", emailErr.message);
-      }
-    });
-    // ─────────────────────────────────────────────────────────────────────────
+    // NOTE: the "lead status changed" email (notifyLeadStatusChanged) was
+    // removed on purpose.
 
     return sendSuccess(res, "Lead successfully converted to booking", {
       id,

@@ -10,7 +10,6 @@ const { pool } = require("../config/db");
 const { sendSuccess, paginate } = require("../utils/response");
 const AppError = require("../utils/AppError");
 const { notifyAdmins } = require("./notificationController");
-const emailService = require("../utils/emailService");
 
 const BACKEND_URL = (process.env.BACKEND_URL || "").replace(/\/+$/, "");
 const toFullUrl = (relativePath) => {
@@ -31,20 +30,6 @@ const toPublicFileUrl = (absolutePath) => {
   const idx = normalized.indexOf(marker);
   const relative = idx === -1 ? normalized : normalized.slice(idx);
   return `${BACKEND_URL}${relative.startsWith("/") ? "" : "/"}${relative}`;
-};
-
-// Every website lead notification always reaches this inbox, regardless of
-// who's registered as admin in the system.
-const WEBSITE_INQUIRY_NOTIFY_EMAIL = "nextonerealty77@gmail.com";
-
-// ─── Helper — active admin/super_admin email addresses ────────────────────────
-const getAdminEmails = async () => {
-  const result = await pool.query(
-    "SELECT email FROM users WHERE role IN ('admin','super_admin') AND is_active = true"
-  );
-  const emails = new Set(result.rows.map(r => r.email));
-  emails.add(WEBSITE_INQUIRY_NOTIFY_EMAIL);
-  return [...emails];
 };
 
 const PUBLIC_PROJECT_FIELDS = `
@@ -176,15 +161,8 @@ const submitProjectInquiry = async (req, res, next) => {
       metadata: { lead_id: lead.id, project_id: id, message: message || null },
     }).catch(() => {});
 
-    getAdminEmails()
-      .then(adminEmails => emailService.notifyLeadCreated({
-        lead,
-        assignedTo: null,
-        createdBy: `Website — ${project.rows[0].name}`,
-        assigneeEmail: null,
-        adminEmails,
-      }))
-      .catch(err => console.error("[Email] website lead notify failed:", err.message));
+    // NOTE: the "new lead created" email (notifyLeadCreated) was removed on
+    // purpose — the in-app/push notification above still fires.
 
     return sendSuccess(res, "Thank you for your interest — our team will contact you shortly", lead, 201);
   } catch (err) {
