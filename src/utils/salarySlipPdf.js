@@ -122,4 +122,33 @@ const renderSalarySlipPdf = (slip, outputStream) => {
   doc.end();
 };
 
-module.exports = { renderSalarySlipPdf, TEMPLATE_PATH };
+// Directory salary slip PDFs are persisted to — served statically via
+// app.use('/uploads', ...) in index.js, so the resulting file needs no auth
+// header to download (unlike the on-demand GET /api/v1/salary/slips/:id/pdf route).
+const SLIPS_DIR = path.join(process.cwd(), 'uploads', 'salary-slips');
+
+/**
+ * Renders the slip PDF straight to uploads/salary-slips/{slip.id}.pdf,
+ * overwriting any previous version. Resolves once the file is fully written.
+ *
+ * @param {object} slip - a row from salary_slips, plus employee_name/role
+ * @returns {Promise<string>} the relative path (from process.cwd()), e.g. "uploads/salary-slips/<id>.pdf"
+ */
+const writeSalarySlipPdfToFile = (slip) => {
+  fs.mkdirSync(SLIPS_DIR, { recursive: true });
+  const filePath = path.join(SLIPS_DIR, `${slip.id}.pdf`);
+  const relativePath = `uploads/salary-slips/${slip.id}.pdf`;
+
+  return new Promise((resolve, reject) => {
+    const writeStream = fs.createWriteStream(filePath);
+    writeStream.on('finish', () => resolve(relativePath));
+    writeStream.on('error', reject);
+    try {
+      renderSalarySlipPdf(slip, writeStream);
+    } catch (err) {
+      reject(err);
+    }
+  });
+};
+
+module.exports = { renderSalarySlipPdf, writeSalarySlipPdfToFile, TEMPLATE_PATH };

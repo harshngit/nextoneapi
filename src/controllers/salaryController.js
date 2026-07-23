@@ -23,11 +23,12 @@
  *   absent / leave (other)                    = 0
  */
 
+const path          = require('path')
 const { pool }      = require('../config/db')
 const { sendSuccess } = require('../utils/response')
 const AppError      = require('../utils/AppError')
 const { createNotification, notifyAdmins } = require('./notificationController')
-const { renderSalarySlipPdf } = require('../utils/salarySlipPdf')
+const { renderSalarySlipPdf, writeSalarySlipPdfToFile } = require('../utils/salarySlipPdf')
 const { ZipArchive } = require('archiver')
 const { PassThrough } = require('stream')
 
@@ -384,6 +385,12 @@ const generateSalarySlip = async (req, res, next) => {
       ]
     )
 
+    await writeSalarySlipPdfToFile({
+      ...slip.rows[0],
+      employee_name: userChk.rows[0].full_name,
+      role:          userChk.rows[0].role,
+    })
+
     const monthName = new Date(y, m - 1).toLocaleString('en-IN', { month: 'long' })
 
     // ── Push + in-app notifications ───────────────────────────────────────────
@@ -493,7 +500,7 @@ const getSalarySlips = async (req, res, next) => {
         leave_days:       parseFloat(r.leave_days),
         incentive_amount: r.incentive_amount !== null ? parseFloat(r.incentive_amount) : 0,
         total_payout:     r.total_payout !== null ? parseFloat(r.total_payout) : null,
-        pdf_url:          `${BACKEND_URL}/api/v1/salary/slips/${r.id}/pdf`,
+        pdf_url:          `${BACKEND_URL}/uploads/salary-slips/${r.id}.pdf`,
       })),
       pagination: {
         total, page: parseInt(page), per_page: parseInt(per_page),
@@ -578,7 +585,7 @@ const getMySalary = async (req, res, next) => {
         pay_date:         r.pay_date,
         notes:            r.notes,
         generated_at:     r.created_at,
-        pdf_url:          `${BACKEND_URL}/api/v1/salary/slips/${r.id}/pdf`,
+        pdf_url:          `${BACKEND_URL}/uploads/salary-slips/${r.id}.pdf`,
       })),
     })
   } catch (err) { next(err) }
@@ -628,7 +635,7 @@ const getSlipById = async (req, res, next) => {
       leave_days:       parseFloat(slip.leave_days),
       incentive_amount: slip.incentive_amount !== null ? parseFloat(slip.incentive_amount) : 0,
       total_payout:     slip.total_payout !== null ? parseFloat(slip.total_payout) : null,
-      pdf_url:          `${BACKEND_URL}/api/v1/salary/slips/${slip.id}/pdf`,
+      pdf_url:          `${BACKEND_URL}/uploads/salary-slips/${slip.id}.pdf`,
     })
   } catch (err) { next(err) }
 }
@@ -697,6 +704,17 @@ const updateSalarySlip = async (req, res, next) => {
     )
 
     const updated = result.rows[0]
+
+    const userChk = await pool.query(
+      `SELECT CONCAT(first_name,' ',last_name) AS full_name, role FROM users WHERE id = $1`,
+      [updated.user_id]
+    )
+    await writeSalarySlipPdfToFile({
+      ...updated,
+      employee_name: userChk.rows[0].full_name,
+      role:          userChk.rows[0].role,
+    })
+
     return sendSuccess(res, 'Salary slip updated successfully', {
       ...updated,
       monthly_salary:   parseFloat(updated.monthly_salary),
@@ -706,7 +724,7 @@ const updateSalarySlip = async (req, res, next) => {
       final_salary:     parseFloat(updated.final_salary),
       incentive_amount: parseFloat(updated.incentive_amount || 0),
       total_payout:     parseFloat(updated.total_payout),
-      pdf_url:          `${BACKEND_URL}/api/v1/salary/slips/${updated.id}/pdf`,
+      pdf_url:          `${BACKEND_URL}/uploads/salary-slips/${updated.id}.pdf`,
     })
   } catch (err) { next(err) }
 }
@@ -741,6 +759,32 @@ const downloadSalarySlipPdf = async (req, res, next) => {
     res.setHeader('Content-Disposition', `attachment; filename="${slip.employee_name.replace(/\s+/g, '_')}_${monthName}_${slip.year}.pdf"`)
 
     renderSalarySlipPdf(slip, res)
+  } catch (err) { next(err) }
+}
+
+// ─── 6a3. STATIC-FILE FALLBACK FOR SLIPS GENERATED BEFORE THE PDF-CACHING CHANGE ──
+/**
+ * GET /uploads/salary-slips/:id.pdf (mounted in index.js, no auth — matches
+ * every other file under /uploads, which are all served unauthenticated by
+ * express.static). Only reached when express.static didn't find the file on
+ * disk, i.e. a slip generated/updated before writeSalarySlipPdfToFile existed.
+ * Regenerates it once and writes it to disk so future requests hit the static
+ * file directly.
+ */
+const serveSalarySlipPdfFallback = async (req, res, next) => {
+  try {
+    const { id } = req.params
+    const result = await pool.query(
+      `SELECT ss.*, CONCAT(u.first_name,' ',u.last_name) AS employee_name, u.role AS role
+       FROM salary_slips ss
+       JOIN users u ON u.id = ss.user_id
+       WHERE ss.id = $1`,
+      [id]
+    )
+    if (!result.rows.length) return next(new AppError('Salary slip not found', 404))
+
+    const filePath = await writeSalarySlipPdfToFile(result.rows[0])
+    res.sendFile(path.join(process.cwd(), filePath))
   } catch (err) { next(err) }
 }
 
@@ -1037,6 +1081,7 @@ module.exports = {
   getSlipById,
   updateSalarySlip,
   downloadSalarySlipPdf,
+  serveSalarySlipPdfFallback,
   bulkDownloadSalarySlipsPdf,
   getSalaryHistory,
   getMySalaryHistory,

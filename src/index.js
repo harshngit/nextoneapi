@@ -30,6 +30,11 @@ app.use(express.urlencoded({ limit: '50mb', extended: true }));
 // ─── Static — serve uploaded files ───────────────────────────
 app.use("/uploads", express.static(path.join(__dirname, "../uploads")));
 
+// Fallback for salary slip PDFs generated before this static file was cached
+// on disk — regenerates once on-demand, then future requests hit the static
+// file above directly. No auth, same as every other file under /uploads.
+app.get("/uploads/salary-slips/:id.pdf", require("./controllers/salaryController").serveSalarySlipPdfFallback);
+
 // ─── Swagger Docs ─────────────────────────────────────────────
 app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
