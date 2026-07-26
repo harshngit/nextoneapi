@@ -245,6 +245,22 @@ const checkIn = async (req, res, next) => {
       ? `Checked in late — ${lateMinutes} minute${lateMinutes !== 1 ? 's' : ''} after 10:30 AM`
       : 'Checked in successfully'
 
+    const checkInTimeStr = checkInTime.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
+    setImmediate(async () => {
+      try {
+        await notifyAdmins({
+          type:           'attendance_checkin',
+          title:          'Employee Checked In',
+          message:        `${userMeta.full_name} checked in at ${checkInTimeStr}${status === 'late' ? ` (late by ${lateMinutes} min)` : ''}`,
+          reference_id:   record.id,
+          reference_type: 'attendance',
+          metadata:       { user_id: userId, date: today, status, late_by_minutes: lateMinutes || null },
+        })
+      } catch (notifErr) {
+        console.error('[Notification] checkIn failed:', notifErr.message)
+      }
+    })
+
     return sendSuccess(res, checkInMsg, { attendance: addPhotoUrls(record), user: userMeta }, 201)
   } catch (err) { next(err) }
 }
@@ -291,6 +307,22 @@ const checkOut = async (req, res, next) => {
        WHERE user_id=$10 AND date=$11 RETURNING *`,
       [checkOutTime, workingHours, photo, latitude||null, longitude||null, address||null, ip, device||null, notes||null, userId, today]
     )
+
+    const checkOutTimeStr = checkOutTime.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
+    setImmediate(async () => {
+      try {
+        await notifyAdmins({
+          type:           'attendance_checkout',
+          title:          'Employee Checked Out',
+          message:        `${userMeta.full_name} checked out at ${checkOutTimeStr} (worked ${workingHours}h)`,
+          reference_id:   r.rows[0].id,
+          reference_type: 'attendance',
+          metadata:       { user_id: userId, date: today, working_hours: workingHours },
+        })
+      } catch (notifErr) {
+        console.error('[Notification] checkOut failed:', notifErr.message)
+      }
+    })
 
     return sendSuccess(res, 'Checked out successfully', {
       attendance:    addPhotoUrls(r.rows[0]),
