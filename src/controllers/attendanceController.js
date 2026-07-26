@@ -6,6 +6,7 @@ const { sendSuccess, sendError, paginate } = require('../utils/response')
 const { getTeamIds, ADMIN_ROLES, LEAF_ROLES } = require('../utils/teamUtils')
 const AppError = require('../utils/AppError')
 const { createNotification, notifyAdmins } = require('./notificationController')
+const { getISTMinutes, isWithinAccessWindow, formatISTTime } = require('../utils/istAccessWindow')
 
 // ─── Salary recalculation helper ──────────────────────────────────────────────
 // Counts Mon–Fri days in a given month/year (same logic as salaryController)
@@ -40,34 +41,6 @@ const countWorkingDays = (year, month) => {
  */
 
 const CHECKIN_LATE_CUTOFF = '10:30' // after this IST → late
-
-// Convert any Date to IST hours+minutes regardless of server timezone
-const getISTMinutes = (date) => {
-  const d = new Date(date)
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: 'Asia/Kolkata',
-    hour: 'numeric', minute: 'numeric', hour12: false,
-  }).formatToParts(d)
-  const h = parseInt(parts.find(p => p.type === 'hour').value)
-  const m = parseInt(parts.find(p => p.type === 'minute').value)
-  return h * 60 + m
-}
-
-// Check-in/check-out is only allowed within this IST window, every day
-const ATTENDANCE_WINDOW_START = '09:00' // IST
-const ATTENDANCE_WINDOW_END   = '21:00' // IST
-
-const isWithinAttendanceWindow = (date) => {
-  const totalMinutes = getISTMinutes(date)
-  const [startH, startM] = ATTENDANCE_WINDOW_START.split(':').map(Number)
-  const [endH, endM]     = ATTENDANCE_WINDOW_END.split(':').map(Number)
-  return totalMinutes >= (startH * 60 + startM) && totalMinutes <= (endH * 60 + endM)
-}
-
-// e.g. "8:52 PM" — always IST regardless of server timezone
-const formatISTTime = (date) => new Intl.DateTimeFormat('en-IN', {
-  timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true,
-}).format(date)
 
 const resolveStatus = (checkInTime) => {
   try {
@@ -209,9 +182,9 @@ const checkIn = async (req, res, next) => {
     const userId = req.user.id
     const today = new Date().toISOString().split('T')[0]
 
-    if (!isWithinAttendanceWindow(new Date())) {
+    if (!isWithinAccessWindow()) {
       if (req.file) fs.unlink(req.file.path, ()=>{})
-      return next(new AppError(`Check-in is only allowed between 9:00 AM and 9:00 PM IST — current time is ${formatISTTime(new Date())} IST`, 400))
+      return next(new AppError(`Check-in is only allowed between 9:00 AM and 9:00 PM IST — current time is ${formatISTTime()} IST`, 400))
     }
 
     const existing = await pool.query(
@@ -292,9 +265,9 @@ const checkOut = async (req, res, next) => {
     const userId = req.user.id
     const today = new Date().toISOString().split('T')[0]
 
-    if (!isWithinAttendanceWindow(new Date())) {
+    if (!isWithinAccessWindow()) {
       if (req.file) fs.unlink(req.file.path, ()=>{})
-      return next(new AppError(`Check-out is only allowed between 9:00 AM and 9:00 PM IST — current time is ${formatISTTime(new Date())} IST`, 400))
+      return next(new AppError(`Check-out is only allowed between 9:00 AM and 9:00 PM IST — current time is ${formatISTTime()} IST`, 400))
     }
 
     const existing = await pool.query(`SELECT * FROM attendance WHERE user_id = $1 AND date = $2`, [userId, today])

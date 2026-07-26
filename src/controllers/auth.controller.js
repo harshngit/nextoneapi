@@ -3,6 +3,7 @@ const jwt = require("jsonwebtoken");
 const { pool } = require("../config/db");
 const { sendSuccess } = require("../utils/response");
 const AppError = require("../utils/AppError");
+const { isWithinAccessWindow, formatISTTime, EXEMPT_ROLES } = require("../utils/istAccessWindow");
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -22,32 +23,6 @@ const generateRefreshToken = (user) =>
 
 const generateResetToken = () =>
   require("crypto").randomBytes(32).toString("hex");
-
-// Non-admin roles may only log in within this IST window, every day
-const LOGIN_WINDOW_START = "09:00"; // IST
-const LOGIN_WINDOW_END   = "21:00"; // IST
-
-const getISTMinutes = (date) => {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Kolkata",
-    hour: "numeric", minute: "numeric", hour12: false,
-  }).formatToParts(date);
-  const h = parseInt(parts.find((p) => p.type === "hour").value);
-  const m = parseInt(parts.find((p) => p.type === "minute").value);
-  return h * 60 + m;
-};
-
-const isWithinLoginWindow = (date) => {
-  const totalMinutes = getISTMinutes(date);
-  const [startH, startM] = LOGIN_WINDOW_START.split(":").map(Number);
-  const [endH, endM]     = LOGIN_WINDOW_END.split(":").map(Number);
-  return totalMinutes >= (startH * 60 + startM) && totalMinutes <= (endH * 60 + endM);
-};
-
-// e.g. "8:52 PM" — always IST regardless of server timezone
-const formatISTTime = (date) => new Intl.DateTimeFormat("en-IN", {
-  timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit", hour12: true,
-}).format(date);
 
 // ─── Controllers ──────────────────────────────────────────────────────────────
 
@@ -164,8 +139,8 @@ const login = async (req, res, next) => {
     const isValid = await bcrypt.compare(password, user.password_hash);
     if (!isValid) return next(new AppError("Invalid credentials", 401));
 
-    if (!["super_admin", "admin"].includes(user.role) && !isWithinLoginWindow(new Date())) {
-      return next(new AppError(`Login is only allowed between 9:00 AM and 9:00 PM IST — current time is ${formatISTTime(new Date())} IST`, 403));
+    if (!EXEMPT_ROLES.includes(user.role) && !isWithinAccessWindow()) {
+      return next(new AppError(`Login is only allowed between 9:00 AM and 9:00 PM IST — current time is ${formatISTTime()} IST`, 403));
     }
 
     const accessToken  = generateAccessToken(user);

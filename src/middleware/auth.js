@@ -2,6 +2,7 @@ const jwt = require("jsonwebtoken");
 const { pool } = require("../config/db");
 const { sendError } = require("../utils/response");
 const AppError = require("../utils/AppError");
+const { isWithinAccessWindow, formatISTTime, EXEMPT_ROLES } = require("../utils/istAccessWindow");
 
 const authenticate = async (req, res, next) => {
   try {
@@ -20,7 +21,16 @@ const authenticate = async (req, res, next) => {
     if (result.rows.length === 0) {
       return next(new AppError("User not found or inactive", 401));
     }
-    req.user = result.rows[0];
+    const user = result.rows[0];
+
+    // Non-admin roles are auto-logged-out outside 9:00 AM–9:00 PM IST, even
+    // mid-session on a still-valid token — every request past the cutoff
+    // fails, which is what forces the already-logged-in user off the app at 9 PM.
+    if (!EXEMPT_ROLES.includes(user.role) && !isWithinAccessWindow()) {
+      return next(new AppError(`Your session has ended — access is only allowed between 9:00 AM and 9:00 PM IST (current time is ${formatISTTime()} IST). Please log in again after 9:00 AM.`, 401));
+    }
+
+    req.user = user;
     next();
   } catch (err) {
     next(err);
