@@ -53,6 +53,22 @@ const getISTMinutes = (date) => {
   return h * 60 + m
 }
 
+// Check-in/check-out is only allowed within this IST window, every day
+const ATTENDANCE_WINDOW_START = '09:00' // IST
+const ATTENDANCE_WINDOW_END   = '21:00' // IST
+
+const isWithinAttendanceWindow = (date) => {
+  const totalMinutes = getISTMinutes(date)
+  const [startH, startM] = ATTENDANCE_WINDOW_START.split(':').map(Number)
+  const [endH, endM]     = ATTENDANCE_WINDOW_END.split(':').map(Number)
+  return totalMinutes >= (startH * 60 + startM) && totalMinutes <= (endH * 60 + endM)
+}
+
+// e.g. "8:52 PM" — always IST regardless of server timezone
+const formatISTTime = (date) => new Intl.DateTimeFormat('en-IN', {
+  timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true,
+}).format(date)
+
 const resolveStatus = (checkInTime) => {
   try {
     const totalMinutes = getISTMinutes(checkInTime)
@@ -193,6 +209,11 @@ const checkIn = async (req, res, next) => {
     const userId = req.user.id
     const today = new Date().toISOString().split('T')[0]
 
+    if (!isWithinAttendanceWindow(new Date())) {
+      if (req.file) fs.unlink(req.file.path, ()=>{})
+      return next(new AppError(`Check-in is only allowed between 9:00 AM and 9:00 PM IST — current time is ${formatISTTime(new Date())} IST`, 400))
+    }
+
     const existing = await pool.query(
       `SELECT id, check_in_time, status, leave_status FROM attendance WHERE user_id = $1 AND date = $2`,
       [userId, today]
@@ -270,6 +291,11 @@ const checkOut = async (req, res, next) => {
   try {
     const userId = req.user.id
     const today = new Date().toISOString().split('T')[0]
+
+    if (!isWithinAttendanceWindow(new Date())) {
+      if (req.file) fs.unlink(req.file.path, ()=>{})
+      return next(new AppError(`Check-out is only allowed between 9:00 AM and 9:00 PM IST — current time is ${formatISTTime(new Date())} IST`, 400))
+    }
 
     const existing = await pool.query(`SELECT * FROM attendance WHERE user_id = $1 AND date = $2`, [userId, today])
     // Block check-out if status is 'leave' (pending or approved)
