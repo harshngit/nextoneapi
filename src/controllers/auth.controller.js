@@ -216,8 +216,13 @@ const refreshToken = async (req, res, next) => {
     if (userResult.rows.length === 0) {
       return next(new AppError("User not found or inactive", 401));
     }
+    const refreshUser = userResult.rows[0];
 
-    const newAccessToken = generateAccessToken(userResult.rows[0]);
+    if (!EXEMPT_ROLES.includes(refreshUser.role) && !isWithinAccessWindow()) {
+      return next(new AppError(`Your session has ended — access is only allowed between 9:00 AM and 9:00 PM IST (current time is ${formatISTTime()} IST). Please log in again after 9:00 AM.`, 401));
+    }
+
+    const newAccessToken = generateAccessToken(refreshUser);
 
     return sendSuccess(res, "Token refreshed", {
       access_token: newAccessToken,
