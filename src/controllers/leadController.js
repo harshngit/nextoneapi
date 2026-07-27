@@ -175,7 +175,7 @@ const getAllLeads = async (req, res, next) => {
       `SELECT l.id, l.name, l.phone, l.alternate_phone_number, l.email, l.status,
               l.source, l.budget, l.location_preference, l.project_id, l.project_name_text, l.assigned_to,
               l.callback_time, l.next_followup_time, l.configuration,
-              l.payment_proof_url, l.payment_proof_amount, l.closing_manager,
+              l.payment_proof_url, l.payment_proof_amount, l.closing_manager, l.closing_person,
               l.is_converted, l.converted_at, l.created_at, l.updated_at,
               COALESCE(p.name, l.project_name_text) AS project_name, p.city AS project_city,
               CONCAT(u.first_name, ' ', u.last_name) AS assigned_name,
@@ -502,7 +502,7 @@ const getLeadById = async (req, res, next) => {
          l.id, l.name, l.phone, l.alternate_phone_number, l.email,
          l.status, l.source, l.budget, l.location_preference,
          l.callback_time, l.next_followup_time, l.configuration,
-         l.payment_proof_url, l.payment_proof_amount, l.closing_manager,
+         l.payment_proof_url, l.payment_proof_amount, l.closing_manager, l.closing_person,
          l.project_id, l.project_name_text, l.assigned_to, l.is_converted, l.converted_at,
          l.created_at, l.updated_at,
          p.name AS project_name, p.city AS project_city, p.locality AS project_locality,
@@ -760,6 +760,58 @@ const updateLeadPaymentProof = async (req, res, next) => {
     next(err);
   } finally {
     client.release();
+  }
+};
+
+/**
+ * PATCH /api/v1/leads/:id/closing-manager
+ * Sets a free-text closing manager name directly on a lead — not a user
+ * account (no lookup against `users`, just stored as typed). Mirrors
+ * closing_person on site_visits/site_revisits, which exists for the same
+ * reason: the person who closed it isn't always a system user. Only allowed
+ * once a site visit or re-visit for this lead has actually been marked
+ * 'done' — a closing manager makes sense only after the client has been
+ * walked through the property, not before.
+ */
+const setLeadClosingManager = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { closing_person } = req.body;
+
+    if (!closing_person || !closing_person.trim()) {
+      return next(new AppError("closing_person is required", 400));
+    }
+
+    const leadRes = await pool.query(
+      "SELECT id, name FROM leads WHERE id = $1 AND is_archived = false", [id]
+    );
+    if (!leadRes.rows.length) return next(new AppError("Lead not found", 404));
+
+    const doneCheck = await pool.query(
+      `SELECT 1 FROM site_visits   WHERE lead_id = $1 AND status = 'done'
+       UNION
+       SELECT 1 FROM site_revisits WHERE lead_id = $1 AND status = 'done'
+       LIMIT 1`,
+      [id]
+    );
+    if (!doneCheck.rows.length) {
+      return next(new AppError(
+        "Closing manager can only be set after a site visit has been marked done for this lead", 400
+      ));
+    }
+
+    await pool.query(
+      "UPDATE leads SET closing_person = $1, updated_at = NOW() WHERE id = $2",
+      [closing_person.trim(), id]
+    );
+
+    return sendSuccess(res, "Closing manager set for lead", {
+      lead_id: id,
+      lead_name: leadRes.rows[0].name,
+      closing_person: closing_person.trim(),
+    });
+  } catch (err) {
+    next(err);
   }
 };
 
@@ -1888,6 +1940,7 @@ module.exports = {
   getLeadById,
   updateLead,
   updateLeadPaymentProof,
+  setLeadClosingManager,
   deleteLead,
   updateLeadStatus,
   assignLead,

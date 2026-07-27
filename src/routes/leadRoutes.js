@@ -703,6 +703,59 @@ router.patch("/:id/payment-proof", authenticate, leadController.updateLeadPaymen
 
 /**
  * @swagger
+ * /api/v1/leads/{id}/closing-manager:
+ *   patch:
+ *     summary: Set the closing manager (free-text name) on an existing lead
+ *     description: >
+ *       closing_person is a plain name — not a user account, no lookup
+ *       against the users table (mirrors closing_person on
+ *       site_visits/site_revisits). Only allowed once a site visit or
+ *       re-visit for this lead has already been marked 'done' — setting a
+ *       closing manager before that is rejected.
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string, format: uuid }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [closing_person]
+ *             properties:
+ *               closing_person:
+ *                 type: string
+ *                 description: Free-text name of the closing manager
+ *           example:
+ *             closing_person: "Priya Mehta"
+ *     responses:
+ *       200:
+ *         description: Closing manager set
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Closing manager set for lead"
+ *               data:
+ *                 lead_id: "lead-uuid-001"
+ *                 lead_name: "Suresh Patel"
+ *                 closing_person: "Priya Mehta"
+ *       400:
+ *         description: >
+ *           closing_person missing/blank, or no site visit/re-visit has been
+ *           marked done yet for this lead
+ *       404:
+ *         description: Lead not found
+ */
+router.patch("/:id/closing-manager", authenticate, leadController.setLeadClosingManager);
+
+/**
+ * @swagger
  * /api/v1/leads/{id}/status:
  *   patch:
  *     summary: Update lead lifecycle status
