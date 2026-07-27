@@ -372,6 +372,47 @@ router.post("/", authenticate, leadController.createLead);
 
 /**
  * @swagger
+ * /api/v1/leads/check-phone:
+ *   get:
+ *     summary: Check whether a phone number is already registered to a lead
+ *     description: >
+ *       Use before creating/updating a lead to warn about a duplicate.
+ *       Phone numbers must be unique across (non-archived) leads — returns
+ *       the existing lead's name when one is already using this number.
+ *     tags: [Lead Management]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: phone
+ *         required: true
+ *         schema: { type: string }
+ *         example: "+919876543210"
+ *     responses:
+ *       200:
+ *         description: Availability result
+ *         content:
+ *           application/json:
+ *             examples:
+ *               available:
+ *                 value:
+ *                   success: true
+ *                   message: "Phone number is available"
+ *                   data: { exists: false }
+ *               taken:
+ *                 value:
+ *                   success: true
+ *                   message: "Phone number is already registered"
+ *                   data:
+ *                     exists: true
+ *                     lead: { id: "lead-uuid-001", name: "Suresh Patel" }
+ *       400:
+ *         description: phone query param is required
+ */
+router.get("/check-phone", authenticate, leadController.checkPhoneExists);
+
+/**
+ * @swagger
  * /api/v1/leads/{id}:
  *   get:
  *     summary: Get lead details by ID

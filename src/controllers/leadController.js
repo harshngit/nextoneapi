@@ -26,10 +26,6 @@ const VALID_STATUSES = [
   "negotiation", "booked", "lost",
 ];
 
-// Same phone number can be reused across leads (e.g. interested in multiple
-// projects) but only up to this many times.
-const MAX_LEADS_PER_PHONE = 3;
-
 // ─── Helper — status is valid if it's a system status OR an active custom
 // status defined in lead_statuses (used by both createLead and updateLeadStatus
 // so the two entry points can never diverge on what counts as valid) ──────────
@@ -41,18 +37,20 @@ const isValidLeadStatus = async (status) => {
   return custom.rows.length > 0;
 };
 
-// ─── Helper — count how many (non-archived) leads already use this phone ─────
-const countLeadsByPhone = async (client, phone, excludeLeadId = null) => {
+// ─── Helper — find the (non-archived) lead already using this phone, if any ──
+// A phone number may belong to at most one lead — used to block duplicates
+// on create/update and to power GET /leads/check-phone.
+const findLeadByPhone = async (client, phone, excludeLeadId = null) => {
   const result = excludeLeadId
     ? await client.query(
-        "SELECT COUNT(*) FROM leads WHERE phone = $1 AND is_archived = false AND id != $2",
+        "SELECT id, name FROM leads WHERE phone = $1 AND is_archived = false AND id != $2 LIMIT 1",
         [phone, excludeLeadId]
       )
     : await client.query(
-        "SELECT COUNT(*) FROM leads WHERE phone = $1 AND is_archived = false",
+        "SELECT id, name FROM leads WHERE phone = $1 AND is_archived = false LIMIT 1",
         [phone]
       );
-  return parseInt(result.rows[0].count, 10);
+  return result.rows[0] || null;
 };
 
 // ─── Helper — activity log ────────────────────────────────────────────────────
@@ -206,6 +204,32 @@ const getAllLeads = async (req, res, next) => {
 };
 
 /**
+ * GET /api/v1/leads/check-phone?phone=...
+ * Verifies whether a phone number is already registered to a (non-archived)
+ * lead — for the frontend to warn before submitting a duplicate. Returns the
+ * existing lead's name when found.
+ */
+const checkPhoneExists = async (req, res, next) => {
+  try {
+    const { phone } = req.query;
+    if (!phone) return next(new AppError("phone is required", 400));
+
+    const dupLead = await findLeadByPhone(pool, phone);
+
+    if (!dupLead) {
+      return sendSuccess(res, "Phone number is available", { exists: false });
+    }
+
+    return sendSuccess(res, "Phone number is already registered", {
+      exists: true,
+      lead: { id: dupLead.id, name: dupLead.name },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
  * POST /api/v1/leads/upload-recording
  * Standalone file upload — returns { url, filename, size }
  * Call this FIRST, get the URL, then pass it in create/update lead body.
@@ -297,11 +321,11 @@ const createLead = async (req, res, next) => {
 
     await client.query("BEGIN");
 
-    const phoneUsage = await countLeadsByPhone(client, phone);
-    if (phoneUsage >= MAX_LEADS_PER_PHONE) {
+    const dupLead = await findLeadByPhone(client, phone);
+    if (dupLead) {
       await client.query("ROLLBACK");
       return next(new AppError(
-        `This phone number has already been used for ${MAX_LEADS_PER_PHONE} leads. A phone number can be added at most ${MAX_LEADS_PER_PHONE} times.`, 400
+        `This phone number is already registered with lead "${dupLead.name}". Duplicate phone numbers are not allowed.`, 400
       ));
     }
 
@@ -589,10 +613,10 @@ const updateLead = async (req, res, next) => {
     }
 
     if (phone && phone !== existing.rows[0].phone) {
-      const phoneUsage = await countLeadsByPhone(pool, phone, id);
-      if (phoneUsage >= MAX_LEADS_PER_PHONE) {
+      const dupLead = await findLeadByPhone(pool, phone, id);
+      if (dupLead) {
         return next(new AppError(
-          `This phone number has already been used for ${MAX_LEADS_PER_PHONE} leads. A phone number can be added at most ${MAX_LEADS_PER_PHONE} times.`, 400
+          `This phone number is already registered with lead "${dupLead.name}". Duplicate phone numbers are not allowed.`, 400
         ));
       }
     }
@@ -1860,6 +1884,7 @@ const deletePhoto = async (req, res, next) => {
 module.exports = {
   getAllLeads,
   createLead,
+  checkPhoneExists,
   getLeadById,
   updateLead,
   updateLeadPaymentProof,
