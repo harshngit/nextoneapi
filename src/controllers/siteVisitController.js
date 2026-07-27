@@ -60,6 +60,7 @@ const getAllSiteVisits = async (req, res, next) => {
       `SELECT sv.id, sv.lead_id, sv.visit_date, sv.visit_time,
               sv.status, sv.transport_arranged, sv.notes, sv.created_at,
               sv.closing_person, sv.closing_manager,
+              CONCAT(cm.first_name,' ',cm.last_name) AS closing_manager_name,
               l.name AS lead_name, l.phone AS lead_phone,
               COALESCE(p.name, sv.project_name_text) AS project_name, p.city AS project_city,
               CONCAT(u.first_name,' ',u.last_name) AS assigned_to_name,
@@ -68,6 +69,7 @@ const getAllSiteVisits = async (req, res, next) => {
        LEFT JOIN leads l    ON l.id = sv.lead_id
        LEFT JOIN projects p ON p.id = sv.project_id
        LEFT JOIN users u    ON u.id = sv.assigned_to
+       LEFT JOIN users cm   ON cm.id = sv.closing_manager
        LEFT JOIN site_visit_feedback vf ON vf.site_visit_id = sv.id
        ${where}
        ORDER BY sv.visit_date DESC, sv.visit_time DESC
@@ -204,11 +206,13 @@ const getSiteVisitById = async (req, res, next) => {
               COALESCE(p.name, sv.project_name_text) AS project_name,
               p.address AS project_address, p.city AS project_city,
               CONCAT(u.first_name,' ',u.last_name) AS assigned_to_name,
+              CONCAT(cm.first_name,' ',cm.last_name) AS closing_manager_name,
               vf.rating, vf.client_reaction, vf.interested_in, vf.next_step, vf.remarks AS feedback_remarks
        FROM site_visits sv
        LEFT JOIN leads         l  ON l.id  = sv.lead_id
        LEFT JOIN projects      p  ON p.id  = sv.project_id
        LEFT JOIN users         u  ON u.id  = sv.assigned_to
+       LEFT JOIN users         cm ON cm.id = sv.closing_manager
        LEFT JOIN site_visit_feedback vf ON vf.site_visit_id = sv.id
        WHERE sv.id = $1`,
       [id]
@@ -288,6 +292,16 @@ const updateSiteVisitStatus = async (req, res, next) => {
       await client.query(
         `UPDATE leads SET status = 'site_visit_done', updated_at = NOW()
          WHERE id = $1 AND status NOT IN ('booked','negotiation')`, [existing.rows[0].lead_id]
+      );
+    }
+
+    // Also persist on the lead itself — closing_manager on the visit is
+    // per-visit, but the lead needs to carry it forward too (shows up on the
+    // lead's own GET responses, not just this visit's).
+    if (closing_manager !== undefined) {
+      await client.query(
+        `UPDATE leads SET closing_manager = $1, updated_at = NOW() WHERE id = $2`,
+        [closing_manager, existing.rows[0].lead_id]
       );
     }
 

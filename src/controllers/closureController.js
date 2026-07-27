@@ -20,6 +20,11 @@ const { resolveProjectId } = require('../utils/projectResolver');
 const VALID_STATUSES  = ['confirmed', 'cancelled', 'on_hold'];
 const VALID_DOC_TYPES = ['cost_sheet', 'payment_proof', 'booking_form'];
 
+// Fixed company inbox that always gets the booking-confirmed notification,
+// in addition to this closure's own reporting manager(s) — NOT every
+// admin/super_admin/sales_manager account.
+const ADMIN_NOTIFY_EMAIL = process.env.BOOKING_ADMIN_EMAIL || 'nextonerealty77@gmail.com';
+
 // closed_by_manager accepts either an array of manager UUID strings, or an
 // array of manager objects ({ id, name, role }) — e.g. echoed straight back
 // from a GET response instead of extracting just the id. Always normalizes
@@ -249,10 +254,17 @@ const createClosure = async (req, res, next) => {
         );
         const closedByName = closedByRow.rows[0]?.name || 'Sales Executive';
 
-        const adminEmailsRes = await pool.query(
-          `SELECT email FROM users WHERE role IN ('admin','super_admin','sales_manager') AND is_active = true`
-        );
-        const adminEmails = adminEmailsRes.rows.map(r => r.email);
+        // Only this closure's own reporting manager(s) (closed_by_manager) +
+        // the fixed admin inbox — not every admin/super_admin/sales_manager.
+        let managerEmails = [];
+        if (managerIds?.length) {
+          const mgrEmailsRes = await pool.query(
+            `SELECT email FROM users WHERE id = ANY($1::uuid[]) AND is_active = true AND email IS NOT NULL`,
+            [managerIds]
+          );
+          managerEmails = mgrEmailsRes.rows.map(r => r.email);
+        }
+        const adminEmails = [...new Set([...managerEmails, ADMIN_NOTIFY_EMAIL])];
 
         await emailService.notifyBookingConfirmed({
           lead: { id: lead.id, name: lead.name, phone: lead.phone, email: lead.email },

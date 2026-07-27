@@ -63,6 +63,7 @@ const getAllRevisits = async (req, res, next) => {
       `SELECT sr.id, sr.lead_id, sr.original_visit_id, sr.visit_date, sr.visit_time,
               sr.status, sr.transport_arranged, sr.reason, sr.notes, sr.created_at,
               sr.closing_person, sr.closing_manager,
+              CONCAT(cm.first_name,' ',cm.last_name) AS closing_manager_name,
               l.name AS lead_name, l.phone AS lead_phone,
               COALESCE(p.name, sr.project_name_text) AS project_name, p.city AS project_city,
               CONCAT(u.first_name,' ',u.last_name) AS assigned_to_name,
@@ -71,6 +72,7 @@ const getAllRevisits = async (req, res, next) => {
        LEFT JOIN leads l    ON l.id = sr.lead_id
        LEFT JOIN projects p ON p.id = sr.project_id
        LEFT JOIN users u    ON u.id = sr.assigned_to
+       LEFT JOIN users cm   ON cm.id = sr.closing_manager
        LEFT JOIN site_revisit_feedback rf ON rf.revisit_id = sr.id
        ${where}
        ORDER BY sr.visit_date DESC, sr.visit_time DESC
@@ -236,12 +238,14 @@ const getRevisitById = async (req, res, next) => {
               l.name AS lead_name, l.phone AS lead_phone, l.email AS lead_email,
               COALESCE(p.name, sr.project_name_text) AS project_name, p.address AS project_address, p.city AS project_city,
               CONCAT(u.first_name,' ',u.last_name) AS assigned_to_name,
+              CONCAT(cm.first_name,' ',cm.last_name) AS closing_manager_name,
               rf.rating, rf.client_reaction, rf.interested_in, rf.next_step, rf.remarks AS feedback_remarks,
               sv.visit_date AS original_visit_date, sv.visit_time AS original_visit_time
        FROM site_revisits sr
        LEFT JOIN leads         l  ON l.id  = sr.lead_id
        LEFT JOIN projects      p  ON p.id  = sr.project_id
        LEFT JOIN users         u  ON u.id  = sr.assigned_to
+       LEFT JOIN users         cm ON cm.id = sr.closing_manager
        LEFT JOIN site_revisit_feedback rf ON rf.revisit_id = sr.id
        LEFT JOIN site_visits   sv ON sv.id = sr.original_visit_id
        WHERE sr.id = $1`,
@@ -256,6 +260,7 @@ const getRevisitById = async (req, res, next) => {
       reason: r.reason, notes: r.notes, created_at: r.created_at,
       closing_person: r.closing_person,
       closing_manager: r.closing_manager,
+      closing_manager_name: r.closing_manager_name,
       original_visit: {
         id: r.original_visit_id,
         visit_date: r.original_visit_date,
@@ -376,6 +381,15 @@ const updateRevisitStatus = async (req, res, next) => {
       await client.query(
         `UPDATE leads SET status = 'site_visit_done', updated_at = NOW()
          WHERE id = $1 AND status NOT IN ('booked','negotiation')`, [rv.lead_id]
+      );
+    }
+
+    // Also persist on the lead itself — closing_manager on the revisit is
+    // per-visit, but the lead needs to carry it forward too.
+    if (closing_manager !== undefined) {
+      await client.query(
+        `UPDATE leads SET closing_manager = $1, updated_at = NOW() WHERE id = $2`,
+        [closing_manager, rv.lead_id]
       );
     }
 

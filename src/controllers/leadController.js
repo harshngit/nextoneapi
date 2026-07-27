@@ -177,15 +177,17 @@ const getAllLeads = async (req, res, next) => {
       `SELECT l.id, l.name, l.phone, l.alternate_phone_number, l.email, l.status,
               l.source, l.budget, l.location_preference, l.project_id, l.project_name_text, l.assigned_to,
               l.callback_time, l.next_followup_time, l.configuration,
-              l.payment_proof_url, l.payment_proof_amount,
+              l.payment_proof_url, l.payment_proof_amount, l.closing_manager,
               l.is_converted, l.converted_at, l.created_at, l.updated_at,
               COALESCE(p.name, l.project_name_text) AS project_name, p.city AS project_city,
               CONCAT(u.first_name, ' ', u.last_name) AS assigned_name,
+              CONCAT(cm.first_name, ' ', cm.last_name) AS closing_manager_name,
               (SELECT COUNT(*) FROM call_recordings cr WHERE cr.lead_id = l.id) AS call_recordings_count,
               (SELECT COUNT(*) FROM lead_photos ph WHERE ph.lead_id = l.id)    AS photos_count
        FROM leads l
        LEFT JOIN projects p ON p.id = l.project_id
        LEFT JOIN users u ON u.id = l.assigned_to
+       LEFT JOIN users cm ON cm.id = l.closing_manager
        ${where}
        ORDER BY l.created_at DESC
        LIMIT $${idx++} OFFSET $${idx++}`,
@@ -476,12 +478,13 @@ const getLeadById = async (req, res, next) => {
          l.id, l.name, l.phone, l.alternate_phone_number, l.email,
          l.status, l.source, l.budget, l.location_preference,
          l.callback_time, l.next_followup_time, l.configuration,
-         l.payment_proof_url, l.payment_proof_amount,
+         l.payment_proof_url, l.payment_proof_amount, l.closing_manager,
          l.project_id, l.project_name_text, l.assigned_to, l.is_converted, l.converted_at,
          l.created_at, l.updated_at,
          p.name AS project_name, p.city AS project_city, p.locality AS project_locality,
          CONCAT(u.first_name, ' ', u.last_name) AS assigned_name,
          u.phone_number AS assigned_phone,
+         CONCAT(cm.first_name, ' ', cm.last_name) AS closing_manager_name,
          (SELECT COALESCE(json_agg(cr.* ORDER BY cr.created_at DESC), '[]')
           FROM call_recordings cr WHERE cr.lead_id = l.id) AS call_recordings,
          (SELECT COALESCE(json_agg(ph.* ORDER BY ph.created_at DESC), '[]')
@@ -489,6 +492,7 @@ const getLeadById = async (req, res, next) => {
        FROM leads l
        LEFT JOIN projects p ON p.id = l.project_id
        LEFT JOIN users u ON u.id = l.assigned_to
+       LEFT JOIN users cm ON cm.id = l.closing_manager
        WHERE l.id = $1 AND l.is_archived = false`,
       [id]
     );
@@ -504,6 +508,9 @@ const getLeadById = async (req, res, next) => {
       ...lead,
       assigned_to: lead.assigned_to
         ? { id: lead.assigned_to, full_name: lead.assigned_name, phone: lead.assigned_phone }
+        : null,
+      closing_manager: lead.closing_manager
+        ? { id: lead.closing_manager, full_name: lead.closing_manager_name }
         : null,
       project: lead.project_id
         ? { id: lead.project_id, name: lead.project_name, city: lead.project_city, locality: lead.project_locality }
