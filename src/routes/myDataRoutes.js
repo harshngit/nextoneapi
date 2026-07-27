@@ -189,7 +189,7 @@ router.get("/leads", authenticate, ctrl.getMyLeads);
  *         name: status
  *         schema:
  *           type: string
- *           enum: [scheduled, done, cancelled, rescheduled, no_show]
+ *           enum: [scheduled, done, complete, completed, cancelled, rescheduled, no_show]
  *       - in: query
  *         name: upcoming
  *         schema:
@@ -268,7 +268,7 @@ router.get("/site-visits", authenticate, ctrl.getMySiteVisits);
  *         name: status
  *         schema:
  *           type: string
- *           enum: [scheduled, done, cancelled, rescheduled, no_show]
+ *           enum: [scheduled, done, complete, completed, cancelled, rescheduled, no_show]
  *       - in: query
  *         name: upcoming
  *         schema:

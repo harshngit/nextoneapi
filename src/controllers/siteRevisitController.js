@@ -15,9 +15,12 @@ const { createNotification, notifyAdmins } = require('./notificationController')
 const { getTeamIds, ADMIN_ROLES, LEAF_ROLES } = require('../utils/teamUtils');
 const { resolveProjectId } = require('../utils/projectResolver');
 
-const VALID_STATUSES   = ['scheduled', 'done', 'cancelled', 'rescheduled', 'no_show'];
+const VALID_STATUSES   = ['scheduled', 'done', 'complete', 'completed', 'cancelled', 'rescheduled', 'no_show'];
+const COMPLETED_STATUSES = ['done', 'complete', 'completed'];
 const VALID_REACTIONS  = ['very_positive', 'positive', 'neutral', 'negative', 'not_interested'];
 const VALID_NEXT_STEPS = ['negotiation', 'follow_up', 'send_proposal', 'booked', 'lost', 'another_revisit'];
+
+const normalizeStatus = (status) => COMPLETED_STATUSES.includes(status) ? 'done' : status;
 
 // ─── GET /api/v1/site-revisits ────────────────────────────────────────────────
 const getAllRevisits = async (req, res, next) => {
@@ -39,7 +42,7 @@ const getAllRevisits = async (req, res, next) => {
       conditions.push(`sr.assigned_to = ANY($${idx++}::uuid[])`); params.push(teamIds);
     }
 
-    if (status)            { conditions.push(`sr.status = $${idx++}`);           params.push(status); }
+    if (status)            { conditions.push(`sr.status = $${idx++}`);           params.push(normalizeStatus(status)); }
     if (lead_id)           { conditions.push(`sr.lead_id = $${idx++}`);          params.push(lead_id); }
     if (project_id)        { 
       const resolvedProjectId = await resolveProjectId(project_id);
@@ -338,6 +341,8 @@ const updateRevisitStatus = async (req, res, next) => {
       return next(new AppError('note is required when cancelling or marking no_show', 400));
     }
 
+    const normalizedStatus = normalizeStatus(status);
+
     const existing = await pool.query(
       `SELECT sr.*, l.name AS lead_name, l.phone AS lead_phone,
               COALESCE(p.name, sr.project_name_text) AS project_name,
@@ -354,13 +359,13 @@ const updateRevisitStatus = async (req, res, next) => {
 
     const rv        = existing.rows[0];
     const oldStatus = rv.status;
-    if (oldStatus === status) {
-      return sendSuccess(res, 'Status already set to this value', { id, status });
+    if (oldStatus === normalizedStatus) {
+      return sendSuccess(res, 'Status already set to this value', { id, status: normalizedStatus });
     }
 
     await client.query('BEGIN');
     
-    const updateParams = [status];
+    const updateParams = [normalizedStatus];
     let updateQuery = `UPDATE site_revisits SET status = $1, updated_at = NOW()`;
     
     if (closing_manager !== undefined) {
@@ -377,7 +382,7 @@ const updateRevisitStatus = async (req, res, next) => {
     await client.query(updateQuery, updateParams);
 
     // If done, update lead status to site_visit_done (if not already booked/negotiation)
-    if (status === 'done') {
+    if (normalizedStatus === 'done') {
       await client.query(
         `UPDATE leads SET status = 'site_visit_done', updated_at = NOW()
          WHERE id = $1 AND status NOT IN ('booked','negotiation')`, [rv.lead_id]
@@ -395,7 +400,7 @@ const updateRevisitStatus = async (req, res, next) => {
 
     await client.query(
       `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1,'note',$2,$3)`,
-      [rv.lead_id, note || `Re-visit marked as ${status}`, req.user.id]
+      [rv.lead_id, note || `Re-visit marked as ${normalizedStatus}`, req.user.id]
     );
 
     await client.query('COMMIT');
@@ -405,17 +410,17 @@ const updateRevisitStatus = async (req, res, next) => {
       try {
         const typeMap  = { done: 'visit_done', cancelled: 'visit_cancelled', rescheduled: 'visit_rescheduled' };
         const titleMap = { done: 'Re-visit Completed', cancelled: 'Re-visit Cancelled', rescheduled: 'Re-visit Rescheduled' };
-        const notifType  = typeMap[status]  || 'visit_scheduled';
-        const notifTitle = titleMap[status] || `Re-visit ${status}`;
+        const notifType  = typeMap[normalizedStatus]  || 'visit_scheduled';
+        const notifTitle = titleMap[normalizedStatus] || `Re-visit ${normalizedStatus}`;
 
         if (rv.assigned_to) {
           await createNotification(rv.assigned_to, {
             type:           notifType,
             title:          notifTitle,
-            message:        `Re-visit for "${rv.lead_name}" has been marked as ${status}`,
+            message:        `Re-visit for "${rv.lead_name}" has been marked as ${normalizedStatus}`,
             reference_id:   id,
             reference_type: 'site_revisit',
-            metadata:       { lead_id: rv.lead_id, status },
+            metadata:       { lead_id: rv.lead_id, status: normalizedStatus },
           });
           const mgrRow = await pool.query(
             `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [rv.assigned_to]
@@ -424,20 +429,20 @@ const updateRevisitStatus = async (req, res, next) => {
             await createNotification(mgrRow.rows[0].manager_id, {
               type:           notifType,
               title:          `${notifTitle} (Your Team)`,
-              message:        `Re-visit for "${rv.lead_name}" was marked as ${status}`,
+              message:        `Re-visit for "${rv.lead_name}" was marked as ${normalizedStatus}`,
               reference_id:   id,
               reference_type: 'site_revisit',
-              metadata:       { lead_id: rv.lead_id, status },
+              metadata:       { lead_id: rv.lead_id, status: normalizedStatus },
             });
           }
         }
         await notifyAdmins({
           type:           notifType,
           title:          notifTitle,
-          message:        `Re-visit for "${rv.lead_name}" was marked as ${status}`,
+          message:        `Re-visit for "${rv.lead_name}" was marked as ${normalizedStatus}`,
           reference_id:   id,
           reference_type: 'site_revisit',
-          metadata:       { lead_id: rv.lead_id, status },
+          metadata:       { lead_id: rv.lead_id, status: normalizedStatus },
         });
       } catch (notifErr) {
         console.error('[Notification] updateRevisitStatus failed:', notifErr.message);
@@ -447,7 +452,7 @@ const updateRevisitStatus = async (req, res, next) => {
     // NOTE: the "site visit status changed" email (notifySiteVisitStatusChanged)
     // was removed on purpose.
 
-    return sendSuccess(res, `Re-visit marked as ${status}`);
+    return sendSuccess(res, `Re-visit marked as ${normalizedStatus}`);
   } catch (err) {
     await client.query('ROLLBACK'); next(err);
   } finally { client.release(); }

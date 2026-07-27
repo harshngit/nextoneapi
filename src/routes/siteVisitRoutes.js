@@ -238,7 +238,7 @@ router.put('/:id', authenticate, ctrl.updateSiteVisit);
  *             type: object
  *             required: [status]
  *             properties:
- *               status: { type: string, enum: [scheduled, done, cancelled, rescheduled, no_show] }
+ *               status: { type: string, enum: [scheduled, done, complete, completed, cancelled, rescheduled, no_show] }
  *               note: { type: string }
  *               closing_manager:
  *                 type: string

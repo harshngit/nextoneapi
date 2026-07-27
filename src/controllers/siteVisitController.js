@@ -13,9 +13,12 @@ const { createNotification, notifyAdmins } = require('./notificationController')
 const { getTeamIds, ADMIN_ROLES, LEAF_ROLES } = require('../utils/teamUtils');
 const { resolveProjectId, resolveProjectName } = require('../utils/projectResolver');
 
-const VALID_STATUSES   = ['scheduled', 'done', 'cancelled', 'rescheduled', 'no_show'];
+const VALID_STATUSES   = ['scheduled', 'done', 'complete', 'completed', 'cancelled', 'rescheduled', 'no_show'];
+const COMPLETED_STATUSES = ['done', 'complete', 'completed'];
 const VALID_REACTIONS  = ['very_positive', 'positive', 'neutral', 'negative', 'not_interested'];
 const VALID_NEXT_STEPS = ['negotiation', 'follow_up', 'send_proposal', 'booked', 'lost', 'site_revisit'];
+
+const normalizeStatus = (status) => COMPLETED_STATUSES.includes(status) ? 'done' : status;
 
 // ─── GET /api/v1/site-visits ──────────────────────────────────────────────────
 const getAllSiteVisits = async (req, res, next) => {
@@ -37,7 +40,7 @@ const getAllSiteVisits = async (req, res, next) => {
       conditions.push(`sv.assigned_to = ANY($${idx++}::uuid[])`); params.push(teamIds);
     }
 
-    if (status)      { conditions.push(`sv.status = $${idx++}`);      params.push(status); }
+    if (status)      { conditions.push(`sv.status = $${idx++}`);      params.push(normalizeStatus(status)); }
     if (lead_id)     { conditions.push(`sv.lead_id = $${idx++}`);     params.push(lead_id); }
     if (project_id)  { 
       const resolvedProjectId = await resolveProjectId(project_id);
@@ -267,12 +270,14 @@ const updateSiteVisitStatus = async (req, res, next) => {
       return next(new AppError(`Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}`, 400));
     }
 
+    const normalizedStatus = normalizeStatus(status);
+
     const existing = await pool.query('SELECT * FROM site_visits WHERE id = $1', [id]);
     if (!existing.rows.length) return next(new AppError('Site visit not found', 404));
 
     await client.query('BEGIN');
 
-    const updateParams = [status];
+    const updateParams = [normalizedStatus];
     let updateQuery = `UPDATE site_visits SET status = $1, updated_at = NOW()`;
 
     if (closing_manager !== undefined) {
@@ -288,7 +293,7 @@ const updateSiteVisitStatus = async (req, res, next) => {
     updateQuery += ` WHERE id = $${updateParams.length}`;
     await client.query(updateQuery, updateParams);
 
-    if (status === 'done') {
+    if (normalizedStatus === 'done') {
       await client.query(
         `UPDATE leads SET status = 'site_visit_done', updated_at = NOW()
          WHERE id = $1 AND status NOT IN ('booked','negotiation')`, [existing.rows[0].lead_id]
@@ -307,7 +312,7 @@ const updateSiteVisitStatus = async (req, res, next) => {
 
     await client.query(
       `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1,'note',$2,$3)`,
-      [existing.rows[0].lead_id, note || `Site visit marked as ${status}`, req.user.id]
+      [existing.rows[0].lead_id, note || `Site visit marked as ${normalizedStatus}`, req.user.id]
     );
 
     await client.query('COMMIT');
@@ -317,18 +322,18 @@ const updateSiteVisitStatus = async (req, res, next) => {
       try {
         const sv      = existing.rows[0];
         const typeMap = { done: 'visit_done', cancelled: 'visit_cancelled', rescheduled: 'visit_rescheduled' };
-        const notifType = typeMap[status] || 'visit_scheduled';
+        const notifType = typeMap[normalizedStatus] || 'visit_scheduled';
         const titleMap  = { done: 'Site Visit Completed', cancelled: 'Site Visit Cancelled', rescheduled: 'Site Visit Rescheduled' };
-        const notifTitle = titleMap[status] || `Site Visit ${status}`;
+        const notifTitle = titleMap[normalizedStatus] || `Site Visit ${normalizedStatus}`;
 
         if (sv.assigned_to) {
           await createNotification(sv.assigned_to, {
             type:           notifType,
             title:          notifTitle,
-            message:        `Site visit has been marked as ${status}`,
+            message:        `Site visit has been marked as ${normalizedStatus}`,
             reference_id:   id,
             reference_type: 'site_visit',
-            metadata:       { lead_id: sv.lead_id, status },
+            metadata:       { lead_id: sv.lead_id, status: normalizedStatus },
           });
           const mgrRow = await pool.query(
             `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [sv.assigned_to]
@@ -337,27 +342,27 @@ const updateSiteVisitStatus = async (req, res, next) => {
             await createNotification(mgrRow.rows[0].manager_id, {
               type:           notifType,
               title:          `${notifTitle} (Your Team)`,
-              message:        `A site visit in your team was marked as ${status}`,
+              message:        `A site visit in your team was marked as ${normalizedStatus}`,
               reference_id:   id,
               reference_type: 'site_visit',
-              metadata:       { lead_id: sv.lead_id, status },
+              metadata:       { lead_id: sv.lead_id, status: normalizedStatus },
             });
           }
         }
         await notifyAdmins({
           type:           notifType,
           title:          notifTitle,
-          message:        `A site visit was marked as ${status}`,
+          message:        `A site visit was marked as ${normalizedStatus}`,
           reference_id:   id,
           reference_type: 'site_visit',
-          metadata:       { lead_id: sv.lead_id, status },
+          metadata:       { lead_id: sv.lead_id, status: normalizedStatus },
         });
       } catch (notifErr) {
         console.error('[Notification] updateSiteVisitStatus failed:', notifErr.message);
       }
     });
 
-    return sendSuccess(res, `Site visit marked as ${status}`);
+    return sendSuccess(res, `Site visit marked as ${normalizedStatus}`);
   } catch (err) {
     await client.query('ROLLBACK'); next(err);
   } finally { client.release(); }

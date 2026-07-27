@@ -315,7 +315,7 @@ router.put('/:id', authenticate, ctrl.updateRevisit);
  *             properties:
  *               status:
  *                 type: string
- *                 enum: [scheduled, done, cancelled, rescheduled, no_show]
+ *                 enum: [scheduled, done, complete, completed, cancelled, rescheduled, no_show]
  *               note:
  *                 type: string
  *                 description: Required for cancelled and no_show
