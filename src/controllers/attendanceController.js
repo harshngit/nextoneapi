@@ -164,9 +164,22 @@ const styleHeader = (row, argb = 'FF1E40AF') => {
   }
 }
 
-const fmtTime = (ts) => ts ? new Date(ts).toLocaleTimeString('en-IN',{ hour:'2-digit', minute:'2-digit', hour12:true }) : '-'
+// timeZone pinned to IST — without it this reads the server's local
+// timezone, which silently produces the wrong clock time whenever the
+// server isn't itself running in IST (e.g. a UTC host renders 1:48 PM IST as
+// 8:18 AM).
+const fmtTime = (ts) => ts ? new Date(ts).toLocaleTimeString('en-IN',{ timeZone: 'Asia/Kolkata', hour:'2-digit', minute:'2-digit', hour12:true }) : '-'
 const fmtDate = (d) => d  ? new Date(d).toLocaleDateString('en-IN',{ day:'2-digit', month:'short', year:'numeric' }) : '-'
 const toDateStr = (d) => d instanceof Date ? d.toISOString().split('T')[0] : String(d).split('T')[0]
+
+// e.g. 198 -> "3 hr 18 min", 60 -> "1 hr", 45 -> "45 min"
+const formatMinutesAsHM = (mins) => {
+  const h = Math.floor(mins / 60)
+  const m = mins % 60
+  if (h > 0 && m > 0) return `${h} hr ${m} min`
+  if (h > 0) return `${h} hr`
+  return `${m} min`
+}
 
 // ─── 1. UPLOAD PHOTO ─────────────────────────────────────────────────────────
 const uploadPhoto = (req, res, next) => {
@@ -236,16 +249,19 @@ const checkIn = async (req, res, next) => {
     }
 
     const checkInMsg = status === 'late'
-      ? `Checked in late — ${lateMinutes} minute${lateMinutes !== 1 ? 's' : ''} after 10:30 AM`
+      ? `Checked in late — ${formatMinutesAsHM(lateMinutes)} after 10:30 AM`
       : 'Checked in successfully'
 
-    const checkInTimeStr = checkInTime.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
+    // formatISTTime pins the timezone to Asia/Kolkata — using checkInTime's
+    // own toLocaleTimeString() here reads the server's local timezone
+    // instead, which is what produced the wrong time in notifications.
+    const checkInTimeStr = formatISTTime(checkInTime)
     setImmediate(async () => {
       try {
         await notifyAdmins({
           type:           'attendance_checkin',
           title:          'Employee Checked In',
-          message:        `${userMeta.full_name} checked in at ${checkInTimeStr}${status === 'late' ? ` (late by ${lateMinutes} min)` : ''}`,
+          message:        `${userMeta.full_name} checked in at ${checkInTimeStr}${status === 'late' ? ` (late by ${formatMinutesAsHM(lateMinutes)})` : ''}`,
           reference_id:   record.id,
           reference_type: 'attendance',
           metadata:       { user_id: userId, date: today, status, late_by_minutes: lateMinutes || null },
@@ -307,7 +323,7 @@ const checkOut = async (req, res, next) => {
       [checkOutTime, workingHours, photo, latitude||null, longitude||null, address||null, ip, device||null, notes||null, userId, today]
     )
 
-    const checkOutTimeStr = checkOutTime.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
+    const checkOutTimeStr = formatISTTime(checkOutTime)
     setImmediate(async () => {
       try {
         await notifyAdmins({
