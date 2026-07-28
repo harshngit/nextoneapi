@@ -25,7 +25,7 @@ const normalizeStatus = (status) => COMPLETED_STATUSES.includes(status) ? 'done'
 // ─── GET /api/v1/site-revisits ────────────────────────────────────────────────
 const getAllRevisits = async (req, res, next) => {
   try {
-    const { status, lead_id, project_id, assigned_to, from, to,
+    const { status, lead_id, project_id, assigned_to, from, to, search,
             original_visit_id, page = 1, per_page = 20 } = req.query;
     const { role, id: callerId } = req.user;
     const offset = (parseInt(page) - 1) * parseInt(per_page);
@@ -44,21 +44,28 @@ const getAllRevisits = async (req, res, next) => {
 
     if (status)            { conditions.push(`sr.status = $${idx++}`);           params.push(normalizeStatus(status)); }
     if (lead_id)           { conditions.push(`sr.lead_id = $${idx++}`);          params.push(lead_id); }
-    if (project_id)        { 
+    if (project_id)        {
       const resolvedProjectId = await resolveProjectId(project_id);
-      conditions.push(`sr.project_id = $${idx++}`);  
-      params.push(resolvedProjectId); 
+      conditions.push(`sr.project_id = $${idx++}`);
+      params.push(resolvedProjectId);
     }
     if (assigned_to)       { conditions.push(`sr.assigned_to = $${idx++}`);      params.push(assigned_to); }
     if (original_visit_id) { conditions.push(`sr.original_visit_id = $${idx++}`); params.push(original_visit_id); }
     if (from)              { conditions.push(`sr.visit_date >= $${idx++}`);      params.push(from); }
     if (to)                { conditions.push(`sr.visit_date <= $${idx++}`);      params.push(to); }
+    if (search) {
+      conditions.push(`(l.name ILIKE $${idx} OR l.phone ILIKE $${idx} OR COALESCE(p.name, sr.project_name_text) ILIKE $${idx})`);
+      params.push(`%${search}%`); idx++;
+    }
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const countRes = await pool.query(
       `SELECT COUNT(*) FROM site_revisits sr
-       LEFT JOIN users u ON u.id = sr.assigned_to ${where}`, params
+       LEFT JOIN users u ON u.id = sr.assigned_to
+       LEFT JOIN leads l ON l.id = sr.lead_id
+       LEFT JOIN projects p ON p.id = sr.project_id
+       ${where}`, params
     );
     const total = parseInt(countRes.rows[0].count);
 

@@ -23,7 +23,7 @@ const normalizeStatus = (status) => COMPLETED_STATUSES.includes(status) ? 'done'
 // ─── GET /api/v1/site-visits ──────────────────────────────────────────────────
 const getAllSiteVisits = async (req, res, next) => {
   try {
-    const { status, lead_id, project_id, assigned_to, from, to,
+    const { status, lead_id, project_id, assigned_to, from, to, search,
             page = 1, per_page = 20 } = req.query;
     const { role, id: callerId } = req.user;
     const offset = (parseInt(page) - 1) * parseInt(per_page);
@@ -42,20 +42,27 @@ const getAllSiteVisits = async (req, res, next) => {
 
     if (status)      { conditions.push(`sv.status = $${idx++}`);      params.push(normalizeStatus(status)); }
     if (lead_id)     { conditions.push(`sv.lead_id = $${idx++}`);     params.push(lead_id); }
-    if (project_id)  { 
+    if (project_id)  {
       const resolvedProjectId = await resolveProjectId(project_id);
-      conditions.push(`sv.project_id = $${idx++}`);  
-      params.push(resolvedProjectId); 
+      conditions.push(`sv.project_id = $${idx++}`);
+      params.push(resolvedProjectId);
     }
     if (assigned_to) { conditions.push(`sv.assigned_to = $${idx++}`); params.push(assigned_to); }
     if (from)        { conditions.push(`sv.visit_date >= $${idx++}`); params.push(from); }
     if (to)          { conditions.push(`sv.visit_date <= $${idx++}`); params.push(to); }
+    if (search) {
+      conditions.push(`(l.name ILIKE $${idx} OR l.phone ILIKE $${idx} OR COALESCE(p.name, sv.project_name_text) ILIKE $${idx})`);
+      params.push(`%${search}%`); idx++;
+    }
 
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
 
     const countRes = await pool.query(
       `SELECT COUNT(*) FROM site_visits sv
-       LEFT JOIN users u ON u.id = sv.assigned_to ${where}`, params
+       LEFT JOIN users u ON u.id = sv.assigned_to
+       LEFT JOIN leads l ON l.id = sv.lead_id
+       LEFT JOIN projects p ON p.id = sv.project_id
+       ${where}`, params
     );
     const total = parseInt(countRes.rows[0].count);
 

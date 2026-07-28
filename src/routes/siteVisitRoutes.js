@@ -42,6 +42,10 @@ const MANAGER = ['super_admin', 'admin', 'sales_manager'];
  *         name: to
  *         schema: { type: string, format: date }
  *       - in: query
+ *         name: search
+ *         schema: { type: string }
+ *         description: Case-insensitive partial match against lead name, lead phone, or project name
+ *       - in: query
  *         name: page
  *         schema: { type: integer, default: 1 }
  *       - in: query
