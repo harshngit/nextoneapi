@@ -405,6 +405,17 @@ const updateRevisitStatus = async (req, res, next) => {
 
     await client.query('COMMIT');
 
+    // Re-fetch with the closing_manager name resolved — the UPDATE above only
+    // has the raw column, and closing_manager was never actually being
+    // returned to the caller at all before this.
+    const updatedRes = await pool.query(
+      `SELECT sr.*, CONCAT(cm.first_name,' ',cm.last_name) AS closing_manager_name
+       FROM site_revisits sr
+       LEFT JOIN users cm ON cm.id = sr.closing_manager
+       WHERE sr.id = $1`,
+      [id]
+    );
+
     // ── Push + in-app notifications ───────────────────────────────────────────
     setImmediate(async () => {
       try {
@@ -452,7 +463,7 @@ const updateRevisitStatus = async (req, res, next) => {
     // NOTE: the "site visit status changed" email (notifySiteVisitStatusChanged)
     // was removed on purpose.
 
-    return sendSuccess(res, `Re-visit marked as ${normalizedStatus}`);
+    return sendSuccess(res, `Re-visit marked as ${normalizedStatus}`, updatedRes.rows[0]);
   } catch (err) {
     await client.query('ROLLBACK'); next(err);
   } finally { client.release(); }

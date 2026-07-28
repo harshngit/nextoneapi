@@ -317,6 +317,17 @@ const updateSiteVisitStatus = async (req, res, next) => {
 
     await client.query('COMMIT');
 
+    // Re-fetch with the closing_manager name resolved — the UPDATE above only
+    // has the raw column, and closing_manager was never actually being
+    // returned to the caller at all before this.
+    const updatedRes = await pool.query(
+      `SELECT sv.*, CONCAT(cm.first_name,' ',cm.last_name) AS closing_manager_name
+       FROM site_visits sv
+       LEFT JOIN users cm ON cm.id = sv.closing_manager
+       WHERE sv.id = $1`,
+      [id]
+    );
+
     // ── Push + in-app notifications ───────────────────────────────────────────
     setImmediate(async () => {
       try {
@@ -362,7 +373,7 @@ const updateSiteVisitStatus = async (req, res, next) => {
       }
     });
 
-    return sendSuccess(res, `Site visit marked as ${normalizedStatus}`);
+    return sendSuccess(res, `Site visit marked as ${normalizedStatus}`, updatedRes.rows[0]);
   } catch (err) {
     await client.query('ROLLBACK'); next(err);
   } finally { client.release(); }
