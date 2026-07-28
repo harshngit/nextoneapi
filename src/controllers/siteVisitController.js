@@ -62,7 +62,8 @@ const getAllSiteVisits = async (req, res, next) => {
     const dataRes = await pool.query(
       `SELECT sv.id, sv.lead_id, sv.visit_date, sv.visit_time,
               sv.status, sv.transport_arranged, sv.notes, sv.created_at,
-              sv.closing_person, sv.closing_manager,
+              COALESCE(sv.closing_person, l.closing_person) AS closing_person,
+              COALESCE(sv.closing_manager, l.closing_manager) AS closing_manager,
               CONCAT(cm.first_name,' ',cm.last_name) AS closing_manager_name,
               l.name AS lead_name, l.phone AS lead_phone,
               COALESCE(p.name, sv.project_name_text) AS project_name, p.city AS project_city,
@@ -72,7 +73,7 @@ const getAllSiteVisits = async (req, res, next) => {
        LEFT JOIN leads l    ON l.id = sv.lead_id
        LEFT JOIN projects p ON p.id = sv.project_id
        LEFT JOIN users u    ON u.id = sv.assigned_to
-       LEFT JOIN users cm   ON cm.id = sv.closing_manager
+       LEFT JOIN users cm   ON cm.id = COALESCE(sv.closing_manager, l.closing_manager)
        LEFT JOIN site_visit_feedback vf ON vf.site_visit_id = sv.id
        ${where}
        ORDER BY sv.visit_date DESC, sv.visit_time DESC
@@ -205,6 +206,8 @@ const getSiteVisitById = async (req, res, next) => {
     const { id } = req.params;
     const result = await pool.query(
       `SELECT sv.*,
+              COALESCE(sv.closing_person, l.closing_person) AS closing_person,
+              COALESCE(sv.closing_manager, l.closing_manager) AS closing_manager,
               l.name AS lead_name, l.phone AS lead_phone, l.email AS lead_email,
               COALESCE(p.name, sv.project_name_text) AS project_name,
               p.address AS project_address, p.city AS project_city,
@@ -215,7 +218,7 @@ const getSiteVisitById = async (req, res, next) => {
        LEFT JOIN leads         l  ON l.id  = sv.lead_id
        LEFT JOIN projects      p  ON p.id  = sv.project_id
        LEFT JOIN users         u  ON u.id  = sv.assigned_to
-       LEFT JOIN users         cm ON cm.id = sv.closing_manager
+       LEFT JOIN users         cm ON cm.id = COALESCE(sv.closing_manager, l.closing_manager)
        LEFT JOIN site_visit_feedback vf ON vf.site_visit_id = sv.id
        WHERE sv.id = $1`,
       [id]
