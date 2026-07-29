@@ -79,7 +79,39 @@ const getPublicProjects = async (req, res, next) => {
       row.payment_plan  = toFullUrl(row.payment_plan);
     });
 
-    return res.json(paginate(dataResult.rows, total, parseInt(page), parseInt(per_page)));
+    // Attach full documents/photos to every project in the page — one query
+    // for all of them (not N+1), then grouped per project the same way the
+    // single-project endpoint groups them.
+    const projectIds = dataResult.rows.map(p => p.id);
+    const docsByProject = {};
+    if (projectIds.length) {
+      const docsResult = await pool.query(
+        `SELECT id, project_id, document_type, file_name, file_path, file_size, mime_type
+         FROM project_documents WHERE project_id = ANY($1::uuid[])
+         ORDER BY uploaded_at ASC`,
+        [projectIds]
+      );
+      for (const doc of docsResult.rows) {
+        doc.file_path = toPublicFileUrl(doc.file_path);
+        if (!docsByProject[doc.project_id]) {
+          docsByProject[doc.project_id] = { photos: [], videos: [], creatives: [], unit_plans: [], payment_plans: [], developer_logo: null };
+        }
+        const grouped = docsByProject[doc.project_id];
+        if (doc.document_type === "photo")              grouped.photos.push(doc);
+        else if (doc.document_type === "video")          grouped.videos.push(doc);
+        else if (doc.document_type === "creative")       grouped.creatives.push(doc);
+        else if (doc.document_type === "unit_plan")      grouped.unit_plans.push(doc);
+        else if (doc.document_type === "payment_plan")   grouped.payment_plans.push(doc);
+        else if (doc.document_type === "developer_logo") grouped.developer_logo = doc;
+      }
+    }
+
+    const rows = dataResult.rows.map(p => ({
+      ...p,
+      ...(docsByProject[p.id] || { photos: [], videos: [], creatives: [], unit_plans: [], payment_plans: [], developer_logo: null }),
+    }));
+
+    return res.json(paginate(rows, total, parseInt(page), parseInt(per_page)));
   } catch (err) {
     next(err);
   }

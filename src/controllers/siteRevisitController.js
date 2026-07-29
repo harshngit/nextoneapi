@@ -54,7 +54,7 @@ const getAllRevisits = async (req, res, next) => {
     if (from)              { conditions.push(`sr.visit_date >= $${idx++}`);      params.push(from); }
     if (to)                { conditions.push(`sr.visit_date <= $${idx++}`);      params.push(to); }
     if (search) {
-      conditions.push(`(l.name ILIKE $${idx} OR l.phone ILIKE $${idx} OR COALESCE(p.name, sr.project_name_text) ILIKE $${idx})`);
+      conditions.push(`(l.name ILIKE $${idx} OR l.phone ILIKE $${idx} OR COALESCE(p.name, sr.project_name_text) ILIKE $${idx} OR CONCAT(u.first_name,' ',u.last_name) ILIKE $${idx})`);
       params.push(`%${search}%`); idx++;
     }
 

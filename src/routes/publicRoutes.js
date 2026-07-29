@@ -19,7 +19,11 @@ const ctrl = require("../controllers/publicController");
  * /api/v1/public/projects:
  *   get:
  *     summary: List projects for the public website (PUBLIC — no auth)
- *     description: Returns marketing-safe project fields only. Deactivated (inactive) projects are excluded.
+ *     description: >
+ *       Returns marketing-safe project fields plus grouped media for each
+ *       project (photos, videos, creatives, unit_plans, payment_plans,
+ *       developer_logo) — same shape as GET /public/projects/{id}.
+ *       Deactivated (inactive) projects are excluded.
  *     tags: [Public Website]
  *     parameters:
  *       - in: query

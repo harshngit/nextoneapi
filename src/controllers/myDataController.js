@@ -278,7 +278,7 @@ const getMyLeads = async (req, res, next) => {
 const getMySiteVisits = async (req, res, next) => {
   try {
     const userId = req.user.id;
-    const { status, from, to, upcoming } = req.query;
+    const { status, from, to, upcoming, search } = req.query;
     const { page, per_page } = parsePage(req.query);
     const offset = (page - 1) * per_page;
 
@@ -293,11 +293,20 @@ const getMySiteVisits = async (req, res, next) => {
       conditions.push(`sv.visit_date >= CURRENT_DATE`);
       conditions.push(`sv.status IN ('scheduled','rescheduled')`);
     }
+    if (search) {
+      conditions.push(`(l.name ILIKE $${idx} OR l.phone ILIKE $${idx} OR COALESCE(p.name, '') ILIKE $${idx})`);
+      params.push(`%${search}%`); idx++;
+    }
 
     const where = `WHERE ${conditions.join(" AND ")}`;
 
     const [countResult, dataResult] = await Promise.all([
-      pool.query(`SELECT COUNT(*) FROM site_visits sv ${where}`, params),
+      pool.query(
+        `SELECT COUNT(*) FROM site_visits sv
+         JOIN leads    l ON l.id = sv.lead_id
+         JOIN projects p ON p.id = sv.project_id
+         ${where}`, params
+      ),
       pool.query(
         `SELECT
            sv.id, sv.visit_date, sv.visit_time, sv.status,
@@ -541,7 +550,7 @@ const getMyAttendance = async (req, res, next) => {
 const getMyRevisits = async (req, res, next) => {
   try {
     const userId = req.user.id;
-    const { status, from, to, upcoming } = req.query;
+    const { status, from, to, upcoming, search } = req.query;
     const { page, per_page } = parsePage(req.query);
     const offset = (page - 1) * per_page;
 
@@ -556,11 +565,20 @@ const getMyRevisits = async (req, res, next) => {
       conditions.push(`sr.visit_date >= CURRENT_DATE`);
       conditions.push(`sr.status IN ('scheduled','rescheduled')`);
     }
+    if (search) {
+      conditions.push(`(l.name ILIKE $${idx} OR l.phone ILIKE $${idx} OR COALESCE(p.name, '') ILIKE $${idx})`);
+      params.push(`%${search}%`); idx++;
+    }
 
     const where = `WHERE ${conditions.join(" AND ")}`;
 
     const [countResult, dataResult] = await Promise.all([
-      pool.query(`SELECT COUNT(*) FROM site_revisits sr ${where}`, params),
+      pool.query(
+        `SELECT COUNT(*) FROM site_revisits sr
+         JOIN leads    l ON l.id = sr.lead_id
+         JOIN projects p ON p.id = sr.project_id
+         ${where}`, params
+      ),
       pool.query(
         `SELECT
            sr.id, sr.visit_date, sr.visit_time, sr.status,
