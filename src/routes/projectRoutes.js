@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const projectController = require("../controllers/projectController");
 const { authenticate, authorize }  = require("../middleware/auth");
+const { checkPermission }          = require("../middleware/permissions");
 const { uploadProjectDocuments }   = require("../middleware/uploadMiddleware");
 
 /**
@@ -281,7 +282,7 @@ router.get("/", authenticate, projectController.getAllProjects);
 router.post(
   "/",
   authenticate,
-  authorize("super_admin", "admin"),
+  checkPermission("projects", "create"),
   projectController.createProject
 );
 
