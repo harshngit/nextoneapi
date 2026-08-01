@@ -96,7 +96,8 @@ router.get("/", authenticate, projectController.getAllProjects);
  *     summary: Create a new project (JSON)
  *     description: >
  *       Adds a new real estate project to the system.
- *       Only Admin and Super Admin can create projects.
+ *       Requires the "create" permission on Project Management (Access Control) —
+ *       Super Admin always has it; other roles depend on their configured permissions.
  *       This version takes a JSON body with optional unit_plans, creatives, payment_plans, and videos arrays
  *       containing file information from the upload API.
  *     tags: [Project Management]
@@ -349,7 +350,7 @@ router.get("/:id", authenticate, projectController.getProjectById);
  *     summary: Update project details
  *     description: >
  *       Updates any field of an existing project.
- *       Only Admin and Super Admin can update projects.
+ *       Requires the "edit" permission on Project Management (Access Control).
  *     tags: [Project Management]
  *     security:
  *       - BearerAuth: []
@@ -534,7 +535,7 @@ router.get("/:id", authenticate, projectController.getProjectById);
  *       404:
  *         description: Project not found
  */
-router.put("/:id", authenticate, authorize("super_admin", "admin"), projectController.updateProject);
+router.put("/:id", authenticate, checkPermission("projects", "edit"), projectController.updateProject);
 
 /**
  * @swagger
@@ -544,7 +545,7 @@ router.put("/:id", authenticate, authorize("super_admin", "admin"), projectContr
  *     description: >
  *       Soft-deactivates a project by setting its status to 'inactive'.
  *       Existing leads mapped to this project are NOT affected.
- *       Only Admin and Super Admin can deactivate projects.
+ *       Requires the "delete" permission on Project Management (Access Control).
  *     tags: [Project Management]
  *     security:
  *       - BearerAuth: []
@@ -564,7 +565,7 @@ router.put("/:id", authenticate, authorize("super_admin", "admin"), projectContr
  *       404:
  *         description: Project not found
  */
-router.delete("/:id", authenticate, authorize("super_admin", "admin"), projectController.deleteProject);
+router.delete("/:id", authenticate, checkPermission("projects", "delete"), projectController.deleteProject);
 
 /**
  * @swagger
@@ -609,7 +610,7 @@ router.delete("/:id", authenticate, authorize("super_admin", "admin"), projectCo
  *       400:
  *         description: Invalid status value
  */
-router.patch("/:id/status", authenticate, authorize("super_admin", "admin"), projectController.updateProjectStatus);
+router.patch("/:id/status", authenticate, checkPermission("projects", "edit"), projectController.updateProjectStatus);
 
 /**
  * @swagger
@@ -678,6 +679,7 @@ router.get("/:id/leads", authenticate, authorize("super_admin", "admin", "sales_
  *         - All unit plans and creatives as a ZIP attachment (organised into Unit Plans / Creatives folders)
  *         - Optional personalised message from the sender
  *       The ZIP is built on-the-fly — no temp files stored.
+ *       Requires the "export" permission on Project Management (Access Control).
  *     tags: [Projects]
  *     security:
  *       - BearerAuth: []
@@ -738,7 +740,7 @@ router.get("/:id/leads", authenticate, authorize("super_admin", "admin", "sales_
  *         description: Project not found
  */
 const shareProjectController = require("../controllers/shareProjectController").shareProject;
-router.post("/:id/share", authenticate, shareProjectController);
+router.post("/:id/share", authenticate, checkPermission("projects", "export"), shareProjectController);
 
 /**
  * @swagger
@@ -749,6 +751,7 @@ router.post("/:id/share", authenticate, shareProjectController);
  *       Sends a specific project document (unit plan, creative, payment plan, or video)
  *       to a WhatsApp number as a document message.
  *       Requires BACKEND_URL env var to construct the public file link.
+ *       Requires the "export" permission on Project Management (Access Control).
  *     tags: [Projects]
  *     security:
  *       - BearerAuth: []
@@ -805,6 +808,6 @@ router.post("/:id/share", authenticate, shareProjectController);
  *         description: BACKEND_URL not configured
  */
 const shareProjectWhatsappController = require("../controllers/shareProjectController").shareProjectWhatsapp;
-router.post("/:id/share-whatsapp", authenticate, shareProjectWhatsappController);
+router.post("/:id/share-whatsapp", authenticate, checkPermission("projects", "export"), shareProjectWhatsappController);
 
 module.exports = router;
