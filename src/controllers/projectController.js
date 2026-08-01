@@ -375,6 +375,21 @@ const updateProject = async (req, res, next) => {
     if (videos && Array.isArray(videos)) await processDocuments(videos, "video");
     if (photos && Array.isArray(photos)) await processDocuments(photos, "photo");
     if (developer_logo) {
+      // developer_logo is a singleton (getProjectById/getAllProjects only ever
+      // return the first developer_logo document) — without clearing the old
+      // one first, a project edit just appends another row, and the "new"
+      // logo can end up losing to the old one instead of replacing it.
+      const oldLogos = await client.query(
+        `SELECT file_path FROM project_documents WHERE project_id = $1 AND document_type = 'developer_logo'`,
+        [id]
+      );
+      await client.query(
+        `DELETE FROM project_documents WHERE project_id = $1 AND document_type = 'developer_logo'`,
+        [id]
+      );
+      for (const old of oldLogos.rows) {
+        if (old.file_path && fs.existsSync(old.file_path)) fs.unlinkSync(old.file_path);
+      }
       await processDocuments(Array.isArray(developer_logo) ? developer_logo : [developer_logo], "developer_logo");
     }
 

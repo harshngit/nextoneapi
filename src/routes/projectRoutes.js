@@ -493,6 +493,11 @@ router.get("/:id", authenticate, projectController.getProjectById);
  *             video_url: "https://youtube.com/watch?v=abc"
  *             payment_plan_url: "/uploads/projects/payment_plan.pdf"
  *             home_loan_info: "Available through HDFC, SBI, ICICI"
+ *             developer_logo:
+ *               file_name: "lodha_logo.png"
+ *               file_path: "/uploads/projects/lodha_logo.png"
+ *               file_size: 51200
+ *               mime_type: "image/png"
  *             unit_plans:
  *               - file_name: "3bhk_floorplan.pdf"
  *                 file_path: "/uploads/projects/3bhk_floorplan.pdf"
