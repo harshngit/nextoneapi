@@ -28,8 +28,11 @@ const ADMIN_ROLES = ['super_admin', 'admin']
 const fmtDate = (d) =>
   d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—'
 
+// timeZone pinned to IST — without it this reads the server's local
+// timezone (UTC), which silently shifts every check-in/check-out time in
+// the export by ~5:30, e.g. 10:54 AM IST rendering as 05:24 AM.
 const fmtTime = (ts) =>
-  ts ? new Date(ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true }) : '—'
+  ts ? new Date(ts).toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true }) : '—'
 
 const fmtDateTime = (ts) =>
   ts ? `${fmtDate(ts)} ${fmtTime(ts)}` : '—'
