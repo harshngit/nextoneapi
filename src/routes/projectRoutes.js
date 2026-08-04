@@ -39,8 +39,10 @@ const { uploadProjectDocuments }   = require("../middleware/uploadMiddleware");
  *         schema:
  *           type: string
  *         description: >
- *           Case-insensitive partial match. Accepts a single city, a
- *           comma-separated list ("Mumbai,Pune"), or repeated params
+ *           Case-insensitive partial match against EITHER city or locality —
+ *           e.g. city=Andheri West matches projects whose locality is
+ *           "Andheri West" even if their city is "Mumbai". Accepts a single
+ *           value, a comma-separated list ("Mumbai,Pune"), or repeated params
  *           (?city=Mumbai&city=Pune) for a multi-select filter.
  *         example: Mumbai
  *       - in: query

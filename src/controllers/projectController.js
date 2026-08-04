@@ -31,7 +31,9 @@ const getAllProjects = async (req, res, next) => {
     if (status) { conditions.push(`p.status = $${idx++}`);          params.push(status); }
     else { conditions.push(`p.status != 'inactive'`); }
     if (city) {
-      // Accepts a single city ("Mumbai"), a comma-separated list
+      // Matches against city OR locality — lets the same filter find a
+      // project by locality name too (e.g. "Andheri West"), not just city.
+      // Accepts a single value ("Mumbai"), a comma-separated list
       // ("Mumbai,Pune"), or an array from a multi-select filter
       // (?city=Mumbai&city=Pune, which Express parses as an array —
       // previously this fell through to `${city}` stringifying to
@@ -39,11 +41,12 @@ const getAllProjects = async (req, res, next) => {
       const cities = (Array.isArray(city) ? city : String(city).split(","))
         .map(c => c.trim()).filter(Boolean);
       if (cities.length === 1) {
-        conditions.push(`p.city ILIKE $${idx++}`);
-        params.push(`%${cities[0]}%`);
+        conditions.push(`(p.city ILIKE $${idx} OR p.locality ILIKE $${idx})`);
+        params.push(`%${cities[0]}%`); idx++;
       } else if (cities.length > 1) {
-        conditions.push(`p.city ILIKE ANY($${idx++}::text[])`);
-        params.push(cities.map(c => `%${c}%`));
+        const likePatterns = cities.map(c => `%${c}%`);
+        conditions.push(`(p.city ILIKE ANY($${idx}::text[]) OR p.locality ILIKE ANY($${idx}::text[]))`);
+        params.push(likePatterns); idx++;
       }
     }
     if (search) { conditions.push(`(p.name ILIKE $${idx} OR p.developer ILIKE $${idx})`); params.push(`%${search}%`); idx++; }
