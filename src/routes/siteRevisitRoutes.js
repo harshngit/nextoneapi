@@ -137,6 +137,7 @@ router.get('/', authenticate, ctrl.getAllRevisits);
  *                 default: false
  *           example:
  *             original_visit_id: "sv-uuid-001"
+ *             project_id: "Skyline Heights"
  *             visit_date: "2026-06-10"
  *             visit_time: "11:00"
  *             assigned_to: "user-uuid-001"
@@ -229,9 +230,12 @@ router.post('/', authenticate, ctrl.createRevisit);
  *                 type: string
  *           example:
  *             lead_id: "lead-uuid-001"
+ *             project_id: "Skyline Heights"
  *             visit_date: "2026-08-10"
  *             visit_time: "15:30"
+ *             assigned_to: "user-uuid-001"
  *             reason: "Client wants to revisit before finalizing"
+ *             transport_arranged: true
  *     responses:
  *       201:
  *         description: Lead converted to re-visit successfully
