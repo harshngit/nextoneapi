@@ -99,7 +99,7 @@ const getAllRevisits = async (req, res, next) => {
 const createRevisit = async (req, res, next) => {
   const client = await pool.connect();
   try {
-    const { original_visit_id, visit_date, visit_time, assigned_to,
+    const { original_visit_id, project_id, visit_date, visit_time, assigned_to,
             notes, reason, transport_arranged } = req.body;
 
     if (!original_visit_id || !visit_date || !visit_time) {
@@ -136,19 +136,37 @@ const createRevisit = async (req, res, next) => {
       }
     }
 
+    // Project defaults to whatever the original visit was for — pass
+    // project_id to override it. Accepts a project UUID, an existing
+    // project's name, or any free-text name that doesn't exist yet (stored
+    // as project_name_text instead of being rejected).
+    let resolvedProjectId = orig.project_id;
+    let resolvedProjectNameText = orig.project_name_text;
+    let resolvedProjectName = orig.project_name;
+    if (project_id) {
+      try {
+        resolvedProjectId = await resolveProjectId(project_id);
+        resolvedProjectNameText = null;
+        const p = await pool.query('SELECT name FROM projects WHERE id = $1', [resolvedProjectId]);
+        resolvedProjectName = p.rows[0]?.name || null;
+      } catch (e) {
+        resolvedProjectId = null;
+        resolvedProjectNameText = String(project_id).trim();
+        resolvedProjectName = null;
+      }
+    }
+
     await client.query('BEGIN');
 
-    // 1. Create the re-visit — inherits project_id/project_name_text from the
-    // original visit as-is. The original visit may itself have a NULL
-    // project_id with a free-text project_name_text (unmatched project name),
-    // which is why project_id here is nullable too (migration 058).
+    // 1. Create the re-visit — project_id/project_name_text is nullable
+    // (migration 058) since the resolved project may be free text only.
     const result = await client.query(
       `INSERT INTO site_revisits
          (original_visit_id, lead_id, project_id, project_name_text, visit_date, visit_time,
           assigned_to, status, transport_arranged, reason, notes, created_by)
        VALUES ($1,$2,$3,$4,$5,$6,$7,'scheduled',$8,$9,$10,$11)
        RETURNING *`,
-      [original_visit_id, orig.lead_id, orig.project_id, orig.project_name_text, visit_date, visit_time,
+      [original_visit_id, orig.lead_id, resolvedProjectId, resolvedProjectNameText, visit_date, visit_time,
        execId, transport_arranged || false, reason || null, notes || null, req.user.id]
     );
 
@@ -173,7 +191,7 @@ const createRevisit = async (req, res, next) => {
     setImmediate(async () => {
       try {
         const revisitId   = result.rows[0].id;
-        const projectName = orig.project_name || orig.project_name_text || 'project';
+        const projectName = resolvedProjectName || resolvedProjectNameText || 'project';
 
         if (execId) {
           await createNotification(execId, {
@@ -222,7 +240,7 @@ const createRevisit = async (req, res, next) => {
         await whatsappService.sendRevisitConfirmation({
           leadName:    orig.lead_name,
           leadPhone:   orig.lead_phone,
-          projectName: orig.project_name || orig.project_name_text || 'the project',
+          projectName: resolvedProjectName || resolvedProjectNameText || 'the project',
           visitDate:   visit_date,
           visitTime:   visit_time,
         });
@@ -234,7 +252,10 @@ const createRevisit = async (req, res, next) => {
       }
     });
 
-    return sendSuccess(res, 'Re-visit scheduled successfully', result.rows[0], 201);
+    return sendSuccess(res, 'Re-visit scheduled successfully', {
+      ...result.rows[0],
+      project: { id: resolvedProjectId, name: resolvedProjectName || resolvedProjectNameText || null },
+    }, 201);
   } catch (err) {
     await client.query('ROLLBACK'); next(err);
   } finally { client.release(); }
@@ -253,7 +274,7 @@ const createRevisit = async (req, res, next) => {
 const convertLeadToRevisit = async (req, res, next) => {
   const client = await pool.connect();
   try {
-    const { lead_id, project_id, project_name, visit_date, visit_time,
+    const { lead_id, project_id, visit_date, visit_time,
             assigned_to, notes, reason, transport_arranged } = req.body;
 
     if (!lead_id || !visit_date || !visit_time) {
@@ -273,8 +294,10 @@ const convertLeadToRevisit = async (req, res, next) => {
     if (!leadRes.rows.length) return next(new AppError('Lead not found', 404));
     const lead = leadRes.rows[0];
 
-    // Resolve project — explicit override, else inherit from the lead's own
-    // project (which may itself be a free-text name with no matching row).
+    // Project defaults to the lead's own project — pass project_id to
+    // override it. Accepts a project UUID, an existing project's name, or
+    // any free-text name that doesn't exist yet (stored as project_name_text
+    // instead of being rejected) — one field handles all three cases.
     let resolvedProjectId = lead.project_id;
     let resolvedProjectNameText = lead.project_name_text;
     let resolvedProjectName = lead.project_name;
@@ -289,10 +312,6 @@ const convertLeadToRevisit = async (req, res, next) => {
         resolvedProjectNameText = String(project_id).trim();
         resolvedProjectName = null;
       }
-    } else if (project_name) {
-      resolvedProjectId = null;
-      resolvedProjectNameText = String(project_name).trim();
-      resolvedProjectName = null;
     }
 
     const execId = assigned_to || lead.assigned_to;
@@ -393,7 +412,10 @@ const convertLeadToRevisit = async (req, res, next) => {
       }
     });
 
-    return sendSuccess(res, 'Lead converted to re-visit successfully', result.rows[0], 201);
+    return sendSuccess(res, 'Lead converted to re-visit successfully', {
+      ...result.rows[0],
+      project: { id: resolvedProjectId, name: resolvedProjectName || resolvedProjectNameText || null },
+    }, 201);
   } catch (err) {
     await client.query('ROLLBACK'); next(err);
   } finally { client.release(); }

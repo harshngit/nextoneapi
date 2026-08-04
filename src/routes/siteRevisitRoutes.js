@@ -88,7 +88,8 @@ router.get('/', authenticate, ctrl.getAllRevisits);
  *     summary: Schedule a re-visit linked to an original site visit
  *     description: >
  *       Creates a follow-up visit for a lead.
- *       The lead_id and project_id are inherited from the original visit.
+ *       lead_id and project_id default to the original visit's own values —
+ *       pass project_id to override the project for this re-visit specifically.
  *       Use this when the client wants to see the property again before deciding.
  *     tags: [Site Revisits]
  *     security:
@@ -105,6 +106,14 @@ router.get('/', authenticate, ctrl.getAllRevisits);
  *                 type: string
  *                 format: uuid
  *                 description: ID of the original site visit this re-visit is linked to
+ *               project_id:
+ *                 type: string
+ *                 description: >
+ *                   Optional override for the project on this re-visit. Accepts a
+ *                   project UUID, an existing project's name, or any free-text
+ *                   name that doesn't exist yet (stored as-is instead of being
+ *                   rejected). Defaults to the original visit's own project.
+ *                 example: "Skyline Heights"
  *               visit_date:
  *                 type: string
  *                 format: date
@@ -151,6 +160,7 @@ router.get('/', authenticate, ctrl.getAllRevisits);
  *                 visit_time: "11:00"
  *                 status: "scheduled"
  *                 transport_arranged: true
+ *                 project: { id: "proj-uuid-001", name: "Skyline Heights" }
  *       400:
  *         description: Missing required fields
  *       404:
@@ -172,8 +182,8 @@ router.post('/', authenticate, ctrl.createRevisit);
  *       to satisfy the database's original_visit_id link, but that's
  *       transparent to the caller — the resulting re-visit behaves exactly
  *       like any other and shows up in GET /site-revisits normally.
- *       Project defaults to the lead's own project unless project_id or
- *       project_name is passed to override it.
+ *       Project defaults to the lead's own project unless project_id is
+ *       passed to override it.
  *     tags: [Site Revisits]
  *     security:
  *       - BearerAuth: []
@@ -191,10 +201,13 @@ router.post('/', authenticate, ctrl.createRevisit);
  *                 example: "lead-uuid-001"
  *               project_id:
  *                 type: string
- *                 description: Optional override — project UUID or name. Defaults to the lead's own project.
- *               project_name:
- *                 type: string
- *                 description: Optional override — free-text project name (used if project_id not given)
+ *                 description: >
+ *                   Optional override for the project. Accepts a project UUID,
+ *                   an existing project's name, or any free-text name that
+ *                   doesn't exist yet (stored as-is instead of being
+ *                   rejected) — one field handles all three cases. Defaults
+ *                   to the lead's own project.
+ *                 example: "Skyline Heights"
  *               visit_date:
  *                 type: string
  *                 format: date
@@ -234,6 +247,7 @@ router.post('/', authenticate, ctrl.createRevisit);
  *                 visit_date: "2026-08-10"
  *                 visit_time: "15:30"
  *                 status: "scheduled"
+ *                 project: { id: "proj-uuid-001", name: "Skyline Heights" }
  *       400:
  *         description: lead_id, visit_date, or visit_time missing
  *       404:
