@@ -240,6 +240,165 @@ const createRevisit = async (req, res, next) => {
   } finally { client.release(); }
 };
 
+// ─── POST /api/v1/site-revisits/from-lead ─────────────────────────────────────
+// Directly creates a re-visit for an existing lead — for leads whose first
+// site visit either isn't on record in this system or the caller doesn't
+// have a site_visit_id for. Normal createRevisit requires an existing
+// original_visit_id (the DB's site_revisits.original_visit_id FK is NOT
+// NULL); this endpoint satisfies that internally by auto-creating a minimal
+// placeholder site_visits row (immediately marked 'rescheduled', same state
+// createRevisit always leaves the real original visit in) so the caller only
+// ever has to deal with lead_id. The resulting re-visit shows up in
+// GET /site-revisits exactly like any other.
+const convertLeadToRevisit = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const { lead_id, project_id, project_name, visit_date, visit_time,
+            assigned_to, notes, reason, transport_arranged } = req.body;
+
+    if (!lead_id || !visit_date || !visit_time) {
+      return next(new AppError('lead_id, visit_date, and visit_time are required', 400));
+    }
+
+    const leadRes = await pool.query(
+      `SELECT l.*, p.name AS project_name,
+              CONCAT(u.first_name,' ',u.last_name) AS assigned_name,
+              u.email AS assigned_email
+       FROM leads l
+       LEFT JOIN projects p ON p.id = l.project_id
+       LEFT JOIN users    u ON u.id = l.assigned_to
+       WHERE l.id = $1 AND l.is_archived = false`,
+      [lead_id]
+    );
+    if (!leadRes.rows.length) return next(new AppError('Lead not found', 404));
+    const lead = leadRes.rows[0];
+
+    // Resolve project — explicit override, else inherit from the lead's own
+    // project (which may itself be a free-text name with no matching row).
+    let resolvedProjectId = lead.project_id;
+    let resolvedProjectNameText = lead.project_name_text;
+    let resolvedProjectName = lead.project_name;
+    if (project_id) {
+      try {
+        resolvedProjectId = await resolveProjectId(project_id);
+        resolvedProjectNameText = null;
+        const p = await pool.query('SELECT name FROM projects WHERE id = $1', [resolvedProjectId]);
+        resolvedProjectName = p.rows[0]?.name || null;
+      } catch (e) {
+        resolvedProjectId = null;
+        resolvedProjectNameText = String(project_id).trim();
+        resolvedProjectName = null;
+      }
+    } else if (project_name) {
+      resolvedProjectId = null;
+      resolvedProjectNameText = String(project_name).trim();
+      resolvedProjectName = null;
+    }
+
+    const execId = assigned_to || lead.assigned_to;
+
+    await client.query('BEGIN');
+
+    // 1. Placeholder "original" visit — exists only to satisfy the FK.
+    const origVisitResult = await client.query(
+      `INSERT INTO site_visits
+         (lead_id, project_id, project_name_text, visit_date, visit_time, assigned_to,
+          status, transport_arranged, notes, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,'rescheduled',$7,$8,$9)
+       RETURNING *`,
+      [lead_id, resolvedProjectId, resolvedProjectNameText, visit_date, visit_time, execId,
+       transport_arranged || false, 'Auto-created — lead converted directly to a re-visit', req.user.id]
+    );
+
+    // 2. The actual re-visit
+    const result = await client.query(
+      `INSERT INTO site_revisits
+         (original_visit_id, lead_id, project_id, project_name_text, visit_date, visit_time,
+          assigned_to, status, transport_arranged, reason, notes, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'scheduled',$8,$9,$10,$11)
+       RETURNING *`,
+      [origVisitResult.rows[0].id, lead_id, resolvedProjectId, resolvedProjectNameText, visit_date, visit_time,
+       execId, transport_arranged || false, reason || null, notes || null, req.user.id]
+    );
+
+    // 3. Log activity on the lead
+    await client.query(
+      `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1,'note',$2,$3)`,
+      [lead_id,
+       `Lead converted directly to a re-visit for ${visit_date} at ${visit_time}${reason ? ` — ${reason}` : ''}`,
+       req.user.id]
+    );
+
+    await client.query('COMMIT');
+
+    // ── Push + in-app notifications ───────────────────────────────────────────
+    setImmediate(async () => {
+      try {
+        const revisitId   = result.rows[0].id;
+        const projectName = resolvedProjectName || resolvedProjectNameText || 'project';
+
+        if (execId) {
+          await createNotification(execId, {
+            type:           'visit_scheduled',
+            title:          'Re-visit Scheduled',
+            message:        `Re-visit for "${lead.name}" on ${visit_date} at ${visit_time}`,
+            reference_id:   revisitId,
+            reference_type: 'site_revisit',
+            metadata:       { lead_id, visit_date, visit_time, project: projectName },
+          });
+          const mgrRow = await pool.query(
+            `SELECT manager_id FROM users WHERE id = $1 AND manager_id IS NOT NULL`, [execId]
+          );
+          if (mgrRow.rows.length) {
+            await createNotification(mgrRow.rows[0].manager_id, {
+              type:           'visit_scheduled',
+              title:          'Re-visit Scheduled for Your Team',
+              message:        `Re-visit for "${lead.name}" on ${visit_date} assigned to your executive`,
+              reference_id:   revisitId,
+              reference_type: 'site_revisit',
+              metadata:       { lead_id, visit_date, project: projectName },
+            });
+          }
+        }
+        await notifyAdmins({
+          type:           'visit_scheduled',
+          title:          'Re-visit Scheduled',
+          message:        `Re-visit for "${lead.name}" on ${visit_date} at ${visit_time}`,
+          reference_id:   revisitId,
+          reference_type: 'site_revisit',
+          metadata:       { lead_id, visit_date, project: projectName },
+        });
+      } catch (notifErr) {
+        console.error('[Notification] convertLeadToRevisit failed:', notifErr.message);
+      }
+    });
+
+    // ── 📱 WhatsApp — re-visit confirmation to the client ─────────────────────
+    setImmediate(async () => {
+      try {
+        const revisitId = result.rows[0].id;
+        if (!lead.phone) return;
+        await whatsappService.sendRevisitConfirmation({
+          leadName:    lead.name,
+          leadPhone:   lead.phone,
+          projectName: resolvedProjectName || resolvedProjectNameText || 'the project',
+          visitDate:   visit_date,
+          visitTime:   visit_time,
+        });
+        await pool.query(
+          `UPDATE site_revisits SET whatsapp_confirmation_sent = true WHERE id = $1`, [revisitId]
+        );
+      } catch (waErr) {
+        console.error('[WhatsApp] convertLeadToRevisit confirmation failed:', waErr.message);
+      }
+    });
+
+    return sendSuccess(res, 'Lead converted to re-visit successfully', result.rows[0], 201);
+  } catch (err) {
+    await client.query('ROLLBACK'); next(err);
+  } finally { client.release(); }
+};
+
 // ─── GET /api/v1/site-revisits/:id ───────────────────────────────────────────
 const getRevisitById = async (req, res, next) => {
   try {
@@ -581,7 +740,7 @@ const getRevisitsByOriginalVisit = async (req, res, next) => {
 };
 
 module.exports = {
-  getAllRevisits, createRevisit, getRevisitById, updateRevisit,
+  getAllRevisits, createRevisit, convertLeadToRevisit, getRevisitById, updateRevisit,
   updateRevisitStatus, deleteRevisit, submitRevisitFeedback,
   getRevisitsByOriginalVisit,
 };

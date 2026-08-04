@@ -160,6 +160,89 @@ router.post('/', authenticate, ctrl.createRevisit);
 
 /**
  * @swagger
+ * /api/v1/site-revisits/from-lead:
+ *   post:
+ *     summary: Directly convert a lead into a re-visit (no existing site visit needed)
+ *     description: >
+ *       Creates a re-visit straight from a lead_id — for leads whose first
+ *       site visit isn't on record in this system, or where you simply don't
+ *       have a site_visit_id to reference. The normal POST /site-revisits
+ *       endpoint requires an existing original_visit_id; this one only needs
+ *       lead_id. Internally it still creates a minimal placeholder site visit
+ *       to satisfy the database's original_visit_id link, but that's
+ *       transparent to the caller — the resulting re-visit behaves exactly
+ *       like any other and shows up in GET /site-revisits normally.
+ *       Project defaults to the lead's own project unless project_id or
+ *       project_name is passed to override it.
+ *     tags: [Site Revisits]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [lead_id, visit_date, visit_time]
+ *             properties:
+ *               lead_id:
+ *                 type: string
+ *                 format: uuid
+ *                 example: "lead-uuid-001"
+ *               project_id:
+ *                 type: string
+ *                 description: Optional override — project UUID or name. Defaults to the lead's own project.
+ *               project_name:
+ *                 type: string
+ *                 description: Optional override — free-text project name (used if project_id not given)
+ *               visit_date:
+ *                 type: string
+ *                 format: date
+ *                 example: "2026-08-10"
+ *               visit_time:
+ *                 type: string
+ *                 example: "15:30"
+ *               assigned_to:
+ *                 type: string
+ *                 format: uuid
+ *                 description: Defaults to the lead's currently assigned user
+ *               transport_arranged:
+ *                 type: boolean
+ *                 default: false
+ *               reason:
+ *                 type: string
+ *                 example: "Client wants to revisit before finalizing"
+ *               notes:
+ *                 type: string
+ *           example:
+ *             lead_id: "lead-uuid-001"
+ *             visit_date: "2026-08-10"
+ *             visit_time: "15:30"
+ *             reason: "Client wants to revisit before finalizing"
+ *     responses:
+ *       201:
+ *         description: Lead converted to re-visit successfully
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Lead converted to re-visit successfully"
+ *               data:
+ *                 id: "rv-uuid-010"
+ *                 lead_id: "lead-uuid-001"
+ *                 original_visit_id: "sv-uuid-auto-001"
+ *                 visit_date: "2026-08-10"
+ *                 visit_time: "15:30"
+ *                 status: "scheduled"
+ *       400:
+ *         description: lead_id, visit_date, or visit_time missing
+ *       404:
+ *         description: Lead not found
+ */
+router.post('/from-lead', authenticate, ctrl.convertLeadToRevisit);
+
+/**
+ * @swagger
  * /api/v1/site-revisits/original/{visitId}:
  *   get:
  *     summary: Get all re-visits for a specific original site visit
