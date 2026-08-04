@@ -244,14 +244,17 @@ const getMyLeads = async (req, res, next) => {
            l.status, l.source, l.budget, l.location_preference, l.configuration,
            l.callback_time, l.next_followup_time,
            l.payment_proof_url, l.payment_proof_amount,
+           l.closing_manager, l.closing_person,
            l.project_id, l.project_name_text, l.is_converted, l.converted_at,
            l.created_at, l.updated_at,
            COALESCE(p.name, l.project_name_text) AS project_name,
            p.city  AS project_city,
+           CONCAT(cm.first_name, ' ', cm.last_name) AS closing_manager_name,
            (SELECT COUNT(*) FROM call_recordings cr WHERE cr.lead_id = l.id) AS call_recordings_count,
            (SELECT COUNT(*) FROM lead_photos ph WHERE ph.lead_id = l.id)    AS photos_count
          FROM leads l
          LEFT JOIN projects p ON p.id = l.project_id
+         LEFT JOIN users cm ON cm.id = l.closing_manager
          ${where}
          ORDER BY l.created_at DESC
          LIMIT $${idx++} OFFSET $${idx++}`,
