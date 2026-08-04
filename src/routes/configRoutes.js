@@ -155,6 +155,148 @@ router.put("/lead-sources/:id", authenticate, authorize(...ADMIN), ctrl.updateLe
 router.delete("/lead-sources/:id", authenticate, authorize(...ADMIN), ctrl.deleteLeadSource);
 
 // ═════════════════════════════════════════════════════════════════════════════
+// LEAD CONFIGURATIONS (1RK, 1BHK, 2BHK, ...)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/**
+ * @swagger
+ * /api/v1/config/lead-configurations:
+ *   get:
+ *     summary: List all lead configurations
+ *     description: >
+ *       Returns all configuration types (1RK, 1BHK, 2BHK, etc). Used to
+ *       populate the Configuration dropdown on the Lead form.
+ *       All authenticated users can call this.
+ *     tags: [Config]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Lead configurations list
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 - id: "uuid-001"
+ *                   name: "1BHK"
+ *                   is_active: true
+ *                   created_at: "2026-08-01T00:00:00Z"
+ *                 - id: "uuid-002"
+ *                   name: "2BHK"
+ *                   is_active: true
+ */
+router.get("/lead-configurations", authenticate, ctrl.getLeadConfigurations);
+
+/**
+ * @swagger
+ * /api/v1/config/lead-configurations:
+ *   post:
+ *     summary: Add a new lead configuration
+ *     description: >
+ *       Creates a new entry in the configuration dropdown. Any authenticated
+ *       user (not just admins) can add one — e.g. a sales exec entering a new
+ *       configuration type that isn't in the list yet.
+ *     tags: [Config]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name]
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: Display name of the configuration
+ *                 example: "5BHK"
+ *           example:
+ *             name: "5BHK"
+ *     responses:
+ *       201:
+ *         description: Configuration created
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Configuration added successfully"
+ *               data:
+ *                 id: "uuid-010"
+ *                 name: "5BHK"
+ *                 is_active: true
+ *       400:
+ *         description: Name missing or duplicate
+ */
+router.post("/lead-configurations", authenticate, ctrl.createLeadConfiguration);
+
+/**
+ * @swagger
+ * /api/v1/config/lead-configurations/{id}:
+ *   put:
+ *     summary: Update a lead configuration (Admin)
+ *     description: Rename a configuration or toggle its active status.
+ *     tags: [Config]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 example: "2.5BHK"
+ *               is_active:
+ *                 type: boolean
+ *                 description: Set false to deactivate without deleting
+ *                 example: false
+ *     responses:
+ *       200:
+ *         description: Configuration updated
+ *       404:
+ *         description: Configuration not found
+ */
+router.put("/lead-configurations/:id", authenticate, authorize(...ADMIN), ctrl.updateLeadConfiguration);
+
+/**
+ * @swagger
+ * /api/v1/config/lead-configurations/{id}:
+ *   delete:
+ *     summary: Delete a lead configuration (Admin)
+ *     description: >
+ *       Permanently removes a configuration.
+ *       Will fail if any active leads are using this configuration — deactivate it instead.
+ *     tags: [Config]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *     responses:
+ *       200:
+ *         description: Configuration removed
+ *       400:
+ *         description: Configuration is in use by active leads
+ *       404:
+ *         description: Configuration not found
+ */
+router.delete("/lead-configurations/:id", authenticate, authorize(...ADMIN), ctrl.deleteLeadConfiguration);
+
+// ═════════════════════════════════════════════════════════════════════════════
 // LEAD STATUSES
 // ═════════════════════════════════════════════════════════════════════════════
 

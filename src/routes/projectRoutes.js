@@ -38,6 +38,10 @@ const { uploadProjectDocuments }   = require("../middleware/uploadMiddleware");
  *         name: city
  *         schema:
  *           type: string
+ *         description: >
+ *           Case-insensitive partial match. Accepts a single city, a
+ *           comma-separated list ("Mumbai,Pune"), or repeated params
+ *           (?city=Mumbai&city=Pune) for a multi-select filter.
  *         example: Mumbai
  *       - in: query
  *         name: search

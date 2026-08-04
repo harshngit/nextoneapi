@@ -43,6 +43,28 @@ const { authenticate, authorize } = require("../middleware/auth");
  *           type: boolean
  *         description: Filter by active status
  *         example: true
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: Case-insensitive partial match against first name, last name, email, or phone number
+ *         example: Rahul
+ *       - in: query
+ *         name: manager_id
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Filter by manager (not usable by sales_manager callers)
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *       - in: query
+ *         name: per_page
+ *         schema:
+ *           type: integer
+ *           default: 20
  *     responses:
  *       200:
  *         description: List of users returned successfully

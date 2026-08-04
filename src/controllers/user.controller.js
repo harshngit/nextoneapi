@@ -73,7 +73,7 @@ const getAllUsers = async (req, res, next) => {
     if (is_active !== undefined) {
                       conditions.push(`is_active = $${idx++}`);  params.push(is_active === "true"); }
     if (search) {
-      conditions.push(`(first_name ILIKE $${idx} OR last_name ILIKE $${idx} OR email ILIKE $${idx})`);
+      conditions.push(`(first_name ILIKE $${idx} OR last_name ILIKE $${idx} OR email ILIKE $${idx} OR phone_number ILIKE $${idx})`);
       params.push(`%${search}%`);
       idx++;
     }

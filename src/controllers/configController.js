@@ -433,6 +433,155 @@ const deleteLeadSource = async (req, res, next) => {
   }
 };
 
+// ═════════════════════════════════════════════════════════════
+// LEAD CONFIGURATIONS (1RK, 1BHK, 2BHK, ...)
+// ═════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/v1/config/lead-configurations
+ */
+const getLeadConfigurations = async (req, res, next) => {
+  try {
+    const result = await pool.query(
+      "SELECT id, name, is_active, created_at FROM lead_configurations ORDER BY created_at ASC"
+    );
+    return sendSuccess(res, "Lead configurations fetched", result.rows);
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * POST /api/v1/config/lead-configurations
+ */
+const createLeadConfiguration = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const { name } = req.body;
+    if (!name || !name.trim()) return next(new AppError("name is required", 400));
+
+    const existing = await pool.query(
+      "SELECT id FROM lead_configurations WHERE LOWER(name) = LOWER($1)",
+      [name.trim()]
+    );
+    if (existing.rows.length > 0) {
+      return next(new AppError(`Configuration '${name.trim()}' already exists`, 400));
+    }
+
+    await client.query("BEGIN");
+    const result = await client.query(
+      "INSERT INTO lead_configurations (name) VALUES ($1) RETURNING *",
+      [name.trim()]
+    );
+    await writeAudit(client, {
+      action: "config_update",
+      description: `Lead configuration added: ${name.trim()}`,
+      performed_by: req.user.id,
+      metadata: { action: "create", name: name.trim() },
+    });
+    await client.query("COMMIT");
+
+    return sendSuccess(res, "Configuration added successfully", result.rows[0], 201);
+  } catch (err) {
+    await client.query("ROLLBACK");
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
+/**
+ * PUT /api/v1/config/lead-configurations/:id
+ */
+const updateLeadConfiguration = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+    const { name, is_active } = req.body;
+
+    const existing = await pool.query("SELECT * FROM lead_configurations WHERE id = $1", [id]);
+    if (existing.rows.length === 0) return next(new AppError("Configuration not found", 404));
+
+    if (name) {
+      const dupe = await pool.query(
+        "SELECT id FROM lead_configurations WHERE LOWER(name) = LOWER($1) AND id != $2",
+        [name.trim(), id]
+      );
+      if (dupe.rows.length > 0) return next(new AppError(`Configuration '${name}' already exists`, 400));
+    }
+
+    const updates = []; const params = []; let idx = 1;
+    if (name !== undefined)      { updates.push(`name = $${idx++}`);      params.push(name.trim()); }
+    if (is_active !== undefined) { updates.push(`is_active = $${idx++}`); params.push(is_active); }
+    if (updates.length === 0) return next(new AppError("No fields to update", 400));
+    updates.push(`updated_at = NOW()`);
+    params.push(id);
+
+    await client.query("BEGIN");
+    const result = await client.query(
+      `UPDATE lead_configurations SET ${updates.join(", ")} WHERE id = $${idx} RETURNING *`,
+      params
+    );
+    await writeAudit(client, {
+      action: "config_update",
+      description: `Lead configuration updated: ${existing.rows[0].name}${name ? ` → ${name}` : ""}`,
+      performed_by: req.user.id,
+      metadata: { action: "update", id, changes: req.body },
+    });
+    await client.query("COMMIT");
+
+    return sendSuccess(res, "Configuration updated successfully", result.rows[0]);
+  } catch (err) {
+    await client.query("ROLLBACK");
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
+/**
+ * DELETE /api/v1/config/lead-configurations/:id
+ */
+const deleteLeadConfiguration = async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+
+    const existing = await pool.query("SELECT * FROM lead_configurations WHERE id = $1", [id]);
+    if (existing.rows.length === 0) return next(new AppError("Configuration not found", 404));
+
+    // Check if any leads are using this configuration
+    const inUse = await pool.query(
+      "SELECT COUNT(*) FROM leads WHERE configuration = $1 AND is_archived = false",
+      [existing.rows[0].name]
+    );
+    const count = parseInt(inUse.rows[0].count);
+    if (count > 0) {
+      return next(new AppError(
+        `Cannot delete — ${count} lead${count > 1 ? "s are" : " is"} using this configuration. Deactivate it instead.`,
+        400
+      ));
+    }
+
+    await client.query("BEGIN");
+    await client.query("DELETE FROM lead_configurations WHERE id = $1", [id]);
+    await writeAudit(client, {
+      action: "config_update",
+      description: `Lead configuration deleted: ${existing.rows[0].name}`,
+      performed_by: req.user.id,
+      metadata: { action: "delete", name: existing.rows[0].name },
+    });
+    await client.query("COMMIT");
+
+    return sendSuccess(res, "Configuration removed successfully");
+  } catch (err) {
+    await client.query("ROLLBACK");
+    next(err);
+  } finally {
+    client.release();
+  }
+};
+
 /**
  * GET /api/v1/config/modules
  */
@@ -1059,6 +1208,10 @@ module.exports = {
   createLeadSource,
   updateLeadSource,
   deleteLeadSource,
+  getLeadConfigurations,
+  createLeadConfiguration,
+  updateLeadConfiguration,
+  deleteLeadConfiguration,
   getModules,
   getGeneralSettings,
   updateGeneralSettings,
