@@ -53,54 +53,6 @@ const findLeadByPhone = async (client, phone, excludeLeadId = null) => {
   return result.rows[0] || null;
 };
 
-// ─── Helper — ensure a 'done' site_visits/site_revisits row exists for a
-// lead whose status is (or is becoming) 'site_visit_done'. Idempotent —
-// safe to call every time. Three cases:
-//  1. A 'done' visit/revisit already exists → nothing to do.
-//  2. An existing scheduled/rescheduled visit → just mark it 'done'.
-//  3. No visit at all (status was set directly, e.g. via PATCH
-//     /leads/:id/status without ever going through the site-visit flow) →
-//     create a synthetic 'done' site_visits row with no date/time (migration
-//     062 made those columns nullable for exactly this case), inheriting the
-//     lead's project if it has one. This is what makes the lead show up in
-//     GET /site-visits and satisfies the closing-manager gate.
-// Accepts either `pool` or a transaction `client` as the query runner.
-const ensureSiteVisitDoneRecord = async (db, leadId, performedBy) => {
-  const doneChk = await db.query(
-    `SELECT 1 FROM site_visits   WHERE lead_id = $1 AND status = 'done'
-     UNION
-     SELECT 1 FROM site_revisits WHERE lead_id = $1 AND status = 'done'
-     LIMIT 1`,
-    [leadId]
-  );
-  if (doneChk.rows.length) return;
-
-  const updated = await db.query(
-    `UPDATE site_visits SET status = 'done', updated_at = NOW()
-     WHERE id = (
-       SELECT id FROM site_visits
-       WHERE lead_id = $1 AND status IN ('scheduled', 'rescheduled')
-       ORDER BY visit_date DESC NULLS LAST, created_at DESC
-       LIMIT 1
-     )`,
-    [leadId]
-  );
-  if (updated.rowCount > 0) return;
-
-  const leadRes = await db.query(
-    `SELECT project_id, project_name_text, assigned_to FROM leads WHERE id = $1`, [leadId]
-  );
-  const lead = leadRes.rows[0] || {};
-  await db.query(
-    `INSERT INTO site_visits
-       (lead_id, project_id, project_name_text, visit_date, visit_time, assigned_to,
-        status, notes, created_by)
-     VALUES ($1,$2,$3,NULL,NULL,$4,'done',$5,$6)`,
-    [leadId, lead.project_id || null, lead.project_name_text || null, lead.assigned_to || null,
-     'Auto-created — lead status set directly to site_visit_done', performedBy]
-  );
-};
-
 // ─── Helper — activity log ────────────────────────────────────────────────────
 const logActivity = async (client, leadId, type, note, performedBy) => {
   await client.query(
@@ -831,31 +783,17 @@ const setLeadClosingManager = async (req, res, next) => {
     }
 
     const leadRes = await pool.query(
-      "SELECT id, name, status FROM leads WHERE id = $1 AND is_archived = false", [id]
+      "SELECT id, name FROM leads WHERE id = $1 AND is_archived = false", [id]
     );
     if (!leadRes.rows.length) return next(new AppError("Lead not found", 404));
 
-    let doneCheck = await pool.query(
+    const doneCheck = await pool.query(
       `SELECT 1 FROM site_visits   WHERE lead_id = $1 AND status = 'done'
        UNION
        SELECT 1 FROM site_revisits WHERE lead_id = $1 AND status = 'done'
        LIMIT 1`,
       [id]
     );
-    // Self-heal leads whose status was already flipped to 'site_visit_done'
-    // (e.g. via PATCH /leads/:id/status) before that path started creating
-    // the backing site_visits row — same fix ensureSiteVisitDoneRecord
-    // applies going forward, applied retroactively here on first use.
-    if (!doneCheck.rows.length && leadRes.rows[0].status === 'site_visit_done') {
-      await ensureSiteVisitDoneRecord(pool, id, req.user.id);
-      doneCheck = await pool.query(
-        `SELECT 1 FROM site_visits   WHERE lead_id = $1 AND status = 'done'
-         UNION
-         SELECT 1 FROM site_revisits WHERE lead_id = $1 AND status = 'done'
-         LIMIT 1`,
-        [id]
-      );
-    }
     if (!doneCheck.rows.length) {
       return next(new AppError(
         "Closing manager can only be set after a site visit has been marked done for this lead", 400
@@ -937,13 +875,21 @@ const updateLeadStatus = async (req, res, next) => {
       callerId
     );
 
-    // Keep site_visits in sync — the monthly Target feature counts
-    // site_visits.status = 'done' independently of leads.status, and the
-    // closing-manager gate requires a 'done' visit/revisit to exist. Marks
-    // an existing scheduled visit done, or creates a synthetic one (no
-    // date/time) if this lead never had a site visit recorded at all.
+    // Keep the site_visits row in sync — the monthly Target feature counts
+    // site_visits.status = 'done' independently of leads.status, so without
+    // this a lead marked "Site Visit Done" here never counts toward target.
     if (status === 'site_visit_done') {
-      await ensureSiteVisitDoneRecord(client, id, callerId);
+      await client.query(
+        `UPDATE site_visits
+         SET status = 'done', updated_at = NOW()
+         WHERE id = (
+           SELECT id FROM site_visits
+           WHERE lead_id = $1 AND status IN ('scheduled', 'rescheduled')
+           ORDER BY visit_date DESC, created_at DESC
+           LIMIT 1
+         )`,
+        [id]
+      );
     }
 
     await client.query("COMMIT");
