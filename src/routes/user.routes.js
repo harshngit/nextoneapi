@@ -185,6 +185,48 @@ router.get("/roles", authenticate, userController.getRoles);
  */
 router.get("/eligible-managers", authenticate, authorize("super_admin", "admin"), userController.getEligibleManagers);
 
+/**
+ * @swagger
+ * /api/v1/users/my-team:
+ *   get:
+ *     summary: Get the logged-in user's own recursive team (for Assign To / filter dropdowns)
+ *     description: >
+ *       Returns the logged-in user (as "Self") plus every user in their
+ *       recursive manager_id sub-tree — active AND inactive. Each member
+ *       includes is_active so the frontend can grey out / exclude inactive
+ *       users from an "Assign To" picker while still showing them in a
+ *       "filter by team member" picker (so leads/tasks/visits already
+ *       assigned to a since-deactivated user remain filterable).
+ *     tags: [Users & Team Management]
+ *     security:
+ *       - BearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Team members returned
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               data:
+ *                 count: 4
+ *                 members:
+ *                   - id: "user-uuid-001"
+ *                     full_name: "Rahul Sharma"
+ *                     email: "rahul@nextonerealty.com"
+ *                     role: "sales_manager"
+ *                     phone_number: "+919876543210"
+ *                     manager_name: null
+ *                     is_self: true
+ *                     is_active: true
+ *                   - id: "user-uuid-002"
+ *                     full_name: "Priya Mehta"
+ *                     email: "priya@nextonerealty.com"
+ *                     role: "sales_executive"
+ *                     phone_number: "+919876543211"
+ *                     manager_name: "Rahul Sharma"
+ *                     is_self: false
+ *                     is_active: false
+ */
 router.get(
   "/my-team",
   authenticate,

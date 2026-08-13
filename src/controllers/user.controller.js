@@ -602,7 +602,7 @@ const getMyTeam = async (req, res, next) => {
               (u.id = $1) AS is_self
        FROM users u
        LEFT JOIN users m ON m.id = u.manager_id
-       WHERE u.id IN (SELECT id FROM sub) AND u.is_active = true
+       WHERE u.id IN (SELECT id FROM sub)
        ORDER BY is_self DESC, u.role ASC, u.first_name ASC`,
       [callerId]
     );
@@ -617,6 +617,7 @@ const getMyTeam = async (req, res, next) => {
         phone_number: u.phone_number,
         manager_name: u.manager_name || null,
         is_self:      u.is_self,
+        is_active:    u.is_active,
       })),
     });
   } catch (err) { next(err); }
@@ -664,7 +665,7 @@ const getTeamTree = async (req, res, next) => {
                 CONCAT(m.first_name, ' ', m.last_name) AS manager_name
          FROM users u
          LEFT JOIN users m ON m.id = u.manager_id
-         WHERE u.id != $1 AND u.is_active = true
+         WHERE u.id != $1
          ORDER BY u.role ASC, u.first_name ASC`,
         [managerId]
       );
