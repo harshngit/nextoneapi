@@ -47,6 +47,14 @@ const {
  *                 type: string
  *                 description: Reason for reassignment (optional)
  *                 example: "Better territorial alignment"
+ *               status:
+ *                 type: string
+ *                 description: >
+ *                   Optional new lead status to set at the same time as reassignment.
+ *                   Accepts any standard status or an active custom status key from
+ *                   GET /api/v1/config/lead-statuses. At least one of assigned_to
+ *                   (a different user) or status (a different value) must actually change.
+ *                 example: "follow_up"
  *     responses:
  *       200:
  *         description: Lead reassigned successfully
@@ -87,12 +95,20 @@ const {
  *                           type: string
  *                         email:
  *                           type: string
+ *                     statusChanged:
+ *                       type: boolean
+ *                     oldStatus:
+ *                       type: string
+ *                       nullable: true
+ *                     newStatus:
+ *                       type: string
+ *                       nullable: true
  *                     reason:
  *                       type: string
  *                     performedBy:
  *                       type: string
  *       400:
- *         description: Bad request - Invalid input or lead already assigned to this user
+ *         description: Bad request - Invalid input, invalid status, or lead already assigned to this user with unchanged status
  *       403:
  *         description: Access denied - Insufficient permissions
  *       404:
@@ -135,6 +151,14 @@ router.patch('/:id/reassign', authenticate, reassignLead);
  *                 type: string
  *                 description: Reason for bulk reassignment (optional)
  *                 example: "Workload balancing"
+ *               status:
+ *                 type: string
+ *                 description: >
+ *                   Optional new lead status to apply to every lead in the batch at the
+ *                   same time as reassignment. Accepts any standard status or an active
+ *                   custom status key from GET /api/v1/config/lead-statuses. Leads whose
+ *                   assignee and status would both stay unchanged are skipped.
+ *                 example: "follow_up"
  *     responses:
  *       200:
  *         description: Bulk reassignment completed
@@ -161,6 +185,13 @@ router.patch('/:id/reassign', authenticate, reassignLead);
  *                     skipped:
  *                       type: integer
  *                       example: 2
+ *                     statusChanged:
+ *                       type: integer
+ *                       description: Number of leads whose status was updated
+ *                       example: 5
+ *                     newStatus:
+ *                       type: string
+ *                       nullable: true
  *                     newAssignee:
  *                       type: object
  *                       properties:
@@ -183,6 +214,14 @@ router.patch('/:id/reassign', authenticate, reassignLead);
  *                             type: string
  *                           oldAssignee:
  *                             type: string
+ *                           statusChanged:
+ *                             type: boolean
+ *                           oldStatus:
+ *                             type: string
+ *                             nullable: true
+ *                           newStatus:
+ *                             type: string
+ *                             nullable: true
  *                     skippedLeads:
  *                       type: array
  *                       items:
