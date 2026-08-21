@@ -246,10 +246,6 @@ const bulkReassignLeads = async (req, res, next) => {
       return next(new AppError('assigned_to (new user ID) is required', 400));
     }
 
-    if (lead_ids.length > 100) {
-      return next(new AppError('Cannot reassign more than 100 leads at once', 400));
-    }
-
     // Permission check — all hierarchy roles (rank 1–8) can reassign
     const REASSIGN_DENIED = ['external_caller', 'hr_admin', 'digital_marketing'];
     if (REASSIGN_DENIED.includes(role)) {

@@ -105,7 +105,7 @@ router.patch('/:id/reassign', authenticate, reassignLead);
  * /api/v1/leads/bulk-reassign:
  *   post:
  *     summary: Bulk reassign multiple leads to a new user
- *     description: Reassign multiple leads at once to a new user. Maximum 100 leads per request. Only admins, super_admins, and sales_managers can perform this action.
+ *     description: Reassign multiple leads at once to a new user. No limit on the number of leads per request.
  *     tags: [Lead Reassignment]
  *     security:
  *       - BearerAuth: []
@@ -124,7 +124,7 @@ router.patch('/:id/reassign', authenticate, reassignLead);
  *                 items:
  *                   type: string
  *                   format: uuid
- *                 description: Array of lead IDs to reassign (max 100)
+ *                 description: Array of lead IDs to reassign
  *                 example: ["a1b2c3d4-e5f6-7890-abcd-ef1234567890", "b2c3d4e5-f6a7-8901-bcde-f12345678901"]
  *               assigned_to:
  *                 type: string
