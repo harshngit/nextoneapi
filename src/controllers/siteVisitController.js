@@ -508,16 +508,16 @@ const createSiteVisitWithLead = async (req, res, next) => {
 
     await client.query('BEGIN');
 
-    // First check how many leads already use this phone
-    const phoneUsage = await client.query(
-      "SELECT COUNT(*) FROM leads WHERE phone = $1 AND is_archived = false",
+    // Duplicate phone check — a phone number already registered to an active
+    // (non-archived) lead cannot be reused. Same rule as POST /api/v1/leads.
+    const dupLead = await client.query(
+      "SELECT id, name FROM leads WHERE phone = $1 AND is_archived = false LIMIT 1",
       [phone]
     );
-    const MAX_LEADS_PER_PHONE = 3;
-    if (parseInt(phoneUsage.rows[0].count, 10) >= MAX_LEADS_PER_PHONE) {
+    if (dupLead.rows.length) {
       await client.query('ROLLBACK');
       return next(new AppError(
-        `This phone number has already been used for ${MAX_LEADS_PER_PHONE} leads.`,
+        `This phone number is already registered with lead "${dupLead.rows[0].name}". Duplicate phone numbers are not allowed.`,
         400
       ));
     }

@@ -13,8 +13,6 @@ const { resolveProjectId, resolveProjectName } = require("../utils/projectResolv
 const { notifyAdmins } = require("./notificationController");
 const emailService = require("../utils/emailService");
 
-const MAX_LEADS_PER_PHONE = 3;
-
 // Every website-inquiry notification always reaches this inbox, regardless
 // of who's registered as admin in the system.
 const WEBSITE_INQUIRY_NOTIFY_EMAIL = "nextonerealty77@gmail.com";
@@ -280,13 +278,18 @@ const convertInquiry = async (req, res, next) => {
 
     await client.query("BEGIN");
 
-    const phoneCount = await client.query(
-      "SELECT COUNT(*) FROM leads WHERE phone = $1 AND is_archived = false",
+    // Duplicate phone check — a phone number already registered to an active
+    // (non-archived) lead cannot be reused. Same rule as POST /api/v1/leads.
+    const dupLead = await client.query(
+      "SELECT id, name FROM leads WHERE phone = $1 AND is_archived = false LIMIT 1",
       [inquiry.phone]
     );
-    if (parseInt(phoneCount.rows[0].count) >= MAX_LEADS_PER_PHONE) {
+    if (dupLead.rows.length) {
       await client.query("ROLLBACK");
-      return next(new AppError(`This phone number already has ${MAX_LEADS_PER_PHONE} leads`, 400));
+      return next(new AppError(
+        `This phone number is already registered with lead "${dupLead.rows[0].name}". Duplicate phone numbers are not allowed.`,
+        400
+      ));
     }
 
     const leadStatus = status
