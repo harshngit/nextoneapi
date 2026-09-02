@@ -16,8 +16,8 @@
  * Required fields for bulk upload:
  *   Name, Phone Number, Budget, Location Preference, Configuration
  *
- * Phone reuse limit: a phone number can appear on at most MAX_LEADS_PER_PHONE
- * leads (e.g. interested in multiple projects). Rows beyond that are skipped.
+ * Duplicate phones: a phone number already registered to an active (non-archived)
+ * lead cannot be reused — matching rows are skipped. Same rule as POST /api/v1/leads.
  */
 
 const { pool }        = require('../config/db');
@@ -30,10 +30,6 @@ const path            = require('path');
 // ─── Helper ────────────────────────────────────────────────────────────────────
 const pick = (arr, fallback) =>
   arr.length ? arr[Math.floor(Math.random() * arr.length)] : fallback;
-
-// Same phone number can be reused across leads (e.g. interested in multiple
-// projects) but only up to this many times — matches leadController.js.
-const MAX_LEADS_PER_PHONE = 3;
 
 // ─── Hidden sheet helper ────────────────────────────────────────────────────────
 /**
@@ -250,7 +246,7 @@ const downloadLeadTemplate = async (req, res, next) => {
       'VALIDATION RULES:',
       '  • Only Name and Phone Number are required — rows missing either are skipped',
       '  • Phone / Alternate Phone: no format restriction — international numbers are fine',
-      '  • A phone number can be used on at most 3 leads — further rows with the same number are skipped',
+      '  • A phone number already used by an active lead cannot be reused — rows with a duplicate number are skipped',
       '',
       'NOTE: Do not rename or reorder columns. Save as .xlsx before uploading.',
     ];
@@ -282,8 +278,9 @@ const downloadLeadTemplate = async (req, res, next) => {
  * Required per row: name, phone, budget, location_preference, configuration
  * Optional per row: alternate_phone, source, project_name, status, assign_to
  *
- * Phone reuse limit: a phone number can be used on at most MAX_LEADS_PER_PHONE
- * (3) leads. Rows pushing a phone number past that limit are skipped, not errored.
+ * Duplicate phones: a phone number already registered to an active
+ * (non-archived) lead — including one inserted earlier in this same file —
+ * is skipped, not errored. Same rule as POST /api/v1/leads.
  *
  * Assignment priority:
  *   1. assign_to UUID in body  → all leads
@@ -431,17 +428,15 @@ const bulkUploadLeads = async (req, res, next) => {
 
     for (const lead of leads) {
       try {
-        // Phone reuse limit — same number allowed on up to MAX_LEADS_PER_PHONE leads
-        // (counted within this same transaction, so already-inserted rows in this
-        // batch count too).
+        // Duplicate phone check — queried within this same transaction, so an
+        // earlier row in this same file that was already inserted counts too.
         const dup = await client.query(
-          `SELECT COUNT(*) FROM leads WHERE phone = $1 AND is_archived = false`, [lead.phone]
+          `SELECT id, name FROM leads WHERE phone = $1 AND is_archived = false LIMIT 1`, [lead.phone]
         );
-        const phoneUsage = parseInt(dup.rows[0].count, 10);
-        if (phoneUsage >= MAX_LEADS_PER_PHONE) {
+        if (dup.rows.length) {
           skipped.push({
             row: lead.rowNum, phone: lead.phone,
-            reason: `Phone number has already been used for ${MAX_LEADS_PER_PHONE} leads`,
+            reason: `Duplicate phone number — already registered with lead "${dup.rows[0].name}"`,
           });
           continue;
         }
@@ -512,7 +507,7 @@ const bulkUploadLeads = async (req, res, next) => {
     summSheet.getRow(1).font = { bold: true };
     summSheet.addRow({ metric: 'Total rows processed',    count: leads.length });
     summSheet.addRow({ metric: 'Successfully inserted',   count: inserted.length });
-    summSheet.addRow({ metric: 'Skipped (phone limit reached)', count: skipped.length });
+    summSheet.addRow({ metric: 'Skipped (duplicate phone)', count: skipped.length });
     summSheet.addRow({ metric: 'Errors (skipped)',        count: errors.length });
     summSheet.addRow({ metric: 'Assigned',                count: inserted.filter(l => l.assigned_to).length });
     summSheet.addRow({ metric: 'Unassigned',              count: inserted.filter(l => !l.assigned_to).length });

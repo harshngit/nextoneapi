@@ -84,8 +84,8 @@ router.get('/template', authenticate, downloadLeadTemplate);
  *       - Rows missing any required field are rejected with an error entry
  *       - Phone and Alternate Phone accept any format — no digit-count check,
  *         international numbers are fine
- *       - A phone number can be used on at most 3 leads total (e.g. interested in
- *         multiple projects); rows that would exceed this are skipped, not errored
+ *       - A phone number already registered to an active (non-archived) lead —
+ *         including one inserted earlier in the same file — is skipped, not errored
  *       - Status defaults to "new" if blank or unrecognised
  *       - Project Name: matched against existing projects (case-insensitive);
  *         if it doesn't match anything, the typed text is kept on the lead as
@@ -145,7 +145,7 @@ router.get('/template', authenticate, downloadLeadTemplate);
  *                   skipped:
  *                     - row: 8
  *                       phone: "9000000001"
- *                       reason: "Phone number has already been used for 3 leads"
+ *                       reason: "Duplicate phone number — already registered with lead \"Rahul Patel\""
  *       400:
  *         description: No file uploaded, wrong template, or no valid rows found
  *       401:

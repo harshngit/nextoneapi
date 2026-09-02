@@ -199,8 +199,8 @@ router.post(
  *       deal being backfilled). Must be one of the values from
  *       GET /api/v1/config/lead-statuses.
  *
- *       A single phone number can only be used on up to 3 leads (e.g. interested
- *       in multiple projects). The 4th attempt with the same phone is rejected.
+ *       A phone number already registered to an active (non-archived) lead
+ *       cannot be reused — the request is rejected with a 400.
  *     tags: [Lead Management]
  *     security:
  *       - BearerAuth: []
