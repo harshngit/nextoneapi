@@ -22,7 +22,7 @@ const { authenticate, authorize } = require("../middleware/auth");
  *       Returns a paginated list of leads. Visibility is role-based:
  *       Super Admin / Admin see all leads, Sales Manager sees their team's leads,
  *       Sales Executive sees only their assigned leads.
- *       Supports filtering by status, source, assigned user, project, and date range.
+ *       Supports filtering by status, source, assigned user, project, location, and date range.
  *     tags: [Lead Management]
  *     security:
  *       - BearerAuth: []
@@ -62,6 +62,14 @@ const { authenticate, authorize } = require("../middleware/auth");
  *           whose project isn't in the projects table yet). Use this for a search
  *           box; use project_id for an exact dropdown-style filter.
  *         example: "Skyline"
+ *       - in: query
+ *         name: location
+ *         schema:
+ *           type: string
+ *         description: >
+ *           Free-text location search — partial, case-insensitive match against
+ *           the lead's location_preference.
+ *         example: "Andheri West"
  *       - in: query
  *         name: from
  *         schema:

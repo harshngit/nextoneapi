@@ -116,7 +116,7 @@ const fetchLeadWithProject = async (leadId) => {
  */
 const getAllLeads = async (req, res, next) => {
   try {
-    const { status, source, assigned_to, project_id, project, from, to, search, page = 1, per_page = 20 } = req.query;
+    const { status, source, assigned_to, project_id, project, location, from, to, search, page = 1, per_page = 20 } = req.query;
     const { role, id: callerId } = req.user;
     const offset = (parseInt(page) - 1) * parseInt(per_page);
 
@@ -153,6 +153,12 @@ const getAllLeads = async (req, res, next) => {
       // projects table yet). Partial, case-insensitive match.
       conditions.push(`COALESCE(p.name, l.project_name_text) ILIKE $${idx++}`);
       params.push(`%${project}%`);
+    }
+    if (location) {
+      // Free-text location search — partial, case-insensitive match against
+      // the lead's location_preference.
+      conditions.push(`l.location_preference ILIKE $${idx++}`);
+      params.push(`%${location}%`);
     }
     if (from)        { conditions.push(`l.created_at::date >= $${idx++}`);  params.push(from); }
     if (to)          { conditions.push(`l.created_at::date <= $${idx++}`);  params.push(to); }
