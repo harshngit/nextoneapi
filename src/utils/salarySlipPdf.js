@@ -76,11 +76,13 @@ const renderSalarySlipPdf = (slip, outputStream) => {
     ? new Date(slip.pay_date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
     : '—';
 
-  const basicSalary = parseFloat(slip.monthly_salary) || 0;
-  const incentive   = parseFloat(slip.incentive_amount) || 0;
-  // Total Earnings shown on the slip is always exactly Basic Salary + Incentives —
-  // deductions are tracked in the DB but not subtracted from this figure.
+  const basicSalary  = parseFloat(slip.monthly_salary) || 0;
+  const incentive    = parseFloat(slip.incentive_amount) || 0;
+  const deductionAmt = parseFloat(slip.deductions) || 0;
+  // Total Earnings shown on the slip is always exactly Basic Salary + Incentives
+  // (gross, before deductions) — matches the existing table breakdown above it.
   const totalEarnings = basicSalary + incentive;
+  const netPayable     = totalEarnings - deductionAmt;
 
   // ── Employee name — baked-in sample ("Rachel Akinwale"), needs erase ───────
   eraseZone(doc, { x: 430, y: 1385, w: 1900, h: 215 });
@@ -101,6 +103,36 @@ const renderSalarySlipPdf = (slip, outputStream) => {
 
   eraseZone(doc, { x: 2630, y: 3560, w: 1330, h: 395 }); // Incentives cell
   writeText(doc, money(incentive),   { x: 2660, y: 3709, w: 1300 }, { size: 95 });
+
+  // ── Deductions row — NOT part of the original Canva template (which only
+  // has Basic Salary / Incentives baked in), so unlike those two rows, both
+  // the border lines AND the "Deductions" label are drawn here, not just the
+  // amount. Extends the existing table by one row (same 484px row height and
+  // column layout as the two rows above), into blank space in the source
+  // image below the table (nothing else is printed there until "Total
+  // Earnings" further down, so there's no risk of overlapping baked-in art).
+  const tableLeft   = 460;
+  const tableRight  = 3990;
+  const colDivider  = 2630;
+  const rowTop      = 4001;   // = existing table-bottom
+  const rowBottom   = 4485;   // rowTop + 484 (same height as the two rows above)
+  const borderWidth = 8;
+
+  doc.save();
+  doc.lineWidth(borderWidth).strokeColor('#000000');
+  doc.moveTo(tableLeft, rowTop).lineTo(tableLeft, rowBottom).stroke();       // left border
+  doc.moveTo(tableRight, rowTop).lineTo(tableRight, rowBottom).stroke();    // right border
+  doc.moveTo(colDivider, rowTop).lineTo(colDivider, rowBottom).stroke();    // column divider
+  doc.moveTo(tableLeft, rowBottom).lineTo(tableRight, rowBottom).stroke();  // bottom border
+  doc.restore();
+
+  writeText(doc, 'Deductions', { x: 550, y: rowTop + 192, w: 1900 }, { size: 95 });
+  writeText(doc, deductionAmt > 0 ? `- ${money(deductionAmt)}` : money(deductionAmt),
+    { x: 2660, y: rowTop + 192, w: 1300 }, { size: 95 });
+
+  // ── Net Payable — Total Earnings minus Deductions, in the blank space
+  // between the (now 3-row) table and the "Total Earnings" panel ───────────
+  writeText(doc, `Net Payable : ${money(netPayable)}`, { x: 460, y: 4650, w: 3000 }, { size: 100, bold: true });
 
   // ── Total Earnings (bottom, large bold — baked-in sample) ──────────────────
   // Width kept under ~3070 so it doesn't touch the "Thank You" panel's left edge.
