@@ -873,6 +873,106 @@ router.post('/manual', authenticate, authorize(...ADMIN), ctrl.manualEntry)
  *       200:
  *         description: Record updated
  */
+/**
+ * @swagger
+ * /api/v1/attendance/bulk-status:
+ *   patch:
+ *     summary: Bulk-set attendance status for many users across one or more dates (Admin / Super Admin only)
+ *     description: >
+ *       Applies one status to every user_id × every resolved date. Give either an explicit
+ *       `dates` array (a single date, or any specific set of dates — they don't need to be
+ *       contiguous) OR a `from`/`to` range (every date in between, inclusive); provide one
+ *       or the other, not both. A record is created if none exists for that user/date, or
+ *       updated if one does. Same salary-slip recalculation as PATCH /{id}/status, run once
+ *       per affected user/month (not once per day) for every user/month that already has a
+ *       generated salary slip.
+ *
+ *       NOTE: this route is registered before PATCH /{id} on purpose — /{id} is a wildcard
+ *       that would otherwise swallow /bulk-status and try to treat "bulk-status" as a
+ *       record UUID (causing a Postgres invalid-UUID error). Express matches PATCH routes
+ *       in registration order, so any new literal PATCH path on this router must go above
+ *       PATCH /{id} and PATCH /{id}/... for the same reason.
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [user_ids, status]
+ *             properties:
+ *               user_ids:
+ *                 type: array
+ *                 items: { type: string, format: uuid }
+ *                 example: ["user-uuid-1", "user-uuid-2"]
+ *               dates:
+ *                 type: array
+ *                 items: { type: string, format: date }
+ *                 description: >
+ *                   A single date, or any set of specific dates (not required to be
+ *                   contiguous). Use this OR from/to, not both.
+ *                 example: ["2026-06-01", "2026-06-03", "2026-06-10"]
+ *               from:
+ *                 type: string
+ *                 format: date
+ *                 description: Start of a contiguous date range — used only when `dates` is omitted.
+ *                 example: "2026-06-01"
+ *               to:
+ *                 type: string
+ *                 format: date
+ *                 description: End of a contiguous date range (inclusive) — used only when `dates` is omitted.
+ *                 example: "2026-06-05"
+ *               status:
+ *                 type: string
+ *                 enum: [present, absent, leave, late]
+ *               reason:
+ *                 type: string
+ *                 description: Defaults to a generic "Bulk-set by admin" note if omitted
+ *           examples:
+ *             specificDates:
+ *               summary: One or more specific (non-contiguous) dates
+ *               value:
+ *                 user_ids: ["user-uuid-1"]
+ *                 dates: ["2026-09-01", "2026-09-29"]
+ *                 status: "present"
+ *             dateRange:
+ *               summary: A contiguous date range
+ *               value:
+ *                 user_ids: ["user-uuid-1", "user-uuid-2"]
+ *                 from: "2026-06-01"
+ *                 to: "2026-06-05"
+ *                 status: "present"
+ *     responses:
+ *       200:
+ *         description: Bulk update completed
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Attendance bulk-updated to \"present\" for 2 user(s) across 5 day(s)"
+ *               data:
+ *                 users_updated: 2
+ *                 not_found_user_ids: []
+ *                 dates_updated: 5
+ *                 dates: ["2026-06-01","2026-06-02","2026-06-03","2026-06-04","2026-06-05"]
+ *                 records_updated: 10
+ *                 salary_slips_recalculated: 1
+ *                 salary_impacts:
+ *                   - user_id: "user-uuid-1"
+ *                     month: 6
+ *                     year: 2026
+ *                     old_final_salary: 35454.55
+ *                     new_final_salary: 40000
+ *                     difference: 4545.45
+ *       400:
+ *         description: Missing/invalid user_ids, dates, or status
+ *       404:
+ *         description: None of the given user_ids were found
+ */
+router.patch('/bulk-status', authenticate, authorize(...ADMIN), ctrl.bulkChangeAttendanceStatus)
+
 router.patch('/:id',   authenticate, authorize(...ADMIN), ctrl.updateAttendance)
 
 /**
@@ -1074,99 +1174,5 @@ router.patch('/:id/approve', authenticate, authorize(...ADMIN), ctrl.approveStat
  *         description: Attendance record not found
  */
 router.patch('/:id/status', authenticate, authorize(...ADMIN), ctrl.changeAttendanceStatus)
-
-/**
- * @swagger
- * /api/v1/attendance/bulk-status:
- *   patch:
- *     summary: Bulk-set attendance status for many users across one or more dates (Admin / Super Admin only)
- *     description: >
- *       Applies one status to every user_id × every resolved date. Give either an explicit
- *       `dates` array (a single date, or any specific set of dates — they don't need to be
- *       contiguous) OR a `from`/`to` range (every date in between, inclusive); provide one
- *       or the other, not both. A record is created if none exists for that user/date, or
- *       updated if one does. Same salary-slip recalculation as PATCH /{id}/status, run once
- *       per affected user/month (not once per day) for every user/month that already has a
- *       generated salary slip.
- *     tags: [Attendance]
- *     security:
- *       - BearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [user_ids, status]
- *             properties:
- *               user_ids:
- *                 type: array
- *                 items: { type: string, format: uuid }
- *                 example: ["user-uuid-1", "user-uuid-2"]
- *               dates:
- *                 type: array
- *                 items: { type: string, format: date }
- *                 description: >
- *                   A single date, or any set of specific dates (not required to be
- *                   contiguous). Use this OR from/to, not both.
- *                 example: ["2026-06-01", "2026-06-03", "2026-06-10"]
- *               from:
- *                 type: string
- *                 format: date
- *                 description: Start of a contiguous date range — used only when `dates` is omitted.
- *                 example: "2026-06-01"
- *               to:
- *                 type: string
- *                 format: date
- *                 description: End of a contiguous date range (inclusive) — used only when `dates` is omitted.
- *                 example: "2026-06-05"
- *               status:
- *                 type: string
- *                 enum: [present, absent, leave, late]
- *               reason:
- *                 type: string
- *                 description: Defaults to a generic "Bulk-set by admin" note if omitted
- *           examples:
- *             specificDates:
- *               summary: One or more specific (non-contiguous) dates
- *               value:
- *                 user_ids: ["user-uuid-1"]
- *                 dates: ["2026-09-01", "2026-09-29"]
- *                 status: "present"
- *             dateRange:
- *               summary: A contiguous date range
- *               value:
- *                 user_ids: ["user-uuid-1", "user-uuid-2"]
- *                 from: "2026-06-01"
- *                 to: "2026-06-05"
- *                 status: "present"
- *     responses:
- *       200:
- *         description: Bulk update completed
- *         content:
- *           application/json:
- *             example:
- *               success: true
- *               message: "Attendance bulk-updated to \"present\" for 2 user(s) across 5 day(s)"
- *               data:
- *                 users_updated: 2
- *                 not_found_user_ids: []
- *                 dates_updated: 5
- *                 dates: ["2026-06-01","2026-06-02","2026-06-03","2026-06-04","2026-06-05"]
- *                 records_updated: 10
- *                 salary_slips_recalculated: 1
- *                 salary_impacts:
- *                   - user_id: "user-uuid-1"
- *                     month: 6
- *                     year: 2026
- *                     old_final_salary: 35454.55
- *                     new_final_salary: 40000
- *                     difference: 4545.45
- *       400:
- *         description: Missing/invalid user_ids, dates, or status
- *       404:
- *         description: None of the given user_ids were found
- */
-router.patch('/bulk-status', authenticate, authorize(...ADMIN), ctrl.bulkChangeAttendanceStatus)
 
 module.exports = router
