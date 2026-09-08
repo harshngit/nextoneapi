@@ -197,7 +197,7 @@ const getMySummary = async (req, res, next) => {
 const getMyLeads = async (req, res, next) => {
   try {
     const userId = req.user.id;
-    const { status, source, project_id, project, from, to, search } = req.query;
+    const { status, source, project_id, project, location, from, to, search } = req.query;
     const { page, per_page } = parsePage(req.query);
     const offset = (page - 1) * per_page;
 
@@ -223,6 +223,12 @@ const getMyLeads = async (req, res, next) => {
       // lead's free-text project_name_text. Partial, case-insensitive match.
       conditions.push(`COALESCE(p.name, l.project_name_text) ILIKE $${idx++}`);
       params.push(`%${project}%`);
+    }
+    if (location) {
+      // Free-text location search — partial, case-insensitive match against
+      // the lead's location_preference. Mirrors GET /leads.
+      conditions.push(`l.location_preference ILIKE $${idx++}`);
+      params.push(`%${location}%`);
     }
     if (from)       { conditions.push(`l.created_at::date >= $${idx++}`);        params.push(from); }
     if (to)         { conditions.push(`l.created_at::date <= $${idx++}`);        params.push(to); }
