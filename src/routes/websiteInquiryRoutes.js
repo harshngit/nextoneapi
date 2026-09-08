@@ -37,13 +37,15 @@ const ADMIN = ["super_admin", "admin"];
  *             type: object
  *             required: [name, phone]
  *             properties:
- *               name:         { type: string, example: "Rajesh Patel" }
- *               phone:        { type: string, example: "9876543210" }
- *               email:        { type: string, example: "rajesh@example.com" }
- *               message:      { type: string, example: "Interested in 2BHK options in Andheri" }
- *               project_id:   { type: string, format: uuid, description: "Optional — UUID or exact project name" }
- *               project_name: { type: string, description: "Optional free-text project name" }
- *               source:       { type: string, example: "Website", description: "Defaults to 'Website'" }
+ *               name:                    { type: string, example: "Rajesh Patel" }
+ *               phone:                   { type: string, example: "9876543210" }
+ *               alternate_phone_number:  { type: string, example: "9123456780" }
+ *               email:                   { type: string, example: "rajesh@example.com" }
+ *               configuration:           { type: string, example: "2BHK" }
+ *               message:                 { type: string, example: "Interested in 2BHK options in Andheri" }
+ *               project_id:              { type: string, format: uuid, description: "Optional — UUID or exact project name" }
+ *               project_name:            { type: string, description: "Optional free-text project name" }
+ *               source:                  { type: string, example: "Website", description: "Defaults to 'Website'" }
  *     responses:
  *       201:
  *         description: Inquiry received
@@ -51,6 +53,99 @@ const ADMIN = ["super_admin", "admin"];
  *         description: name and phone are required
  */
 router.post("/", ctrl.createInquiry);
+
+/**
+ * @swagger
+ * /api/v1/website-inquiries/facebook:
+ *   post:
+ *     summary: Submit an inquiry from a Facebook lead form (PUBLIC — no auth required)
+ *     description: >
+ *       Same shape as the general Contact Us endpoint, but `source` is always
+ *       hardcoded to "Facebook" regardless of what's sent in the body.
+ *     tags: [Website Inquiries]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name, phone]
+ *             properties:
+ *               name:                   { type: string, example: "Rajesh Patel" }
+ *               phone:                  { type: string, example: "9876543210" }
+ *               alternate_phone_number: { type: string, example: "9123456780" }
+ *               email:                  { type: string, example: "rajesh@example.com" }
+ *               configuration:          { type: string, example: "2BHK" }
+ *               message:                { type: string, example: "Interested in 2BHK options in Andheri" }
+ *     responses:
+ *       201:
+ *         description: Inquiry received
+ *       400:
+ *         description: name and phone are required
+ */
+router.post("/facebook", ctrl.createFacebookInquiry);
+
+/**
+ * @swagger
+ * /api/v1/website-inquiries/whatsapp:
+ *   post:
+ *     summary: Submit an inquiry from WhatsApp (PUBLIC — no auth required)
+ *     description: >
+ *       Same shape as the general Contact Us endpoint, but `source` is always
+ *       hardcoded to "WhatsApp" regardless of what's sent in the body.
+ *     tags: [Website Inquiries]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name, phone]
+ *             properties:
+ *               name:                   { type: string, example: "Rajesh Patel" }
+ *               phone:                  { type: string, example: "9876543210" }
+ *               alternate_phone_number: { type: string, example: "9123456780" }
+ *               email:                  { type: string, example: "rajesh@example.com" }
+ *               configuration:          { type: string, example: "2BHK" }
+ *               message:                { type: string, example: "Interested in 2BHK options in Andheri" }
+ *     responses:
+ *       201:
+ *         description: Inquiry received
+ *       400:
+ *         description: name and phone are required
+ */
+router.post("/whatsapp", ctrl.createWhatsappInquiry);
+
+/**
+ * @swagger
+ * /api/v1/website-inquiries/instagram:
+ *   post:
+ *     summary: Submit an inquiry from an Instagram lead form (PUBLIC — no auth required)
+ *     description: >
+ *       Same shape as the general Contact Us endpoint, but `source` is always
+ *       hardcoded to "Instagram" regardless of what's sent in the body.
+ *     tags: [Website Inquiries]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name, phone]
+ *             properties:
+ *               name:                   { type: string, example: "Rajesh Patel" }
+ *               phone:                  { type: string, example: "9876543210" }
+ *               alternate_phone_number: { type: string, example: "9123456780" }
+ *               email:                  { type: string, example: "rajesh@example.com" }
+ *               configuration:          { type: string, example: "2BHK" }
+ *               message:                { type: string, example: "Interested in 2BHK options in Andheri" }
+ *     responses:
+ *       201:
+ *         description: Inquiry received
+ *       400:
+ *         description: name and phone are required
+ */
+router.post("/instagram", ctrl.createInstagramInquiry);
 
 /**
  * @swagger
@@ -67,6 +162,11 @@ router.post("/", ctrl.createInquiry);
  *       - in: query
  *         name: source
  *         schema: { type: string }
+ *         description: >
+ *           Any string is accepted (source is free text), but inquiries are
+ *           normally one of "Website", "Facebook", "WhatsApp", or "Instagram" —
+ *           matching which of the four create endpoints was used.
+ *         example: "Facebook"
  *       - in: query
  *         name: project
  *         schema: { type: string }
@@ -133,13 +233,15 @@ router.get("/:id", authenticate, ctrl.getInquiryById);
  *           schema:
  *             type: object
  *             properties:
- *               name:         { type: string }
- *               phone:        { type: string }
- *               email:        { type: string }
- *               message:      { type: string }
- *               status:       { type: string, enum: [new, contacted, converted, spam, closed] }
- *               project_id:   { type: string, format: uuid }
- *               project_name: { type: string }
+ *               name:                    { type: string }
+ *               phone:                   { type: string }
+ *               alternate_phone_number:  { type: string }
+ *               email:                   { type: string }
+ *               configuration:           { type: string }
+ *               message:                 { type: string }
+ *               status:                  { type: string, enum: [new, contacted, converted, spam, closed] }
+ *               project_id:              { type: string, format: uuid }
+ *               project_name:            { type: string }
  *     responses:
  *       200:
  *         description: Website inquiry updated

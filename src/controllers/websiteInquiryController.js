@@ -27,10 +27,17 @@ const getAdminEmails = async () => {
   return [...emails];
 };
 
-// ─── POST /api/v1/website-inquiries (PUBLIC — no auth) ────────────────────────
-const createInquiry = async (req, res, next) => {
+// ─── POST /api/v1/website-inquiries (+ /facebook, /whatsapp, /instagram) ──────
+// All PUBLIC — no auth. Same shape and behavior; only the `source` differs.
+// The normal endpoint takes `source` from the body (defaulting to "Website");
+// the three channel-specific endpoints below hardcode it, ignoring whatever
+// the caller sends.
+const makeCreateInquiry = (fixedSource = null) => async (req, res, next) => {
   try {
-    const { name, phone, email, message, project_id, project_name, source } = req.body;
+    const {
+      name, phone, alternate_phone_number, email, message, configuration,
+      project_id, project_name, source,
+    } = req.body;
 
     if (!name || !phone) {
       return next(new AppError("name and phone are required", 400));
@@ -52,12 +59,14 @@ const createInquiry = async (req, res, next) => {
 
     const result = await pool.query(
       `INSERT INTO website_inquiries
-         (name, phone, email, message, project_id, project_name_text, source, ip_address)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         (name, phone, alternate_phone_number, email, message, configuration,
+          project_id, project_name_text, source, ip_address)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        RETURNING *`,
       [
-        String(name).trim(), phone, email || null, message || null,
-        resolvedProjectId, resolvedProjectNameText, source || "Website",
+        String(name).trim(), phone, alternate_phone_number || null, email || null,
+        message || null, configuration || null,
+        resolvedProjectId, resolvedProjectNameText, fixedSource || source || "Website",
         req.ip || null,
       ]
     );
@@ -68,7 +77,7 @@ const createInquiry = async (req, res, next) => {
     notifyAdmins({
       type: "general",
       title: "New Website Inquiry",
-      message: `${inquiry.name} (${inquiry.phone}) submitted an inquiry from the website`,
+      message: `${inquiry.name} (${inquiry.phone}) submitted an inquiry from ${inquiry.source}`,
       reference_id: inquiry.id,
       reference_type: "website_inquiry",
       metadata: { inquiry_id: inquiry.id },
@@ -83,6 +92,11 @@ const createInquiry = async (req, res, next) => {
     next(err);
   }
 };
+
+const createInquiry          = makeCreateInquiry();
+const createFacebookInquiry  = makeCreateInquiry("Facebook");
+const createWhatsappInquiry  = makeCreateInquiry("WhatsApp");
+const createInstagramInquiry = makeCreateInquiry("Instagram");
 
 // ─── GET /api/v1/website-inquiries ─────────────────────────────────────────────
 const getAllInquiries = async (req, res, next) => {
@@ -157,7 +171,7 @@ const updateInquiry = async (req, res, next) => {
     const existing = await pool.query("SELECT id FROM website_inquiries WHERE id = $1", [id]);
     if (!existing.rows.length) return next(new AppError("Website inquiry not found", 404));
 
-    const { name, phone, email, message, status, project_id, project_name } = req.body;
+    const { name, phone, alternate_phone_number, email, message, configuration, status, project_id, project_name } = req.body;
 
     if (status && !["new", "contacted", "converted", "spam", "closed"].includes(status)) {
       return next(new AppError("Invalid status value", 400));
@@ -186,11 +200,13 @@ const updateInquiry = async (req, res, next) => {
     let idx = 1;
     const set = (col, val) => { fields.push(`${col} = $${idx++}`); params.push(val); };
 
-    if (name !== undefined)    set("name", name);
-    if (phone !== undefined)   set("phone", phone);
-    if (email !== undefined)   set("email", email);
-    if (message !== undefined) set("message", message);
-    if (status !== undefined)  set("status", status);
+    if (name !== undefined)                    set("name", name);
+    if (phone !== undefined)                   set("phone", phone);
+    if (alternate_phone_number !== undefined)  set("alternate_phone_number", alternate_phone_number);
+    if (email !== undefined)                   set("email", email);
+    if (message !== undefined)                 set("message", message);
+    if (configuration !== undefined)           set("configuration", configuration);
+    if (status !== undefined)                  set("status", status);
     if (projectProvided) {
       set("project_id", resolvedProjectId);
       set("project_name_text", resolvedProjectNameText);
@@ -298,15 +314,17 @@ const convertInquiry = async (req, res, next) => {
         : "new");
 
     const leadResult = await client.query(
-      `INSERT INTO leads (name, phone, email, source, project_id, project_name_text,
+      `INSERT INTO leads (name, phone, alternate_phone_number, email, source, project_id, project_name_text,
                            assigned_to, budget, location_preference, configuration,
                            status, created_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        RETURNING *`,
       [
-        inquiry.name, inquiry.phone, inquiry.email || null, inquiry.source || "Website",
+        inquiry.name, inquiry.phone, inquiry.alternate_phone_number || null,
+        inquiry.email || null, inquiry.source || "Website",
         resolvedProjectId, resolvedProjectNameText,
-        assigned_to || null, budget || null, location_preference || null, configuration || null,
+        assigned_to || null, budget || null, location_preference || null,
+        configuration || inquiry.configuration || null,
         leadStatus, req.user.id,
       ]
     );
@@ -381,6 +399,9 @@ const convertInquiry = async (req, res, next) => {
 
 module.exports = {
   createInquiry,
+  createFacebookInquiry,
+  createWhatsappInquiry,
+  createInstagramInquiry,
   getAllInquiries,
   getInquiryById,
   updateInquiry,
