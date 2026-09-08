@@ -1477,33 +1477,47 @@ const changeAttendanceStatus = async (req, res, next) => {
 
 // ─── PATCH /api/v1/attendance/bulk-status ────────────────────────────────────
 /**
- * Bulk-set attendance status for many users across a date range in one call
- * (admin / super_admin only).
+ * Bulk-set attendance status for many users across one or more dates in one
+ * call (admin / super_admin only).
  *
- * Body: { user_ids: [uuid,...], from, to, status, reason? }
+ * Body: { user_ids: [uuid,...], status, reason?, ...one of the below }
+ *   EITHER  dates: [YYYY-MM-DD, ...]   — a single date, or any specific set of dates
+ *   OR      from, to: YYYY-MM-DD       — every date in the range (inclusive)
  * status: present | absent | leave | late
  *
- * Applies `status` to every user_id × every date in [from, to] (inclusive).
- * A record is created if none exists for that user/date, or updated if one
- * does. Same salary-slip recalculation as PATCH /:id/status (Step 2 above),
- * run once per affected user/month rather than once per day, for every
- * user/month combination that already has a generated salary slip.
+ * Applies `status` to every user_id × every resolved date. A record is
+ * created if none exists for that user/date, or updated if one does. Same
+ * salary-slip recalculation as PATCH /:id/status (Step 2 above), run once
+ * per affected user/month rather than once per day, for every user/month
+ * combination that already has a generated salary slip.
  */
 const bulkChangeAttendanceStatus = async (req, res, next) => {
   const client = await pool.connect()
   try {
-    const { user_ids, from, to, status, reason } = req.body
+    const { user_ids, dates: datesInput, from, to, status, reason } = req.body
 
     const VALID = ['present', 'absent', 'leave', 'late']
     if (!Array.isArray(user_ids) || !user_ids.length) {
       return next(new AppError('user_ids array is required and cannot be empty', 400))
     }
-    if (!from || !to) return next(new AppError('from and to (YYYY-MM-DD) are required', 400))
     if (!status || !VALID.includes(status)) {
       return next(new AppError(`status is required and must be one of: ${VALID.join(', ')}`, 400))
     }
-    if (new Date(from) > new Date(to)) {
-      return next(new AppError('from must be on or before to', 400))
+
+    let dates
+    if (Array.isArray(datesInput) && datesInput.length) {
+      // Explicit date(s) — one date, or any non-contiguous set.
+      dates = [...new Set(datesInput)].sort()
+    } else if (from && to) {
+      if (new Date(from) > new Date(to)) {
+        return next(new AppError('from must be on or before to', 400))
+      }
+      dates = []
+      const cur = new Date(from)
+      const endDate = new Date(to)
+      while (cur <= endDate) { dates.push(cur.toISOString().split('T')[0]); cur.setDate(cur.getDate() + 1) }
+    } else {
+      return next(new AppError('Provide either dates (an array of one or more YYYY-MM-DD) or both from and to', 400))
     }
 
     const usersRes = await pool.query(
@@ -1513,11 +1527,6 @@ const bulkChangeAttendanceStatus = async (req, res, next) => {
     const foundIds = usersRes.rows.map(u => u.id)
     const notFoundIds = user_ids.filter(id => !foundIds.includes(id))
     if (!foundIds.length) return next(new AppError('None of the given user_ids were found', 404))
-
-    const dates = []
-    const cur = new Date(from)
-    const endDate = new Date(to)
-    while (cur <= endDate) { dates.push(cur.toISOString().split('T')[0]); cur.setDate(cur.getDate() + 1) }
 
     await client.query('BEGIN')
 
@@ -1585,25 +1594,27 @@ const bulkChangeAttendanceStatus = async (req, res, next) => {
 
     await client.query('COMMIT')
 
+    const dateRangeLabel = dates.length === 1 ? dates[0] : `${dates[0]} to ${dates[dates.length - 1]}`
+
     setImmediate(async () => {
       try {
         for (const u of usersRes.rows) {
           await createNotification(u.id, {
             type:           'attendance_approved',
             title:          'Attendance Updated',
-            message:        `Your attendance from ${from} to ${to} was bulk-updated to "${status}" by admin.`,
+            message:        `Your attendance for ${dateRangeLabel} was bulk-updated to "${status}" by admin.`,
             reference_id:   null,
             reference_type: 'attendance',
-            metadata:       { from, to, status },
+            metadata:       { dates, status },
           })
         }
         await notifyAdmins({
           type:           'attendance_approved',
           title:          'Bulk Attendance Update',
-          message:        `${usersRes.rows.length} user(s) had attendance bulk-updated to "${status}" for ${from} to ${to}`,
+          message:        `${usersRes.rows.length} user(s) had attendance bulk-updated to "${status}" for ${dateRangeLabel}`,
           reference_id:   null,
           reference_type: 'attendance',
-          metadata:       { user_ids: foundIds, from, to, status },
+          metadata:       { user_ids: foundIds, dates, status },
         })
       } catch (e) {
         console.error('[Notification] bulkChangeAttendanceStatus failed:', e.message)
@@ -1614,6 +1625,7 @@ const bulkChangeAttendanceStatus = async (req, res, next) => {
       users_updated:              foundIds.length,
       not_found_user_ids:         notFoundIds,
       dates_updated:              dates.length,
+      dates,
       records_updated:            recordsUpdated,
       salary_slips_recalculated:  salaryImpacts.length,
       salary_impacts:             salaryImpacts,
