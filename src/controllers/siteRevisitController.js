@@ -25,7 +25,7 @@ const normalizeStatus = (status) => COMPLETED_STATUSES.includes(status) ? 'done'
 // ─── GET /api/v1/site-revisits ────────────────────────────────────────────────
 const getAllRevisits = async (req, res, next) => {
   try {
-    const { status, lead_id, project_id, assigned_to, from, to, search,
+    const { status, lead_id, project_id, assigned_to, manager_id, from, to, search,
             original_visit_id, page = 1, per_page = 20 } = req.query;
     const { role, id: callerId } = req.user;
     const offset = (parseInt(page) - 1) * parseInt(per_page);
@@ -50,6 +50,13 @@ const getAllRevisits = async (req, res, next) => {
       params.push(resolvedProjectId);
     }
     if (assigned_to)       { conditions.push(`sr.assigned_to = $${idx++}`);      params.push(assigned_to); }
+    if (manager_id) {
+      // Team filter — scopes to every user in manager_id's recursive sub-tree
+      // (including manager_id itself). Applied as an additional AND on top of
+      // whatever the caller's own role scoping already restricts.
+      const mgrTeamIds = await getTeamIds(manager_id);
+      conditions.push(`sr.assigned_to = ANY($${idx++}::uuid[])`); params.push(mgrTeamIds);
+    }
     if (original_visit_id) { conditions.push(`sr.original_visit_id = $${idx++}`); params.push(original_visit_id); }
     if (from)              { conditions.push(`sr.visit_date >= $${idx++}`);      params.push(from); }
     if (to)                { conditions.push(`sr.visit_date <= $${idx++}`);      params.push(to); }

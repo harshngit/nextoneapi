@@ -15,12 +15,15 @@
  *   earned        = per_day × present_days
  *   final         = earned - deductions
  *
- * Attendance → salary mapping:
- *   present                                   = 1 full day
- *   late, checked in by 10:35 AM (late_by_minutes <= 5)  = 1 full day
- *   late, checked in AFTER 10:35 AM (late_by_minutes > 5) = 0.5 day (50% cut for that day)
- *   leave (leave_type = half_day)             = 0.5 day
- *   absent / leave (other)                    = 0
+ * Attendance → salary mapping (see src/utils/attendanceSalary.js for the
+ * authoritative implementation, shared with the attendance module):
+ *   present                                                        = 1 full day
+ *   late — 1st-3rd occurrence in the month, non-admin roles         = 1 full day
+ *   late — 4th+ occurrence in the month, non-admin roles            = 0.5 day (50% cut)
+ *   late — any occurrence, admin/super_admin                        = 1 full day (never penalized)
+ *   leave (leave_type = half_day)                                   = 0.5 day
+ *   leave (leave_type = holiday — admin holidays + weekly Monday off) = 1 full day
+ *   absent / leave (other)                                          = 0
  */
 
 const path          = require('path')
@@ -29,6 +32,7 @@ const { sendSuccess } = require('../utils/response')
 const AppError      = require('../utils/AppError')
 const { createNotification, notifyAdmins } = require('./notificationController')
 const { renderSalarySlipPdf, writeSalarySlipPdfToFile } = require('../utils/salarySlipPdf')
+const { computeMonthlyAttendanceBreakdown } = require('../utils/attendanceSalary')
 const { ZipArchive } = require('archiver')
 const { PassThrough } = require('stream')
 
@@ -298,32 +302,12 @@ const generateSalarySlip = async (req, res, next) => {
     const start = `${y}-${String(m).padStart(2, '0')}-01`
     const end   = new Date(y, m, 0).toISOString().split('T')[0]
 
-    // Pull attendance summary for the month.
-    // late_by_minutes is minutes past the 10:30 AM cutoff (set at check-in) —
-    // > 5 means the check-in was after 10:35 AM, which counts as a half day
-    // (50% salary cut for that day) instead of a full day.
-    const attResult = await pool.query(
-      `SELECT
-         COUNT(*) FILTER (WHERE status IN ('present', 'late') AND (late_by_minutes IS NULL OR late_by_minutes <= 5)) AS full_present_count,
-         COUNT(*) FILTER (WHERE status = 'late' AND late_by_minutes > 5)                        AS late_half_day_count,
-         COUNT(*) FILTER (WHERE status = 'leave' AND leave_type = 'half_day')                    AS half_day_leave_count,
-         COUNT(*) FILTER (WHERE status = 'leave' AND (leave_type IS NULL OR leave_type != 'half_day')) AS full_leave_count,
-         COUNT(*) FILTER (WHERE status = 'absent')                                               AS absent_count
-       FROM attendance
-       WHERE user_id = $1 AND date BETWEEN $2 AND $3`,
-      [user_id, start, end]
-    )
-
-    const att = attResult.rows[0]
-    const fullPresentCount  = parseFloat(att.full_present_count)   || 0
-    const lateHalfDayCount  = parseFloat(att.late_half_day_count)  || 0
-    const halfDayLeaveCount = parseFloat(att.half_day_leave_count) || 0
-    const fullLeaveCount    = parseFloat(att.full_leave_count)    || 0
-    const absentCount       = parseFloat(att.absent_count)        || 0
-
-    const presentDays = fullPresentCount + (lateHalfDayCount * 0.5) + (halfDayLeaveCount * 0.5)
-    const absentDays  = absentCount
-    const leaveDays   = fullLeaveCount + halfDayLeaveCount
+    // Pull the salary-relevant attendance breakdown for the month — see
+    // src/utils/attendanceSalary.js for the full pay-rule breakdown (late
+    // arrivals past the 3rd in a month are a half day for non-admin roles;
+    // holidays, including the default weekly Monday off, are fully paid).
+    const breakdownMap = await computeMonthlyAttendanceBreakdown([user_id], m, y)
+    const { presentDays, absentDays, leaveDays } = breakdownMap.get(user_id)
 
     // Working days: Mon–Fri count for the month (or admin override)
     const workingDays = working_days_override
@@ -959,25 +943,9 @@ const generateAllSalarySlips = async (req, res, next) => {
     const monthName    = new Date(y, m - 1).toLocaleString('en-IN', { month: 'long' })
     const finalPayDate = pay_date || end // last day of month by default
 
-    // Fetch attendance for ALL employees in one query.
-    // late_by_minutes > 5 means check-in was after 10:35 AM → half day (50% cut).
-    const attResult = await pool.query(
-      `SELECT
-         user_id,
-         COUNT(*) FILTER (WHERE status IN ('present', 'late') AND (late_by_minutes IS NULL OR late_by_minutes <= 5)) AS full_present_count,
-         COUNT(*) FILTER (WHERE status = 'late' AND late_by_minutes > 5)                        AS late_half_day_count,
-         COUNT(*) FILTER (WHERE status = 'leave' AND leave_type = 'half_day')                    AS half_day_leave_count,
-         COUNT(*) FILTER (WHERE status = 'leave' AND (leave_type IS NULL OR leave_type != 'half_day')) AS full_leave_count,
-         COUNT(*) FILTER (WHERE status = 'absent')                                               AS absent_count
-       FROM attendance
-       WHERE date BETWEEN $1 AND $2
-         AND user_id = ANY($3::uuid[])
-       GROUP BY user_id`,
-      [start, end, employees.rows.map(e => e.id)]
-    )
-
-    const attMap = {}
-    attResult.rows.forEach(r => { attMap[r.user_id] = r })
+    // Salary-relevant attendance breakdown for every employee in one pass —
+    // see src/utils/attendanceSalary.js for the full pay-rule breakdown.
+    const breakdownMap = await computeMonthlyAttendanceBreakdown(employees.rows.map(e => e.id), m, y)
 
     // Incentive per employee is pulled from employee_incentives, never from
     // the request — same rule as the single-slip generate endpoint.
@@ -988,15 +956,7 @@ const generateAllSalarySlips = async (req, res, next) => {
 
     for (const emp of employees.rows) {
       try {
-        const att = attMap[emp.id] || { full_present_count: 0, late_half_day_count: 0, half_day_leave_count: 0, full_leave_count: 0, absent_count: 0 }
-        const fullPresentCount  = parseFloat(att.full_present_count)   || 0
-        const lateHalfDayCount  = parseFloat(att.late_half_day_count)  || 0
-        const halfDayLeaveCount = parseFloat(att.half_day_leave_count) || 0
-        const fullLeaveCount    = parseFloat(att.full_leave_count)    || 0
-        const absentCount       = parseFloat(att.absent_count)        || 0
-        const presentDays  = fullPresentCount + (lateHalfDayCount * 0.5) + (halfDayLeaveCount * 0.5)
-        const absentDays   = absentCount
-        const leaveDays    = fullLeaveCount + halfDayLeaveCount
+        const { presentDays, absentDays, leaveDays } = breakdownMap.get(emp.id)
 
         const monthlySalary = parseFloat(emp.monthly_salary)
         const perDaySalary  = parseFloat((monthlySalary / workingDays).toFixed(2))

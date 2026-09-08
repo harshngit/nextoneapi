@@ -23,15 +23,24 @@ const HIERARCHY = [
  *     2. `POST /checkin`  with `photo_url` + GPS in body (photo_url is REQUIRED)
  *     3. At end of day: repeat for checkout
  *
- *     **Work week:** Monday–Sunday, no automatic weekly off. Every day with no
- *     attendance record defaults to `absent` (Saturdays/Sundays included).
+ *     **Work week:** Tuesday–Sunday, with Monday as the default weekly off for every
+ *     active user (see weeklyHolidayCron.js) — marked as `leave` (leave_type `holiday`),
+ *     fully paid, same as an admin-created holiday. Checking in on a Monday overrides
+ *     this automatically: status becomes `present`/`late` based on check-in time exactly
+ *     like any other day — the weekly off never blocks check-in/check-out. Every other
+ *     day with no attendance record defaults to `absent`.
  *
  *     **Status values:** `present` · `late` · `absent` · `leave` · `not_joined` (synthesized
  *     display-only status for days before a user's account existed — never stored in the DB).
  *
  *     **Holidays:** see the separate `Holidays` tag — admin/super_admin can declare a date as
  *     a holiday for specific roles and/or specific users, which auto-marks `leave` (leave_type
- *     `holiday`) for everyone targeted.
+ *     `holiday`) for everyone targeted. Same fully-paid treatment as the default Monday off.
+ *
+ *     **Late-arrival pay rule:** for non-admin roles, the 1st–3rd late check-in in a
+ *     calendar month is full pay; the 4th and every subsequent late check-in that same
+ *     month is a half-day (50% cut) — see src/utils/attendanceSalary.js. admin/super_admin
+ *     are never penalized for lateness.
  *
  *     **Excel export tabs:** All Records · By Month · Summary · Late Arrivals
  */
@@ -1065,5 +1074,73 @@ router.patch('/:id/approve', authenticate, authorize(...ADMIN), ctrl.approveStat
  *         description: Attendance record not found
  */
 router.patch('/:id/status', authenticate, authorize(...ADMIN), ctrl.changeAttendanceStatus)
+
+/**
+ * @swagger
+ * /api/v1/attendance/bulk-status:
+ *   patch:
+ *     summary: Bulk-set attendance status for many users across a date range (Admin / Super Admin only)
+ *     description: >
+ *       Applies one status to every user_id × every date in [from, to] (inclusive).
+ *       A record is created if none exists for that user/date, or updated if one does.
+ *       Same salary-slip recalculation as PATCH /{id}/status, run once per affected
+ *       user/month (not once per day) for every user/month that already has a
+ *       generated salary slip.
+ *     tags: [Attendance]
+ *     security:
+ *       - BearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [user_ids, from, to, status]
+ *             properties:
+ *               user_ids:
+ *                 type: array
+ *                 items: { type: string, format: uuid }
+ *                 example: ["user-uuid-1", "user-uuid-2"]
+ *               from:
+ *                 type: string
+ *                 format: date
+ *                 example: "2026-06-01"
+ *               to:
+ *                 type: string
+ *                 format: date
+ *                 example: "2026-06-05"
+ *               status:
+ *                 type: string
+ *                 enum: [present, absent, leave, late]
+ *               reason:
+ *                 type: string
+ *                 description: Defaults to a generic "Bulk-set by admin" note if omitted
+ *     responses:
+ *       200:
+ *         description: Bulk update completed
+ *         content:
+ *           application/json:
+ *             example:
+ *               success: true
+ *               message: "Attendance bulk-updated to \"present\" for 2 user(s) across 5 day(s)"
+ *               data:
+ *                 users_updated: 2
+ *                 not_found_user_ids: []
+ *                 dates_updated: 5
+ *                 records_updated: 10
+ *                 salary_slips_recalculated: 1
+ *                 salary_impacts:
+ *                   - user_id: "user-uuid-1"
+ *                     month: 6
+ *                     year: 2026
+ *                     old_final_salary: 35454.55
+ *                     new_final_salary: 40000
+ *                     difference: 4545.45
+ *       400:
+ *         description: Missing/invalid user_ids, dates, or status
+ *       404:
+ *         description: None of the given user_ids were found
+ */
+router.patch('/bulk-status', authenticate, authorize(...ADMIN), ctrl.bulkChangeAttendanceStatus)
 
 module.exports = router

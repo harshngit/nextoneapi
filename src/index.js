@@ -9,6 +9,7 @@ const swaggerSpec = require("./config/swagger");
 const { initSocket }    = require("./config/socket");
 const whatsappCron      = require("./config/whatsappCron");
 const attendanceCron    = require("./config/attendanceCron");
+const weeklyHolidayCron = require("./config/weeklyHolidayCron");
 const reminderCron      = require("./config/reminderCron");
 const { startCacheRefreshInterval } = require("./middleware/permissions");
 const { sendError }  = require("./utils/response");
@@ -109,6 +110,7 @@ app.use((err, req, res, next) => {
 initSocket(server);
 whatsappCron.start();
 attendanceCron.start();
+weeklyHolidayCron.start();
 reminderCron.start();
 startCacheRefreshInterval(); // loads role_permissions into memory for checkPermission middleware
 

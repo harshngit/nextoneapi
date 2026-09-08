@@ -41,6 +41,12 @@ const MANAGER = ['super_admin', 'admin', 'sales_manager'];
  *         name: assigned_to
  *         schema: { type: string, format: uuid }
  *       - in: query
+ *         name: manager_id
+ *         schema: { type: string, format: uuid }
+ *         description: >
+ *           Team filter — pass a manager/team-lead's user ID to scope results to
+ *           every user in their reporting sub-tree (including themselves).
+ *       - in: query
  *         name: from
  *         schema: { type: string, format: date }
  *         example: "2026-05-01"

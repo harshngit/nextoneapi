@@ -7,6 +7,7 @@ const { getTeamIds, ADMIN_ROLES, LEAF_ROLES } = require('../utils/teamUtils')
 const AppError = require('../utils/AppError')
 const { createNotification, notifyAdmins } = require('./notificationController')
 const { getISTMinutes, isWithinAccessWindow, formatISTTime } = require('../utils/istAccessWindow')
+const { computeMonthlyAttendanceBreakdown } = require('../utils/attendanceSalary')
 
 // ─── Salary recalculation helper ──────────────────────────────────────────────
 // Counts Mon–Fri days in a given month/year (same logic as salaryController)
@@ -228,9 +229,12 @@ const checkIn = async (req, res, next) => {
 
     let record
     if (existing.rows.length) {
+      // leave_type is reset to NULL here — clears a stale holiday/weekly-off
+      // placeholder (see weeklyHolidayCron.js / holidayController.js) now that
+      // a real check-in has happened; a genuine check-in always wins.
       const r = await pool.query(
         `UPDATE attendance SET check_in_time=$1, status=$2, late_by_minutes=$3,
-           checkin_photo=$4,
+           checkin_photo=$4, leave_type=NULL,
            checkin_latitude=$5, checkin_longitude=$6, checkin_address=$7,
            checkin_ip=$8, checkin_device=$9, notes=COALESCE($10,notes), updated_at=NOW()
          WHERE user_id=$11 AND date=$12 RETURNING *`,
@@ -419,9 +423,13 @@ const getMyAttendance = async (req, res, next) => {
     ])
 
     const s = sum.rows[0]
-    const presentCount   = parseInt(s.present)
-    const halfDayLeave   = parseInt(s.half_day_leave) || 0
-    const presentDays    = presentCount + (halfDayLeave * 0.5)
+
+    // presentDays for the earned-salary preview below is computed over the
+    // full calendar month (salaryMonth/salaryYear) via the shared pay-rule
+    // helper — matches what a generated slip for this month would show,
+    // rather than the (possibly partial) from/to range used for `summary`.
+    const breakdownMap = await computeMonthlyAttendanceBreakdown([userId], salaryMonth, salaryYear)
+    const { presentDays } = breakdownMap.get(userId)
 
     // Calculate earned salary on the fly from attendance
     let earnedSalary = null
@@ -1350,29 +1358,11 @@ const changeAttendanceStatus = async (req, res, next) => {
       const existingSlip = slipRes.rows[0]
 
       // ── Step 3: Recalculate attendance totals for the whole month ─────────
-      const start = `${year}-${String(month).padStart(2, '0')}-01`
-      const end   = new Date(year, month, 0).toISOString().split('T')[0]
-
-      const attSummary = await client.query(
-        `SELECT
-           COUNT(*) FILTER (WHERE status IN ('present','late'))                       AS present_count,
-           COUNT(*) FILTER (WHERE status = 'leave' AND leave_type = 'half_day')      AS half_day_leave_count,
-           COUNT(*) FILTER (WHERE status = 'leave' AND (leave_type IS NULL OR leave_type != 'half_day')) AS full_leave_count,
-           COUNT(*) FILTER (WHERE status = 'absent')                                 AS absent_count
-         FROM attendance
-         WHERE user_id = $1 AND date BETWEEN $2 AND $3`,
-        [userId, start, end]
-      )
-
-      const att              = attSummary.rows[0]
-      const presentCount     = parseFloat(att.present_count)          || 0
-      const halfDayLeaveCount = parseFloat(att.half_day_leave_count) || 0
-      const fullLeaveCount   = parseFloat(att.full_leave_count)      || 0
-      const absentCount      = parseFloat(att.absent_count)          || 0
-
-      const newPresentDays = presentCount + (halfDayLeaveCount * 0.5)
-      const newAbsentDays  = absentCount
-      const newLeaveDays   = fullLeaveCount + halfDayLeaveCount
+      // Reads via `client` (the open transaction), not `pool` — Step 1's
+      // status UPDATE above hasn't committed yet, so a separate pool
+      // connection wouldn't see it.
+      const breakdownMap = await computeMonthlyAttendanceBreakdown([userId], month, year, client)
+      const { presentDays: newPresentDays, absentDays: newAbsentDays, leaveDays: newLeaveDays } = breakdownMap.get(userId)
 
       const workingDays   = parseFloat(existingSlip.working_days) || countWorkingDays(year, month)
       const monthlySalary = parseFloat(existingSlip.monthly_salary)
@@ -1476,6 +1466,157 @@ const changeAttendanceStatus = async (req, res, next) => {
       slip_not_found:   !updatedSlip
         ? `No salary slip found for ${monthName} ${year}. Generate one via POST /api/v1/salary/generate to reflect this change.`
         : null,
+    })
+  } catch (err) {
+    await client.query('ROLLBACK')
+    next(err)
+  } finally {
+    client.release()
+  }
+}
+
+// ─── PATCH /api/v1/attendance/bulk-status ────────────────────────────────────
+/**
+ * Bulk-set attendance status for many users across a date range in one call
+ * (admin / super_admin only).
+ *
+ * Body: { user_ids: [uuid,...], from, to, status, reason? }
+ * status: present | absent | leave | late
+ *
+ * Applies `status` to every user_id × every date in [from, to] (inclusive).
+ * A record is created if none exists for that user/date, or updated if one
+ * does. Same salary-slip recalculation as PATCH /:id/status (Step 2 above),
+ * run once per affected user/month rather than once per day, for every
+ * user/month combination that already has a generated salary slip.
+ */
+const bulkChangeAttendanceStatus = async (req, res, next) => {
+  const client = await pool.connect()
+  try {
+    const { user_ids, from, to, status, reason } = req.body
+
+    const VALID = ['present', 'absent', 'leave', 'late']
+    if (!Array.isArray(user_ids) || !user_ids.length) {
+      return next(new AppError('user_ids array is required and cannot be empty', 400))
+    }
+    if (!from || !to) return next(new AppError('from and to (YYYY-MM-DD) are required', 400))
+    if (!status || !VALID.includes(status)) {
+      return next(new AppError(`status is required and must be one of: ${VALID.join(', ')}`, 400))
+    }
+    if (new Date(from) > new Date(to)) {
+      return next(new AppError('from must be on or before to', 400))
+    }
+
+    const usersRes = await pool.query(
+      `SELECT id, CONCAT(first_name,' ',last_name) AS full_name FROM users WHERE id = ANY($1::uuid[])`,
+      [user_ids]
+    )
+    const foundIds = usersRes.rows.map(u => u.id)
+    const notFoundIds = user_ids.filter(id => !foundIds.includes(id))
+    if (!foundIds.length) return next(new AppError('None of the given user_ids were found', 404))
+
+    const dates = []
+    const cur = new Date(from)
+    const endDate = new Date(to)
+    while (cur <= endDate) { dates.push(cur.toISOString().split('T')[0]); cur.setDate(cur.getDate() + 1) }
+
+    await client.query('BEGIN')
+
+    const manualReason = reason || `Bulk-set to "${status}" by admin`
+    let recordsUpdated = 0
+    const affectedMonths = new Set() // `${userId}::${year}-${month}`
+
+    for (const userId of foundIds) {
+      for (const date of dates) {
+        await client.query(
+          `INSERT INTO attendance (user_id, date, status, manual_reason, is_manual_entry, manual_by)
+           VALUES ($1,$2,$3,$4,true,$5)
+           ON CONFLICT (user_id, date) DO UPDATE
+             SET status = EXCLUDED.status, manual_reason = EXCLUDED.manual_reason,
+                 is_manual_entry = true, manual_by = EXCLUDED.manual_by, updated_at = NOW()`,
+          [userId, date, status, manualReason, req.user.id]
+        )
+        recordsUpdated++
+        const d = new Date(date)
+        affectedMonths.add(`${userId}::${d.getFullYear()}-${d.getMonth() + 1}`)
+      }
+    }
+
+    // ── Recalculate salary slips for every affected user/month that already has one ──
+    const salaryImpacts = []
+    for (const key of affectedMonths) {
+      const [userId, ym] = key.split('::')
+      const [year, month] = ym.split('-').map(Number)
+
+      const slipRes = await client.query(
+        `SELECT * FROM salary_slips WHERE user_id = $1 AND month = $2 AND year = $3`,
+        [userId, month, year]
+      )
+      if (!slipRes.rows.length) continue
+      const existingSlip = slipRes.rows[0]
+
+      // Reads via `client` (the open transaction) so the just-applied bulk
+      // status updates above are visible before they're committed.
+      const breakdownMap = await computeMonthlyAttendanceBreakdown([userId], month, year, client)
+      const { presentDays: newPresentDays, absentDays: newAbsentDays, leaveDays: newLeaveDays } = breakdownMap.get(userId)
+
+      const workingDays    = parseFloat(existingSlip.working_days) || countWorkingDays(year, month)
+      const monthlySalary  = parseFloat(existingSlip.monthly_salary)
+      const perDaySalary   = parseFloat((monthlySalary / workingDays).toFixed(2))
+      const earnedSalary   = parseFloat((perDaySalary * newPresentDays).toFixed(2))
+      const deductions     = parseFloat(existingSlip.deductions) || 0
+      const newFinalSalary = parseFloat((earnedSalary - deductions).toFixed(2))
+      const oldFinalSalary = parseFloat(existingSlip.final_salary)
+
+      await client.query(
+        `UPDATE salary_slips
+         SET present_days = $1, absent_days = $2, leave_days = $3,
+             per_day_salary = $4, earned_salary = $5, final_salary = $6, updated_at = NOW()
+         WHERE user_id = $7 AND month = $8 AND year = $9`,
+        [newPresentDays, newAbsentDays, newLeaveDays, perDaySalary, earnedSalary, newFinalSalary, userId, month, year]
+      )
+
+      salaryImpacts.push({
+        user_id: userId, month, year,
+        old_final_salary: oldFinalSalary,
+        new_final_salary: newFinalSalary,
+        difference: parseFloat((newFinalSalary - oldFinalSalary).toFixed(2)),
+      })
+    }
+
+    await client.query('COMMIT')
+
+    setImmediate(async () => {
+      try {
+        for (const u of usersRes.rows) {
+          await createNotification(u.id, {
+            type:           'attendance_approved',
+            title:          'Attendance Updated',
+            message:        `Your attendance from ${from} to ${to} was bulk-updated to "${status}" by admin.`,
+            reference_id:   null,
+            reference_type: 'attendance',
+            metadata:       { from, to, status },
+          })
+        }
+        await notifyAdmins({
+          type:           'attendance_approved',
+          title:          'Bulk Attendance Update',
+          message:        `${usersRes.rows.length} user(s) had attendance bulk-updated to "${status}" for ${from} to ${to}`,
+          reference_id:   null,
+          reference_type: 'attendance',
+          metadata:       { user_ids: foundIds, from, to, status },
+        })
+      } catch (e) {
+        console.error('[Notification] bulkChangeAttendanceStatus failed:', e.message)
+      }
+    })
+
+    return sendSuccess(res, `Attendance bulk-updated to "${status}" for ${foundIds.length} user(s) across ${dates.length} day(s)`, {
+      users_updated:              foundIds.length,
+      not_found_user_ids:         notFoundIds,
+      dates_updated:              dates.length,
+      records_updated:            recordsUpdated,
+      salary_slips_recalculated:  salaryImpacts.length,
+      salary_impacts:             salaryImpacts,
     })
   } catch (err) {
     await client.query('ROLLBACK')
@@ -1940,6 +2081,7 @@ module.exports = {
   approveStatus, getPendingApprovals,
   getTeamAttendance,
   changeAttendanceStatus,
+  bulkChangeAttendanceStatus,
   getTodayAll,
   applyLeave, getTodayLeaves, getAllLeaves,
   approveLeave, disapproveLeave,
