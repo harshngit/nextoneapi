@@ -11,6 +11,7 @@
  * GET /api/v1/export/projects
  * GET /api/v1/export/users          (admin only)
  * GET /api/v1/export/attendance     (admin = all, others = own)
+ * GET /api/v1/export/website-inquiries (status, source, project, assigned_to, search filters)
  * GET /api/v1/export/all            (admin only – every module in one workbook)
  *
  * Common query params: from, to, project_id, status
@@ -1396,6 +1397,156 @@ const buildReassignmentHistorySheet = async (wb, user, start, end) => {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// ── WEBSITE INQUIRIES EXPORT ─────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+
+const INQUIRY_STATUS_COLOR = {
+  new:       { fill: 'FFE0F2FE', font: '0C4A6E' },
+  contacted: { fill: 'FFFEF3C7', font: '92400E' },
+  converted: { fill: 'FFD1FAE5', font: '065F46' },
+  spam:      { fill: 'FFE5E7EB', font: '374151' },
+  closed:    { fill: 'FFFEE2E2', font: '991B1B' },
+}
+
+// Not part of `isAdmin`-based role scoping — website inquiries have no
+// per-role visibility restriction anywhere in this app (matches
+// GET /api/v1/website-inquiries, which every authenticated staff role can
+// see in full), so this export doesn't restrict by caller either. Filters
+// are opt-in, same set as the list endpoint plus assigned_to.
+const buildWebsiteInquiriesSheet = async (wb, { start, end, status, source, project, assignedTo, search }) => {
+  const conditions = [`wi.created_at::date BETWEEN $1 AND $2`]
+  const params  = [start, end]
+  let   idx     = 3
+  if (status)     { conditions.push(`wi.status = $${idx++}`); params.push(status) }
+  if (source)     { conditions.push(`wi.source ILIKE $${idx++}`); params.push(source) }
+  if (project)    { conditions.push(`COALESCE(p.name, wi.project_name_text) ILIKE $${idx++}`); params.push(`%${project}%`) }
+  if (assignedTo) { conditions.push(`wi.assigned_to = $${idx++}`); params.push(assignedTo) }
+  if (search) {
+    conditions.push(`(wi.name ILIKE $${idx} OR wi.phone ILIKE $${idx} OR wi.email ILIKE $${idx})`)
+    params.push(`%${search}%`); idx++
+  }
+
+  const rows = await pool.query(
+    `SELECT wi.id, wi.name, wi.phone, wi.alternate_phone_number, wi.email,
+            wi.configuration, wi.message, wi.source, wi.status,
+            COALESCE(p.name, wi.project_name_text) AS project_name, p.city AS project_city,
+            CONCAT(au.first_name,' ',au.last_name) AS assigned_to_name,
+            wi.converted_to, wi.lead_id, wi.converted_at,
+            CONCAT(cb.first_name,' ',cb.last_name) AS converted_by_name,
+            wi.ip_address, wi.created_at, wi.updated_at
+     FROM website_inquiries wi
+     LEFT JOIN projects p  ON p.id  = wi.project_id
+     LEFT JOIN users    au ON au.id = wi.assigned_to
+     LEFT JOIN users    cb ON cb.id = wi.converted_by
+     WHERE ${conditions.join(' AND ')}
+     ORDER BY wi.created_at DESC`,
+    params
+  )
+
+  // ── Sheet 1: full detail ──────────────────────────────────────────────────
+  const ws = wb.addWorksheet('Website Inquiries', {
+    views: [{ state: 'frozen', xSplit: 0, ySplit: 2 }],
+    properties: { tabColor: { argb: 'FF0EA5E9' } },
+  })
+  addTitle(ws, `Website Inquiries  |  ${fmtDate(start)} – ${fmtDate(end)}`, 20, 'FF0369A1')
+
+  ws.columns = [
+    { key: 'sno', width: 5 },
+    { key: 'name', width: 22 }, { key: 'phone', width: 16 }, { key: 'alt', width: 16 },
+    { key: 'email', width: 26 }, { key: 'config', width: 14 }, { key: 'message', width: 34 },
+    { key: 'source', width: 14 }, { key: 'status', width: 14 },
+    { key: 'project', width: 22 }, { key: 'city', width: 14 },
+    { key: 'assigned', width: 20 },
+    { key: 'converted', width: 12 }, { key: 'converted_to', width: 14 },
+    { key: 'lead_id', width: 24 }, { key: 'converted_at', width: 18 }, { key: 'converted_by', width: 20 },
+    { key: 'ip', width: 16 }, { key: 'created', width: 18 }, { key: 'updated', width: 18 },
+  ]
+  const h = ws.getRow(2)
+  h.values = ['#','Name','Phone','Alt Phone','Email','Configuration','Message','Source','Status',
+    'Project','City','Assigned To','Converted?','Converted To','Lead ID','Converted At','Converted By',
+    'IP Address','Created At','Updated At']
+  styleHeader(h, 'FF0369A1')
+
+  rows.rows.forEach((r, i) => {
+    const sc  = INQUIRY_STATUS_COLOR[r.status] || { fill: 'FFF9FAFB', font: '111827' }
+    const row = ws.addRow({
+      sno: i + 1, name: r.name, phone: r.phone, alt: r.alternate_phone_number || '—',
+      email: r.email || '—', config: r.configuration || '—', message: r.message || '—',
+      source: r.source || '—', status: (r.status || '').toUpperCase(),
+      project: r.project_name || '—', city: r.project_city || '—',
+      assigned: r.assigned_to_name || '—',
+      converted: r.status === 'converted' ? 'Yes' : 'No',
+      converted_to: r.converted_to ? r.converted_to.replace(/_/g, ' ') : '—',
+      lead_id: r.lead_id || '—',
+      converted_at: r.converted_at ? fmtDateTime(r.converted_at) : '—',
+      converted_by: r.converted_by_name || '—',
+      ip: r.ip_address || '—',
+      created: fmtDateTime(r.created_at), updated: fmtDateTime(r.updated_at),
+    })
+    row.height = 20
+    const sc2 = row.getCell('status')
+    sc2.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: sc.fill } }
+    sc2.font = { bold: true, size: 9, color: { argb: `FF${sc.font}` } }
+    sc2.alignment = { horizontal: 'center', vertical: 'middle' }
+    shadeRow(row, i)
+  })
+  ws.autoFilter = { from: 'A2', to: 'T2' }
+
+  // ── Sheet 2: summary by status ────────────────────────────────────────────
+  const ws2 = wb.addWorksheet('Summary By Status', { properties: { tabColor: { argb: 'FF7DD3FC' } } })
+  addTitle(ws2, `Summary By Status  |  ${fmtDate(start)} – ${fmtDate(end)}`, 3, 'FF0369A1')
+  ws2.columns = [{ key: 'status', width: 26 }, { key: 'count', width: 12 }, { key: 'pct', width: 12 }]
+  const hs2 = ws2.getRow(2)
+  hs2.values = ['Status', 'Count', '% Share']; styleHeader(hs2, 'FF0369A1')
+
+  const total = rows.rows.length
+  const byStatus = {}
+  rows.rows.forEach(r => { byStatus[r.status] = (byStatus[r.status] || 0) + 1 })
+  Object.entries(byStatus).sort((a, b) => b[1] - a[1]).forEach(([st, cnt]) => {
+    const sc  = INQUIRY_STATUS_COLOR[st] || { fill: 'FFF9FAFB', font: '111827' }
+    const row = ws2.addRow({ status: st.toUpperCase(), count: cnt, pct: total > 0 ? `${((cnt / total) * 100).toFixed(1)}%` : '0%' })
+    row.height = 22
+    row.getCell('status').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: sc.fill } }
+    row.getCell('status').font = { bold: true, color: { argb: `FF${sc.font}` } }
+    row.getCell('count').alignment = { horizontal: 'center' }
+    row.getCell('pct').alignment   = { horizontal: 'center' }
+  })
+  const totRow2 = ws2.addRow({ status: 'TOTAL', count: total, pct: '100%' })
+  totRow2.height = 24
+  for (let c = 1; c <= 3; c++) {
+    totRow2.getCell(c).font = { bold: true, size: 11 }
+    totRow2.getCell(c).alignment = { horizontal: 'center', vertical: 'middle' }
+  }
+  ws2.autoFilter = { from: 'A2', to: 'C2' }
+
+  // ── Sheet 3: summary by source (Website / Facebook / WhatsApp / Instagram / other) ──
+  const ws3 = wb.addWorksheet('Summary By Source', { properties: { tabColor: { argb: 'FF7DD3FC' } } })
+  addTitle(ws3, `Summary By Source  |  ${fmtDate(start)} – ${fmtDate(end)}`, 3, 'FF0369A1')
+  ws3.columns = [{ key: 'source', width: 26 }, { key: 'count', width: 12 }, { key: 'pct', width: 12 }]
+  const hs3 = ws3.getRow(2)
+  hs3.values = ['Source', 'Count', '% Share']; styleHeader(hs3, 'FF0369A1')
+
+  const bySource = {}
+  rows.rows.forEach(r => { const s = r.source || 'Unknown'; bySource[s] = (bySource[s] || 0) + 1 })
+  Object.entries(bySource).sort((a, b) => b[1] - a[1]).forEach(([src, cnt], i) => {
+    const row = ws3.addRow({ source: src, count: cnt, pct: total > 0 ? `${((cnt / total) * 100).toFixed(1)}%` : '0%' })
+    row.height = 22
+    row.getCell('count').alignment = { horizontal: 'center' }
+    row.getCell('pct').alignment   = { horizontal: 'center' }
+    shadeRow(row, i)
+  })
+  const totRow3 = ws3.addRow({ source: 'TOTAL', count: total, pct: '100%' })
+  totRow3.height = 24
+  for (let c = 1; c <= 3; c++) {
+    totRow3.getCell(c).font = { bold: true, size: 11 }
+    totRow3.getCell(c).alignment = { horizontal: 'center', vertical: 'middle' }
+  }
+  ws3.autoFilter = { from: 'A2', to: 'C2' }
+
+  return rows.rows.length
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // ── ROUTE HANDLERS ───────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1541,6 +1692,17 @@ const exportReassignmentHistory = async (req, res, next) => {
   } catch (err) { next(err) }
 }
 
+const exportWebsiteInquiries = async (req, res, next) => {
+  try {
+    const { from, to, status, source, project, assigned_to, search } = req.query
+    const { start, end } = defaultRange(from, to)
+    const wb = new ExcelJS.Workbook()
+    wb.creator = 'NextOne Realty CRM'; wb.created = new Date()
+    await buildWebsiteInquiriesSheet(wb, { start, end, status, source, project, assignedTo: assigned_to, search })
+    await streamWorkbook(res, wb, `WebsiteInquiries_${start}_${end}.xlsx`)
+  } catch (err) { next(err) }
+}
+
 const exportAll = async (req, res, next) => {
   try {
     if (!isAdmin(req.user)) return next(new AppError('Admin access required', 403))
@@ -1560,6 +1722,7 @@ const exportAll = async (req, res, next) => {
     await buildHolidaysSheet(wb, start, end)
     await buildPhoneRevealSheet(wb, req.user, start, end)
     await buildReassignmentHistorySheet(wb, req.user, start, end)
+    await buildWebsiteInquiriesSheet(wb, { start, end })
     if (isAdmin(req.user)) await buildSalarySheets(wb, start, end)
     await streamWorkbook(res, wb, `NextOne_CRM_Export_${start}_${end}.xlsx`)
   } catch (err) { next(err) }
@@ -1570,4 +1733,5 @@ module.exports = {
   exportProjects, exportUsers, exportAttendance, exportAll,
   exportSiteRevisits, exportClosures, exportHolidays,
   exportSalary, exportTargets, exportPhoneReveal, exportReassignmentHistory,
+  exportWebsiteInquiries,
 }

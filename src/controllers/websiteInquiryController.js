@@ -101,7 +101,7 @@ const createInstagramInquiry = makeCreateInquiry("Instagram");
 // ─── GET /api/v1/website-inquiries ─────────────────────────────────────────────
 const getAllInquiries = async (req, res, next) => {
   try {
-    const { status, source, project, search, from, to, page = 1, per_page = 20 } = req.query;
+    const { status, source, project, search, assigned_to, from, to, page = 1, per_page = 20 } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(per_page);
 
     let conditions = [];
@@ -114,6 +114,7 @@ const getAllInquiries = async (req, res, next) => {
       conditions.push(`COALESCE(p.name, wi.project_name_text) ILIKE $${idx++}`);
       params.push(`%${project}%`);
     }
+    if (assigned_to) { conditions.push(`wi.assigned_to = $${idx++}`); params.push(assigned_to); }
     if (search) {
       conditions.push(`(wi.name ILIKE $${idx} OR wi.phone ILIKE $${idx} OR wi.email ILIKE $${idx})`);
       params.push(`%${search}%`); idx++;
@@ -131,9 +132,11 @@ const getAllInquiries = async (req, res, next) => {
     const total = parseInt(countResult.rows[0].count);
 
     const dataResult = await pool.query(
-      `SELECT wi.*, COALESCE(p.name, wi.project_name_text) AS project_name
+      `SELECT wi.*, COALESCE(p.name, wi.project_name_text) AS project_name,
+              CONCAT(au.first_name,' ',au.last_name) AS assigned_to_name
        FROM website_inquiries wi
        LEFT JOIN projects p ON p.id = wi.project_id
+       LEFT JOIN users au ON au.id = wi.assigned_to
        ${where}
        ORDER BY wi.created_at DESC
        LIMIT $${idx++} OFFSET $${idx++}`,
@@ -151,9 +154,11 @@ const getInquiryById = async (req, res, next) => {
   try {
     const { id } = req.params;
     const result = await pool.query(
-      `SELECT wi.*, COALESCE(p.name, wi.project_name_text) AS project_name
+      `SELECT wi.*, COALESCE(p.name, wi.project_name_text) AS project_name,
+              CONCAT(au.first_name,' ',au.last_name) AS assigned_to_name
        FROM website_inquiries wi
        LEFT JOIN projects p ON p.id = wi.project_id
+       LEFT JOIN users au ON au.id = wi.assigned_to
        WHERE wi.id = $1`,
       [id]
     );
@@ -171,10 +176,17 @@ const updateInquiry = async (req, res, next) => {
     const existing = await pool.query("SELECT id FROM website_inquiries WHERE id = $1", [id]);
     if (!existing.rows.length) return next(new AppError("Website inquiry not found", 404));
 
-    const { name, phone, alternate_phone_number, email, message, configuration, status, project_id, project_name } = req.body;
+    const { name, phone, alternate_phone_number, email, message, configuration, status, assigned_to, project_id, project_name } = req.body;
 
     if (status && !["new", "contacted", "converted", "spam", "closed"].includes(status)) {
       return next(new AppError("Invalid status value", 400));
+    }
+
+    if (assigned_to) {
+      const assigneeChk = await pool.query(
+        "SELECT id FROM users WHERE id = $1 AND is_active = true", [assigned_to]
+      );
+      if (!assigneeChk.rows.length) return next(new AppError("assigned_to user not found or inactive", 400));
     }
 
     let resolvedProjectId, resolvedProjectNameText;
@@ -207,6 +219,7 @@ const updateInquiry = async (req, res, next) => {
     if (message !== undefined)                 set("message", message);
     if (configuration !== undefined)           set("configuration", configuration);
     if (status !== undefined)                  set("status", status);
+    if (assigned_to !== undefined)             set("assigned_to", assigned_to);
     if (projectProvided) {
       set("project_id", resolvedProjectId);
       set("project_name_text", resolvedProjectNameText);
@@ -323,7 +336,7 @@ const convertInquiry = async (req, res, next) => {
         inquiry.name, inquiry.phone, inquiry.alternate_phone_number || null,
         inquiry.email || null, inquiry.source || "Website",
         resolvedProjectId, resolvedProjectNameText,
-        assigned_to || null, budget || null, location_preference || null,
+        assigned_to || inquiry.assigned_to || null, budget || null, location_preference || null,
         configuration || inquiry.configuration || null,
         leadStatus, req.user.id,
       ]
@@ -361,12 +374,15 @@ const convertInquiry = async (req, res, next) => {
       siteVisit = svResult.rows[0];
     }
 
+    // assigned_to is synced to whatever ended up on the lead (explicit body
+    // value, else the inquiry's own pre-existing assignment) so the inquiry
+    // and its resulting lead always show the same assignee.
     await client.query(
       `UPDATE website_inquiries
        SET status = 'converted', converted_to = $1, lead_id = $2, converted_at = NOW(),
-           converted_by = $3, updated_at = NOW()
-       WHERE id = $4`,
-      [convert_to, lead.id, req.user.id, id]
+           converted_by = $3, assigned_to = $4, updated_at = NOW()
+       WHERE id = $5`,
+      [convert_to, lead.id, req.user.id, lead.assigned_to, id]
     );
 
     await client.query("COMMIT");

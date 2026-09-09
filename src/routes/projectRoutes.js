@@ -757,11 +757,17 @@ router.post("/:id/share", authenticate, checkPermission("projects", "export"), s
  * @swagger
  * /api/v1/projects/{id}/share-whatsapp:
  *   post:
- *     summary: Share a project document via WhatsApp
+ *     summary: Share project details and documents via WhatsApp
  *     description: >
- *       Sends a specific project document (unit plan, creative, payment plan, or video)
- *       to a WhatsApp number as a document message.
- *       Requires BACKEND_URL env var to construct the public file link.
+ *       Sends the project's own detail block (name, developer, location, price
+ *       range, configurations, RERA, status — never any lead's name/phone) as
+ *       a WhatsApp text message, then sends each requested document (unit
+ *       plan, creative, payment plan, video) as a separate WhatsApp document
+ *       message. Requires BACKEND_URL env var to construct the public file
+ *       link, and WHATSAPP_TOKEN/WHATSAPP_PHONE_ID to actually deliver.
+ *       Meta only allows these freeform (non-template) sends to a number
+ *       that has messaged the business within the last 24 hours — outside
+ *       that window the send fails and is reported per-item in the response.
  *       Requires the "export" permission on Project Management (Access Control).
  *     tags: [Projects]
  *     security:
@@ -780,43 +786,48 @@ router.post("/:id/share", authenticate, checkPermission("projects", "export"), s
  *         application/json:
  *           schema:
  *             type: object
- *             required: [phone, document_id]
+ *             required: [phone]
  *             properties:
  *               phone:
  *                 type: string
  *                 description: WhatsApp phone number (10-digit Indian or E.164 format)
  *                 example: "9876543210"
- *               document_id:
- *                 type: string
- *                 format: uuid
- *                 description: ID of the project document to send
- *                 example: "doc-uuid-001"
+ *               document_ids:
+ *                 type: array
+ *                 items: { type: string, format: uuid }
+ *                 description: IDs of the project documents to send (omit/empty to send only the detail text)
+ *                 example: ["doc-uuid-001", "doc-uuid-002"]
  *           example:
  *             phone: "9876543210"
- *             document_id: "doc-uuid-001"
+ *             document_ids: ["doc-uuid-001", "doc-uuid-002"]
  *     responses:
  *       200:
- *         description: Document sent via WhatsApp
+ *         description: Project shared via WhatsApp (detail text and/or documents)
  *         content:
  *           application/json:
  *             example:
  *               success: true
- *               message: "Document shared via WhatsApp"
+ *               message: "Project shared via WhatsApp"
  *               data:
  *                 project_id: "proj-uuid-001"
  *                 project_name: "Skyline Heights"
- *                 document:
- *                   id: "doc-uuid-001"
- *                   file_name: "2bhk_floorplan.pdf"
- *                   type: "unit_plan"
  *                 sent_to: "9876543210"
- *                 whatsapp_message_id: "wamid.xxx"
+ *                 text_sent: true
+ *                 text_error: null
+ *                 documents_sent:
+ *                   - id: "doc-uuid-001"
+ *                     file_name: "2bhk_floorplan.pdf"
+ *                     type: "unit_plan"
+ *                     whatsapp_message_id: "wamid.xxx"
+ *                 documents_failed: []
  *       400:
- *         description: Missing phone or document_id, invalid phone number
+ *         description: Missing/invalid phone, or none of the given document_ids belong to this project
  *       404:
- *         description: Project or document not found
+ *         description: Project not found
  *       500:
  *         description: BACKEND_URL not configured
+ *       502:
+ *         description: WhatsApp send failed entirely (e.g. number outside the 24-hour messaging window)
  */
 const shareProjectWhatsappController = require("../controllers/shareProjectController").shareProjectWhatsapp;
 router.post("/:id/share-whatsapp", authenticate, checkPermission("projects", "export"), shareProjectWhatsappController);

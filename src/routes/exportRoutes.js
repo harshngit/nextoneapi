@@ -33,6 +33,7 @@ const ADMIN = ['super_admin', 'admin']
  *     - Targets     → Monthly site-visit/closure targets vs achieved
  *     - Phone Reveal Requests → Who requested/approved phone number reveals
  *     - Lead Reassignments    → Lead reassignment audit trail
+ *     - Website Inquiries → Full detail + Summary By Status + Summary By Source
  *     - All         → Every tab above in one file (admin only)
  *
  *     Every "By User & Date" tab is a pivot grid: one row per user, one
@@ -323,6 +324,37 @@ router.get('/phone-reveal-requests', authenticate, ctrl.exportPhoneReveal)
  *             schema: { type: string, format: binary }
  */
 router.get('/lead-reassignments', authenticate, ctrl.exportReassignmentHistory)
+
+/**
+ * @swagger
+ * /api/v1/export/website-inquiries:
+ *   get:
+ *     summary: Export website inquiries to Excel
+ *     description: >
+ *       Every field on the inquiry, plus resolved project/assignee/converted-by names.
+ *       Three tabs: **Website Inquiries** (full detail) + **Summary By Status** +
+ *       **Summary By Source** (Website / Facebook / WhatsApp / Instagram breakdown).
+ *       No role-based scoping — matches GET /api/v1/website-inquiries, which every
+ *       authenticated staff role can already see in full.
+ *     tags: [Exports]
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - { in: query, name: from,        schema: { type: string, format: date }, example: "2026-05-01" }
+ *       - { in: query, name: to,          schema: { type: string, format: date }, example: "2026-05-31" }
+ *       - { in: query, name: status,      schema: { type: string, enum: [new, contacted, converted, spam, closed] } }
+ *       - { in: query, name: source,      schema: { type: string }, description: "e.g. Website, Facebook, WhatsApp, Instagram" }
+ *       - { in: query, name: project,     schema: { type: string }, description: "Partial project name match" }
+ *       - { in: query, name: assigned_to, schema: { type: string, format: uuid } }
+ *       - { in: query, name: search,      schema: { type: string }, description: "Matches name, phone, or email" }
+ *     responses:
+ *       200:
+ *         description: Excel file
+ *         content:
+ *           application/vnd.openxmlformats-officedocument.spreadsheetml.sheet:
+ *             schema: { type: string, format: binary }
+ */
+router.get('/website-inquiries', authenticate, ctrl.exportWebsiteInquiries)
 
 /**
  * @swagger

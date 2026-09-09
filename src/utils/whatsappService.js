@@ -374,7 +374,32 @@ const sendFollowUpScheduled = async ({ leadName, leadPhone, projectName }) => {
 };
 
 // ════════════════════════════════════════════════════════════════════════════
-// 14. DOCUMENT — Send a document (PDF, image, etc.) via WhatsApp
+// 14. TEXT — Freeform text message (e.g. project detail blocks)
+//
+// Same 24-hour customer-service-window rule as sendDocument: Meta only allows
+// freeform (non-template) messages — text or document — to numbers that have
+// messaged the business within the last 24 hours. Outside that window this
+// call fails with a Meta API error, which the caller should surface as-is
+// rather than silently swallow.
+// ════════════════════════════════════════════════════════════════════════════
+const sendText = async ({ phone, message }) => {
+  const to = cleanPhone(phone);
+  if (!to) {
+    console.warn('[WhatsApp] Invalid phone number:', phone);
+    return null;
+  }
+
+  console.log('[WhatsApp] Sending text to', phone);
+  return callWhatsAppAPI({
+    messaging_product: 'whatsapp',
+    to,
+    type: 'text',
+    text: { body: message, preview_url: true },
+  });
+};
+
+// ════════════════════════════════════════════════════════════════════════════
+// 15. DOCUMENT — Send a document (PDF, image, etc.) via WhatsApp
 //
 // Uses the WhatsApp Cloud API "document" message type with a public link.
 // ════════════════════════════════════════════════════════════════════════════
@@ -414,6 +439,7 @@ module.exports = {
   sendBookingConfirmed,
   sendBookingCancelled,
   sendFollowUpScheduled,
+  sendText,
   sendDocument,
   sendTemplate,   // export for custom use
   cleanPhone,

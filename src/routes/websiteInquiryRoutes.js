@@ -171,6 +171,10 @@ router.post("/instagram", ctrl.createInstagramInquiry);
  *         name: project
  *         schema: { type: string }
  *       - in: query
+ *         name: assigned_to
+ *         schema: { type: string, format: uuid }
+ *         description: Filter by the staff member the inquiry is assigned to
+ *       - in: query
  *         name: search
  *         schema: { type: string }
  *       - in: query
@@ -240,11 +244,14 @@ router.get("/:id", authenticate, ctrl.getInquiryById);
  *               configuration:           { type: string }
  *               message:                 { type: string }
  *               status:                  { type: string, enum: [new, contacted, converted, spam, closed] }
+ *               assigned_to:             { type: string, format: uuid, description: "Staff member to assign this inquiry to (before conversion). Pass null to unassign." }
  *               project_id:              { type: string, format: uuid }
  *               project_name:            { type: string }
  *     responses:
  *       200:
  *         description: Website inquiry updated
+ *       400:
+ *         description: Invalid status, or assigned_to user not found/inactive
  *       404:
  *         description: Website inquiry not found
  */
@@ -258,7 +265,11 @@ router.put("/:id", authenticate, ctrl.updateInquiry);
  *     description: >
  *       Always creates a Lead. When convert_to is "follow_up" or
  *       "site_visit", a Task / Site Visit is additionally created and
- *       linked to that same lead.
+ *       linked to that same lead. assigned_to here overrides whoever the
+ *       inquiry was already assigned to (via PUT); if omitted, the inquiry's
+ *       existing assignment carries over to the lead automatically. Either
+ *       way, the inquiry's own assigned_to is synced to match the lead's
+ *       afterward, so both always show the same assignee.
  *     tags: [Website Inquiries]
  *     security:
  *       - BearerAuth: []

@@ -356,23 +356,46 @@ const whatsapp = require('../utils/whatsappService');
 
 const BACKEND_URL = (process.env.BACKEND_URL || '').replace(/\/$/, '');
 
+// Plain project-detail text block for WhatsApp — deliberately has no lead
+// name/phone/status in it, just the project itself, so it reads the same
+// regardless of which lead's phone number it's sent to.
+const buildProjectDetailText = (project) => {
+  const configs = (() => {
+    try { return Array.isArray(project.configurations) ? project.configurations : JSON.parse(project.configurations || '[]') }
+    catch { return [] }
+  })();
+  const lines = [`*${project.name}*`];
+  if (project.developer)   lines.push(`Developer: ${project.developer}`);
+  const location = [project.locality, project.city].filter(Boolean).join(', ');
+  if (location)             lines.push(`Location: ${location}`);
+  if (project.price_range) lines.push(`Price Range: ${project.price_range}`);
+  if (configs.length)      lines.push(`Configurations: ${configs.join(' | ')}`);
+  if (project.rera_number) lines.push(`RERA No.: ${project.rera_number}`);
+  if (project.status)      lines.push(`Status: ${project.status.charAt(0).toUpperCase() + project.status.slice(1)}`);
+  lines.push('', 'Shared via Next One Realty');
+  return lines.join('\n');
+};
+
 const shareProjectWhatsapp = async (req, res, next) => {
   try {
     const { id: projectId } = req.params;
-    const { phone, document_id } = req.body;
+    const { phone, document_id, document_ids } = req.body;
 
     if (!phone) return next(new AppError('phone is required', 400));
 
     const cleanedPhone = whatsapp.cleanPhone(phone);
     if (!cleanedPhone) return next(new AppError('Invalid phone number', 400));
 
-    if (!document_id) return next(new AppError('document_id is required', 400));
+    // Accept either the legacy singular `document_id` or a `document_ids` array.
+    const requestedIds = Array.isArray(document_ids) && document_ids.length > 0
+      ? document_ids
+      : (document_id ? [document_id] : []);
 
     if (!BACKEND_URL) return next(new AppError('BACKEND_URL is not configured on the server', 500));
 
     // ── Fetch project ────────────────────────────────────────────────────────
     const projectResult = await pool.query(
-      'SELECT id, name FROM projects WHERE id = $1',
+      'SELECT * FROM projects WHERE id = $1',
       [projectId]
     );
     if (projectResult.rows.length === 0) {
@@ -380,37 +403,70 @@ const shareProjectWhatsapp = async (req, res, next) => {
     }
     const project = projectResult.rows[0];
 
-    // ── Fetch the document ───────────────────────────────────────────────────
-    const docResult = await pool.query(
-      'SELECT id, document_type, file_name, file_path, mime_type FROM project_documents WHERE id = $1 AND project_id = $2',
-      [document_id, projectId]
-    );
-    if (docResult.rows.length === 0) {
-      return next(new AppError('Document not found for this project', 404));
+    // ── Fetch requested documents (or all of them if none specified) ────────
+    let docs = [];
+    if (requestedIds.length > 0) {
+      const docsResult = await pool.query(
+        'SELECT id, document_type, file_name, file_path, mime_type FROM project_documents WHERE project_id = $1 AND id = ANY($2::uuid[])',
+        [projectId, requestedIds]
+      );
+      docs = docsResult.rows;
+      if (docs.length === 0) {
+        return next(new AppError('No valid documents found with the provided IDs', 400));
+      }
     }
-    const doc = docResult.rows[0];
 
-    // ── Construct public URL ─────────────────────────────────────────────────
-    const filePath     = doc.file_path.startsWith('/') ? doc.file_path : `/${doc.file_path}`;
-    const documentLink = `${BACKEND_URL}${filePath}`;
+    // ── Send the project detail as a plain text message first ───────────────
+    const detailText = buildProjectDetailText(project);
+    let textSent = false;
+    let textError = null;
+    try {
+      const textResult = await whatsapp.sendText({ phone, message: detailText });
+      textSent = !!textResult;
+    } catch (e) {
+      textError = e.message;
+    }
 
-    const typeLabel = doc.document_type.replace(/_/g, ' ');
-    const caption   = `${project.name} — ${typeLabel.charAt(0).toUpperCase() + typeLabel.slice(1)}`;
+    // ── Then send each requested document, one at a time ────────────────────
+    const documentsSent   = [];
+    const documentsFailed = [];
+    for (const doc of docs) {
+      try {
+        const filePath     = doc.file_path.startsWith('/') ? doc.file_path : `/${doc.file_path}`;
+        const documentLink = `${BACKEND_URL}${filePath}`;
+        const typeLabel    = doc.document_type.replace(/_/g, ' ');
+        const caption      = `${project.name} — ${typeLabel.charAt(0).toUpperCase() + typeLabel.slice(1)}`;
 
-    // ── Send via WhatsApp ────────────────────────────────────────────────────
-    const result = await whatsapp.sendDocument({
-      phone,
-      documentLink,
-      fileName: doc.file_name,
-      caption,
-    });
+        const result = await whatsapp.sendDocument({
+          phone,
+          documentLink,
+          fileName: doc.file_name,
+          caption,
+        });
+        documentsSent.push({
+          id: doc.id, file_name: doc.file_name, type: doc.document_type,
+          whatsapp_message_id: result?.messages?.[0]?.id || null,
+        });
+      } catch (e) {
+        documentsFailed.push({ id: doc.id, file_name: doc.file_name, error: e.message });
+      }
+    }
 
-    return sendSuccess(res, 'Document shared via WhatsApp', {
-      project_id:         projectId,
-      project_name:       project.name,
-      document:           { id: doc.id, file_name: doc.file_name, type: doc.document_type },
+    if (!textSent && documentsSent.length === 0) {
+      return next(new AppError(
+        textError || 'Failed to send via WhatsApp — the number may be outside the 24-hour messaging window',
+        502
+      ));
+    }
+
+    return sendSuccess(res, 'Project shared via WhatsApp', {
+      project_id:        projectId,
+      project_name:      project.name,
       sent_to:            phone,
-      whatsapp_message_id: result?.messages?.[0]?.id || null,
+      text_sent:          textSent,
+      text_error:         textError,
+      documents_sent:     documentsSent,
+      documents_failed:   documentsFailed,
     });
 
   } catch (err) {
