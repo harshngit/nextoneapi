@@ -301,10 +301,32 @@ router.put("/:id", authenticate, ctrl.updateInquiry);
  *               visit_date:          { type: string, format: date, description: "Required for site_visit" }
  *               visit_time:          { type: string, description: "Required for site_visit" }
  *               transport_arranged:  { type: boolean }
- *           example:
- *             convert_to: "site_visit"
- *             visit_date: "2026-07-20"
- *             visit_time: "11:00"
+ *           examples:
+ *             siteVisit:
+ *               summary: Convert to a site visit
+ *               value:
+ *                 convert_to: "site_visit"
+ *                 assigned_to: "user-uuid-1"
+ *                 status: "site_visit_scheduled"
+ *                 visit_date: "2026-07-20"
+ *                 visit_time: "11:00"
+ *             followUp:
+ *               summary: Convert to a follow-up task
+ *               value:
+ *                 convert_to: "follow_up"
+ *                 assigned_to: "user-uuid-1"
+ *                 status: "follow_up"
+ *                 title: "Call back about 2BHK options"
+ *                 due_date: "2026-07-22T10:00:00Z"
+ *                 priority: "medium"
+ *             leadOnly:
+ *               summary: Convert to a lead only, with a custom status and assignee
+ *               value:
+ *                 convert_to: "lead"
+ *                 assigned_to: "user-uuid-1"
+ *                 status: "interested"
+ *                 budget: "60-80 Lakhs"
+ *                 location_preference: "Andheri West"
  *     responses:
  *       201:
  *         description: Inquiry converted
