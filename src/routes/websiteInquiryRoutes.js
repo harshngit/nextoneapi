@@ -291,7 +291,7 @@ router.put("/:id", authenticate, ctrl.updateInquiry);
  *               budget:              { type: string }
  *               location_preference: { type: string }
  *               configuration:       { type: string }
- *               status:              { type: string, description: "Override the lead's default status" }
+ *               status:              { type: string, description: "Override the lead's default status — must be a real lead status (system status or an active custom one from GET /api/v1/config/lead-statuses), e.g. \"interested\", \"negotiation\"" }
  *               project_id:          { type: string, format: uuid, description: "Override the inquiry's project" }
  *               project_name:        { type: string }
  *               title:               { type: string, description: "Follow-up only" }
@@ -318,7 +318,7 @@ router.put("/:id", authenticate, ctrl.updateInquiry);
  *                 task: null
  *                 site_visit: { id: "sv-uuid", visit_date: "2026-07-20", visit_time: "11:00" }
  *       400:
- *         description: Missing required fields, or already converted
+ *         description: Missing required fields, already converted, invalid status, or duplicate phone
  *       404:
  *         description: Website inquiry not found
  */

@@ -13,6 +13,25 @@ const { resolveProjectId, resolveProjectName } = require("../utils/projectResolv
 const { notifyAdmins } = require("./notificationController");
 const emailService = require("../utils/emailService");
 
+// ─── Lead status validation — same rule as leadController.createLead /
+// leadReassignController.reassignLead: a system status, or an active custom
+// status from lead_statuses. Duplicated locally (matches the existing
+// pattern in leadReassignController.js) since leadController doesn't export
+// its copy. ──────────────────────────────────────────────────────────────────
+const VALID_LEAD_STATUSES = [
+  "new", "contacted", "interested", "follow_up",
+  "site_visit_scheduled", "site_visit_done",
+  "negotiation", "booked", "lost",
+];
+
+const isValidLeadStatus = async (status) => {
+  if (VALID_LEAD_STATUSES.includes(status)) return true;
+  const custom = await pool.query(
+    "SELECT key FROM lead_statuses WHERE key = $1 AND is_active = true", [status]
+  );
+  return custom.rows.length > 0;
+};
+
 // Every website-inquiry notification always reaches this inbox, regardless
 // of who's registered as admin in the system.
 const WEBSITE_INQUIRY_NOTIFY_EMAIL = "nextonerealty77@gmail.com";
@@ -273,6 +292,16 @@ const convertInquiry = async (req, res, next) => {
 
     if (!["lead", "follow_up", "site_visit"].includes(convert_to)) {
       return next(new AppError("convert_to must be one of 'lead', 'follow_up', 'site_visit'", 400));
+    }
+
+    // status, when provided, overrides the lead's default status (e.g.
+    // "new" / "follow_up" / "site_visit_scheduled" depending on convert_to)
+    // — must be a real lead status, same rule as POST /api/v1/leads.
+    const hasStatus = status !== undefined && status !== null && status !== "";
+    if (hasStatus && !(await isValidLeadStatus(status))) {
+      return next(new AppError(
+        `Invalid status '${status}'. Use GET /api/v1/config/lead-statuses for the full list.`, 400
+      ));
     }
 
     const existing = await pool.query("SELECT * FROM website_inquiries WHERE id = $1", [id]);
