@@ -156,16 +156,8 @@ const createClosure = async (req, res, next) => {
     );
     if (!leadRes.rows.length) return next(new AppError('Lead not found', 404));
 
-    // Prevent duplicate closure
-    const dupRes = await pool.query(
-      'SELECT id, status FROM lead_closures WHERE lead_id = $1', [lead_id]
-    );
-    if (dupRes.rows.length > 0) {
-      return next(new AppError(
-        `A closure already exists for this lead (status: ${dupRes.rows[0].status}). ` +
-        `Use PUT /api/v1/closures/${dupRes.rows[0].id} to update it.`, 400
-      ));
-    }
+    // A lead can have more than one closure (e.g. separate bookings across
+    // different units/projects) — no uniqueness check here.
 
     const lead = leadRes.rows[0];
     const closedBy = req.user.id;
@@ -291,7 +283,7 @@ const createClosure = async (req, res, next) => {
           bookingDate: booking_date,
         });
         await pool.query(
-          `UPDATE lead_closures SET whatsapp_confirmed_sent = true WHERE lead_id = $1`, [lead_id]
+          `UPDATE lead_closures SET whatsapp_confirmed_sent = true WHERE id = $1`, [result.rows[0].id]
         );
       } catch (waErr) {
         console.error('[WhatsApp] createClosure booking confirmation failed:', waErr.message);
@@ -642,6 +634,8 @@ const updateClosureStatus = async (req, res, next) => {
 };
 
 // ── GET /api/v1/closures/lead/:leadId ────────────────────────────────────────
+// A lead can have more than one closure (e.g. separate bookings across
+// different units/projects), so this returns all of them, most recent first.
 const getClosureByLead = async (req, res, next) => {
   try {
     const { leadId } = req.params;
@@ -654,10 +648,11 @@ const getClosureByLead = async (req, res, next) => {
        FROM lead_closures lc
        LEFT JOIN projects p  ON p.id  = lc.project_id
        LEFT JOIN users    cb ON cb.id = lc.closed_by
-       WHERE lc.lead_id = $1`, [leadId]
+       WHERE lc.lead_id = $1
+       ORDER BY lc.booking_date DESC, lc.created_at DESC`, [leadId]
     );
-    if (!result.rows.length) return next(new AppError('No closure found for this lead', 404));
-    return sendSuccess(res, 'Closure fetched', result.rows[0]);
+    if (!result.rows.length) return next(new AppError('No closures found for this lead', 404));
+    return sendSuccess(res, 'Closures fetched', result.rows);
   } catch (err) { next(err); }
 };
 

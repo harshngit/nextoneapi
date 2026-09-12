@@ -69,7 +69,11 @@ router.get('/summary', authenticate, authorize(...MANAGER), ctrl.getClosureSumma
  * @swagger
  * /api/v1/closures/lead/{leadId}:
  *   get:
- *     summary: Get closure record for a specific lead
+ *     summary: Get all closure records for a specific lead
+ *     description: >
+ *       A lead can have more than one closure (e.g. separate bookings across
+ *       different units/projects), so this returns an array, most recent
+ *       booking first — not a single object.
  *     tags: [Lead Closures]
  *     security:
  *       - BearerAuth: []
@@ -80,9 +84,9 @@ router.get('/summary', authenticate, authorize(...MANAGER), ctrl.getClosureSumma
  *         schema: { type: string, format: uuid }
  *     responses:
  *       200:
- *         description: Closure record
+ *         description: Array of closure records for this lead
  *       404:
- *         description: No closure found for this lead
+ *         description: No closures found for this lead
  */
 router.get('/lead/:leadId', authenticate, ctrl.getClosureByLead);
 
