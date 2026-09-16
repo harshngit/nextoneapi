@@ -68,6 +68,7 @@ app.use('/api/v1/phone-reveal',  phoneRevealRoutes);
 app.use('/api/v1/fcm', fcmRoutes);
 app.use('/api/v1/website-inquiries', require('./routes/websiteInquiryRoutes'));
 app.use('/api/v1/public',        require('./routes/publicRoutes'));
+app.use('/api/v1/webhooks/whatsapp', require('./routes/whatsappWebhookRoutes'));
 
 // ─── 404 Handler ──────────────────────────────────────────────
 app.all("*", (req, res, next) => {
