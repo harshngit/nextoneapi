@@ -21,6 +21,8 @@
 const ExcelJS  = require('exceljs')
 const { pool } = require('../config/db')
 const AppError = require('../utils/AppError')
+const { getTeamIds, LEAF_ROLES } = require('../utils/teamUtils')
+const { resolveProjectId } = require('../utils/projectResolver')
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
@@ -225,13 +227,52 @@ const LEAD_STATUS_COLOR = {
   lost:                  { fill: 'FFFEE2E2', font: '991B1B' },
 }
 
-const buildLeadsSheet = async (wb, user, start, end, projectId) => {
+// filters mirrors every query param GET /api/v1/leads accepts (besides
+// page/per_page) so the export can never show less than what the list view
+// with the same filters shows: { status, source, assignedTo, projectId,
+// project, location, search }.
+const buildLeadsSheet = async (wb, user, start, end, filters = {}) => {
+  const { status, source, assignedTo, projectId, project, location, search } = filters
   const admin = isAdmin(user)
   const conditions = [`l.is_archived = false`, `l.created_at::date BETWEEN $1 AND $2`]
   const params  = [start, end]
   let   idx     = 3
-  if (!admin) { conditions.push(`l.assigned_to = $${idx++}`); params.push(user.id) }
-  if (projectId) { conditions.push(`l.project_id = $${idx++}`); params.push(projectId) }
+
+  // Role scoping — matches GET /api/v1/leads exactly: leaf roles see only
+  // their own leads, mid-hierarchy roles see their recursive team, admins
+  // see everything.
+  if (LEAF_ROLES.includes(user.role)) {
+    conditions.push(`l.assigned_to = $${idx++}`); params.push(user.id)
+  } else if (!admin) {
+    const teamIds = await getTeamIds(user.id)
+    conditions.push(`l.assigned_to = ANY($${idx++}::uuid[])`); params.push(teamIds)
+  }
+
+  if (status)      { conditions.push(`l.status = $${idx++}`);      params.push(status) }
+  if (source)      { conditions.push(`l.source ILIKE $${idx++}`);  params.push(source) }
+  if (assignedTo)  { conditions.push(`l.assigned_to = $${idx++}`); params.push(assignedTo) }
+  if (projectId) {
+    // Exact match on a known project id/name — never throws; a non-matching
+    // value just yields zero results, same as GET /api/v1/leads.
+    try {
+      const resolvedProjectId = await resolveProjectId(projectId)
+      conditions.push(`l.project_id = $${idx++}`); params.push(resolvedProjectId)
+    } catch (e) {
+      conditions.push('1 = 0')
+    }
+  }
+  if (project) {
+    conditions.push(`COALESCE(p.name, l.project_name_text) ILIKE $${idx++}`)
+    params.push(`%${project}%`)
+  }
+  if (location) {
+    conditions.push(`l.location_preference ILIKE $${idx++}`)
+    params.push(`%${location}%`)
+  }
+  if (search) {
+    conditions.push(`(l.name ILIKE $${idx} OR l.phone ILIKE $${idx} OR l.email ILIKE $${idx})`)
+    params.push(`%${search}%`); idx++
+  }
 
   const rows = await pool.query(
     `SELECT l.id, l.name, l.phone, l.alternate_phone_number, l.email,
@@ -364,13 +405,45 @@ const SV_STATUS_COLOR = {
   no_show:     { fill: 'FFF3F4F6', font: '374151' },
 }
 
-const buildSiteVisitsSheet = async (wb, user, start, end, projectId) => {
+// filters mirrors GET /api/v1/site-visits: { status, leadId, projectId,
+// assignedTo, managerId, search }.
+const buildSiteVisitsSheet = async (wb, user, start, end, filters = {}) => {
+  const { status, leadId, projectId, assignedTo, managerId, search } = filters
   const admin = isAdmin(user)
   const conditions = [`sv.visit_date BETWEEN $1 AND $2`]
   const params = [start, end]
   let idx = 3
-  if (!admin) { conditions.push(`sv.assigned_to = $${idx++}`); params.push(user.id) }
-  if (projectId) { conditions.push(`sv.project_id = $${idx++}`); params.push(projectId) }
+
+  // Role scoping — matches GET /api/v1/site-visits exactly.
+  if (LEAF_ROLES.includes(user.role)) {
+    conditions.push(`sv.assigned_to = $${idx++}`); params.push(user.id)
+  } else if (!admin) {
+    const teamIds = await getTeamIds(user.id)
+    conditions.push(`sv.assigned_to = ANY($${idx++}::uuid[])`); params.push(teamIds)
+  }
+
+  if (status) {
+    const normalizedStatus = ['done', 'complete', 'completed'].includes(status) ? 'done' : status
+    conditions.push(`sv.status = $${idx++}`); params.push(normalizedStatus)
+  }
+  if (leadId)     { conditions.push(`sv.lead_id = $${idx++}`);     params.push(leadId) }
+  if (projectId) {
+    try {
+      const resolvedProjectId = await resolveProjectId(projectId)
+      conditions.push(`sv.project_id = $${idx++}`); params.push(resolvedProjectId)
+    } catch (e) {
+      conditions.push('1 = 0')
+    }
+  }
+  if (assignedTo) { conditions.push(`sv.assigned_to = $${idx++}`); params.push(assignedTo) }
+  if (managerId) {
+    const mgrTeamIds = await getTeamIds(managerId)
+    conditions.push(`sv.assigned_to = ANY($${idx++}::uuid[])`); params.push(mgrTeamIds)
+  }
+  if (search) {
+    conditions.push(`(l.name ILIKE $${idx} OR l.phone ILIKE $${idx} OR COALESCE(p.name, sv.project_name_text) ILIKE $${idx} OR CONCAT(u.first_name,' ',u.last_name) ILIKE $${idx})`)
+    params.push(`%${search}%`); idx++
+  }
 
   const rows = await pool.query(
     `SELECT sv.id, sv.visit_date, sv.visit_time, sv.status,
@@ -1552,22 +1625,26 @@ const buildWebsiteInquiriesSheet = async (wb, { start, end, status, source, proj
 
 const exportLeads = async (req, res, next) => {
   try {
-    const { from, to, project_id } = req.query
+    const { from, to, status, source, assigned_to, project_id, project, location, search } = req.query
     const { start, end } = defaultRange(from, to)
     const wb = new ExcelJS.Workbook()
     wb.creator = 'NextOne Realty CRM'; wb.created = new Date()
-    await buildLeadsSheet(wb, req.user, start, end, project_id)
+    await buildLeadsSheet(wb, req.user, start, end, {
+      status, source, assignedTo: assigned_to, projectId: project_id, project, location, search,
+    })
     await streamWorkbook(res, wb, `Leads_${start}_${end}.xlsx`)
   } catch (err) { next(err) }
 }
 
 const exportSiteVisits = async (req, res, next) => {
   try {
-    const { from, to, project_id } = req.query
+    const { from, to, status, lead_id, project_id, assigned_to, manager_id, search } = req.query
     const { start, end } = defaultRange(from, to)
     const wb = new ExcelJS.Workbook()
     wb.creator = 'NextOne Realty CRM'; wb.created = new Date()
-    await buildSiteVisitsSheet(wb, req.user, start, end, project_id)
+    await buildSiteVisitsSheet(wb, req.user, start, end, {
+      status, leadId: lead_id, projectId: project_id, assignedTo: assigned_to, managerId: manager_id, search,
+    })
     await streamWorkbook(res, wb, `SiteVisits_${start}_${end}.xlsx`)
   } catch (err) { next(err) }
 }
@@ -1710,8 +1787,8 @@ const exportAll = async (req, res, next) => {
     const { start, end } = defaultRange(from, to)
     const wb = new ExcelJS.Workbook()
     wb.creator = 'NextOne Realty CRM'; wb.created = new Date()
-    await buildLeadsSheet(wb, req.user, start, end, null)
-    await buildSiteVisitsSheet(wb, req.user, start, end, null)
+    await buildLeadsSheet(wb, req.user, start, end)
+    await buildSiteVisitsSheet(wb, req.user, start, end)
     await buildSiteRevisitsSheet(wb, req.user, start, end, null)
     await buildFollowUpsSheet(wb, req.user, start, end)
     await buildClosuresSheet(wb, req.user, start, end, null)

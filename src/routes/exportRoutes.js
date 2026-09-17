@@ -48,7 +48,10 @@ const ADMIN = ['super_admin', 'admin']
  *   get:
  *     summary: Export leads to Excel
  *     description: >
- *       Admin gets all leads. Other roles get only their assigned leads.
+ *       Admin gets all leads. Other roles get their team's leads, same scoping as
+ *       GET /api/v1/leads. Every filter GET /api/v1/leads accepts also works here —
+ *       use this to export exactly what's on screen, including the Site Visit Done
+ *       and EOI views (both are just leads filtered by status).
  *       Two tabs: **Leads** (full detail) + **Leads Summary** (count by status).
  *     tags: [Exports]
  *     security:
@@ -56,7 +59,13 @@ const ADMIN = ['super_admin', 'admin']
  *     parameters:
  *       - { in: query, name: from,       schema: { type: string, format: date }, example: "2025-05-01" }
  *       - { in: query, name: to,         schema: { type: string, format: date }, example: "2025-05-31" }
- *       - { in: query, name: project_id, schema: { type: string, format: uuid } }
+ *       - { in: query, name: status,      schema: { type: string }, description: "e.g. new, contacted, interested, follow_up, site_visit_scheduled, site_visit_done, negotiation, booked, lost, eoi, or any active custom status" }
+ *       - { in: query, name: source,      schema: { type: string }, description: "Partial, case-insensitive match" }
+ *       - { in: query, name: assigned_to, schema: { type: string, format: uuid } }
+ *       - { in: query, name: project_id,  schema: { type: string }, description: "Exact match — project UUID or exact name" }
+ *       - { in: query, name: project,     schema: { type: string }, description: "Partial project name match" }
+ *       - { in: query, name: location,    schema: { type: string }, description: "Partial match against location_preference" }
+ *       - { in: query, name: search,      schema: { type: string }, description: "Matches name, phone, or email" }
  *     responses:
  *       200:
  *         description: Excel file download
@@ -71,14 +80,22 @@ router.get('/leads',       authenticate, ctrl.exportLeads)
  * /api/v1/export/site-visits:
  *   get:
  *     summary: Export site visits to Excel
- *     description: Admin gets all visits. Others get their assigned visits. Includes feedback columns.
+ *     description: >
+ *       Admin gets all visits. Others get their team's visits, same scoping as
+ *       GET /api/v1/site-visits. Every filter that endpoint accepts also works here.
+ *       Includes feedback columns.
  *     tags: [Exports]
  *     security:
  *       - BearerAuth: []
  *     parameters:
- *       - { in: query, name: from,       schema: { type: string, format: date } }
- *       - { in: query, name: to,         schema: { type: string, format: date } }
- *       - { in: query, name: project_id, schema: { type: string, format: uuid } }
+ *       - { in: query, name: from,        schema: { type: string, format: date } }
+ *       - { in: query, name: to,          schema: { type: string, format: date } }
+ *       - { in: query, name: status,      schema: { type: string, enum: [scheduled, done, cancelled, rescheduled, no_show] } }
+ *       - { in: query, name: lead_id,     schema: { type: string, format: uuid } }
+ *       - { in: query, name: project_id,  schema: { type: string }, description: "Exact match — project UUID or exact name" }
+ *       - { in: query, name: assigned_to, schema: { type: string, format: uuid } }
+ *       - { in: query, name: manager_id,  schema: { type: string, format: uuid }, description: "Team filter — every user in this manager's reporting sub-tree" }
+ *       - { in: query, name: search,      schema: { type: string }, description: "Matches lead name, phone, project name, or assignee name" }
  *     responses:
  *       200:
  *         description: Excel file
