@@ -1515,26 +1515,43 @@ const sendLeadEmail = async (req, res, next) => {
       return next(new AppError("This lead does not have an email address on record", 400));
     }
 
-    // Build and send the email via existing emailService infrastructure
-    await emailService.sendLeadProjectDetails({
-      lead,
-      customMessage: message || null,
-    });
+    // Build and send the email via existing emailService infrastructure.
+    // sendLeadProjectDetails throws on any SMTP failure — caught here (same
+    // pattern as sendLeadWhatsapp) so a misconfigured/down mail server never
+    // 500s the whole request; the attempt is still logged either way.
+    let emailSent = false;
+    let sendError = null;
+    try {
+      await emailService.sendLeadProjectDetails({
+        lead,
+        customMessage: message || null,
+      });
+      emailSent = true;
+    } catch (mailErr) {
+      sendError = mailErr.message;
+      console.error("[Email] sendLeadEmail failed:", mailErr.message);
+    }
 
-    // Log the activity
-    const activityNote = message
-      ? `Project details email sent with custom message: "${message}"`
-      : `Project details email sent${lead.project_name ? ` for ${lead.project_name}` : ""}`;
+    // Log the activity regardless of send outcome
+    const activityNote = emailSent
+      ? (message
+          ? `Project details email sent with custom message: "${message}"`
+          : `Project details email sent${lead.project_name ? ` for ${lead.project_name}` : ""}`)
+      : `Project details email attempted but failed${sendError ? ` (${sendError})` : ""}`;
 
     await pool.query(
       `INSERT INTO lead_activities (lead_id, type, note, performed_by) VALUES ($1, 'email', $2, $3)`,
       [id, activityNote, callerId]
     );
 
-    return sendSuccess(res, "Project details emailed to lead and activity logged", {
-      lead_id:        id,
-      email_sent_to:  lead.email,
-      project:        lead.project_name || null,
+    return sendSuccess(res, emailSent
+      ? "Project details emailed to lead and activity logged"
+      : "Email send failed, but the attempt was logged", {
+      lead_id:         id,
+      email_sent_to:   lead.email,
+      project:         lead.project_name || null,
+      email_sent:      emailSent,
+      send_error:      sendError,
       activity_logged: true,
     });
   } catch (err) {

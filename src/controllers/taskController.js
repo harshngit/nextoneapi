@@ -30,7 +30,7 @@ const getManagerEmails = async () => {
  */
 const getAllTasks = async (req, res, next) => {
   try {
-    const { is_completed, lead_id, assigned_to, due_from, due_to, overdue, page = 1, per_page = 20 } = req.query;
+    const { is_completed, lead_id, assigned_to, manager_id, due_from, due_to, overdue, page = 1, per_page = 20 } = req.query;
     const { role, id: callerId } = req.user;
     const offset = (parseInt(page) - 1) * parseInt(per_page);
 
@@ -48,6 +48,13 @@ const getAllTasks = async (req, res, next) => {
     if (is_completed !== undefined) { conditions.push(`t.is_completed = $${idx++}`); params.push(is_completed === "true"); }
     if (lead_id)     { conditions.push(`t.lead_id = $${idx++}`);               params.push(lead_id); }
     if (assigned_to) { conditions.push(`t.assigned_to = $${idx++}`);           params.push(assigned_to); }
+    if (manager_id) {
+      // Team filter — scopes to every user in manager_id's recursive sub-tree
+      // (including manager_id itself). Applied as an additional AND on top of
+      // whatever the caller's own role scoping already restricts.
+      const mgrTeamIds = await getTeamIds(manager_id);
+      conditions.push(`t.assigned_to = ANY($${idx++}::uuid[])`); params.push(mgrTeamIds);
+    }
     if (due_from)    { conditions.push(`t.due_date::date >= $${idx++}`);       params.push(due_from); }
     if (due_to)      { conditions.push(`t.due_date::date <= $${idx++}`);       params.push(due_to); }
     if (overdue === "true") { conditions.push(`t.due_date < NOW() AND t.is_completed = false`); }

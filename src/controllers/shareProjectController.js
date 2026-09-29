@@ -42,6 +42,18 @@ const transporter = nodemailer.createTransport({
   socketTimeout:     60000,
 });
 
+// This is a separate transporter instance from emailService.js's — its own
+// verify() check is needed so a bad SMTP config shows up in the logs even if
+// emailService.js's happens to look fine (or vice versa).
+transporter.verify((err) => {
+  if (err) {
+    console.error('[Email] ❌ shareProjectController SMTP connection FAILED:', err.message);
+    console.error('[Email] Host:', EMAIL_HOST, '| Port:', USE_PORT, '| User:', EMAIL_USER);
+  } else {
+    console.log('[Email] ✅ shareProjectController SMTP connected — ready to send from', EMAIL_USER);
+  }
+});
+
 const FROM    = process.env.EMAIL_FROM
   ? cleanEnv(process.env.EMAIL_FROM)
   : `"Next One Realty" <${EMAIL_USER}>`;
@@ -205,6 +217,20 @@ const shareProject = async (req, res, next) => {
       : 'Next One Realty Team';
 
     // ── Build ZIP attachment ─────────────────────────────────────────────────
+    // Checked BEFORE zipping (cheap — just summing already-fetched file_size
+    // values) since Gmail SMTP hard-rejects messages over 25MB, and this ZIP
+    // can include videos — a project with a few walkthrough videos selected
+    // blows past that easily. Failing fast here with a clear message beats a
+    // cryptic SMTP rejection after doing all the zip/send work.
+    const GMAIL_ATTACHMENT_LIMIT = 25 * 1024 * 1024;
+    const estimatedSize = selectedDocs.reduce((sum, d) => sum + (parseInt(d.file_size) || 0), 0);
+    if (estimatedSize > GMAIL_ATTACHMENT_LIMIT) {
+      return next(new AppError(
+        `Selected documents total ${(estimatedSize / 1024 / 1024).toFixed(1)}MB, which is over Gmail's 25MB email attachment limit. Deselect some documents (especially videos) and try again.`,
+        400
+      ));
+    }
+
     let zipBuffer  = null;
     let zipFileName = null;
     if (selectedDocs.length > 0) {
@@ -327,7 +353,14 @@ const shareProject = async (req, res, next) => {
       });
     }
 
-    await transporter.sendMail(mailOptions);
+    try {
+      await transporter.sendMail(mailOptions);
+    } catch (mailErr) {
+      console.error('[Email] ✗ shareProject failed to send:', mailErr.message);
+      console.error('[Email] Host:', EMAIL_HOST, '| Port:', USE_PORT, '| User:', EMAIL_USER,
+        '| Attachment size:', zipBuffer ? `${(zipBuffer.length / 1024 / 1024).toFixed(1)}MB` : 'none');
+      return next(new AppError(`Failed to send email: ${mailErr.message}`, 502));
+    }
 
     // ── Log activity (fire and forget) ───────────────────────────────────────
     pool.query(

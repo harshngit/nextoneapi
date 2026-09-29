@@ -538,12 +538,30 @@ const buildSiteVisitsSheet = async (wb, user, start, end, filters = {}) => {
 // ── FOLLOW-UPS / TASKS EXPORT ─────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────────────────────
 
-const buildFollowUpsSheet = async (wb, user, start, end) => {
+// filters mirrors GET /api/v1/tasks: { isCompleted, leadId, assignedTo, managerId, overdue }
+const buildFollowUpsSheet = async (wb, user, start, end, filters = {}) => {
+  const { isCompleted, leadId, assignedTo, managerId, overdue } = filters
   const admin = isAdmin(user)
   const conditions = [`t.due_date::date BETWEEN $1 AND $2`]
   const params = [start, end]
   let idx = 3
-  if (!admin) { conditions.push(`t.assigned_to = $${idx++}`); params.push(user.id) }
+
+  // Role scoping — matches GET /api/v1/tasks exactly.
+  if (LEAF_ROLES.includes(user.role)) {
+    conditions.push(`t.assigned_to = $${idx++}`); params.push(user.id)
+  } else if (!admin) {
+    const teamIds = await getTeamIds(user.id)
+    conditions.push(`t.assigned_to = ANY($${idx++}::uuid[])`); params.push(teamIds)
+  }
+
+  if (isCompleted !== undefined) { conditions.push(`t.is_completed = $${idx++}`); params.push(isCompleted === 'true') }
+  if (leadId)     { conditions.push(`t.lead_id = $${idx++}`);     params.push(leadId) }
+  if (assignedTo) { conditions.push(`t.assigned_to = $${idx++}`); params.push(assignedTo) }
+  if (managerId) {
+    const mgrTeamIds = await getTeamIds(managerId)
+    conditions.push(`t.assigned_to = ANY($${idx++}::uuid[])`); params.push(mgrTeamIds)
+  }
+  if (overdue === 'true') { conditions.push(`t.due_date < NOW() AND t.is_completed = false`) }
 
   const rows = await pool.query(
     `SELECT t.id, t.title, t.notes, t.priority, t.due_date,
@@ -921,13 +939,46 @@ const buildAttendanceSheets = async (wb, user, start, end) => {
 // ── SITE REVISITS EXPORT ─────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────────────────────
 
-const buildSiteRevisitsSheet = async (wb, user, start, end, projectId) => {
+// filters mirrors GET /api/v1/site-revisits: { status, leadId, projectId,
+// assignedTo, managerId, originalVisitId, search }.
+const buildSiteRevisitsSheet = async (wb, user, start, end, filters = {}) => {
+  const { status, leadId, projectId, assignedTo, managerId, originalVisitId, search } = filters
   const admin = isAdmin(user)
   const conditions = [`sr.visit_date BETWEEN $1 AND $2`]
   const params = [start, end]
   let idx = 3
-  if (!admin) { conditions.push(`sr.assigned_to = $${idx++}`); params.push(user.id) }
-  if (projectId) { conditions.push(`sr.project_id = $${idx++}`); params.push(projectId) }
+
+  // Role scoping — matches GET /api/v1/site-revisits exactly.
+  if (LEAF_ROLES.includes(user.role)) {
+    conditions.push(`sr.assigned_to = $${idx++}`); params.push(user.id)
+  } else if (!admin) {
+    const teamIds = await getTeamIds(user.id)
+    conditions.push(`sr.assigned_to = ANY($${idx++}::uuid[])`); params.push(teamIds)
+  }
+
+  if (status) {
+    const normalizedStatus = ['done', 'complete', 'completed'].includes(status) ? 'done' : status
+    conditions.push(`sr.status = $${idx++}`); params.push(normalizedStatus)
+  }
+  if (leadId)     { conditions.push(`sr.lead_id = $${idx++}`);     params.push(leadId) }
+  if (projectId) {
+    try {
+      const resolvedProjectId = await resolveProjectId(projectId)
+      conditions.push(`sr.project_id = $${idx++}`); params.push(resolvedProjectId)
+    } catch (e) {
+      conditions.push('1 = 0')
+    }
+  }
+  if (assignedTo) { conditions.push(`sr.assigned_to = $${idx++}`); params.push(assignedTo) }
+  if (managerId) {
+    const mgrTeamIds = await getTeamIds(managerId)
+    conditions.push(`sr.assigned_to = ANY($${idx++}::uuid[])`); params.push(mgrTeamIds)
+  }
+  if (originalVisitId) { conditions.push(`sr.original_visit_id = $${idx++}`); params.push(originalVisitId) }
+  if (search) {
+    conditions.push(`(l.name ILIKE $${idx} OR l.phone ILIKE $${idx} OR COALESCE(p.name, sr.project_name_text) ILIKE $${idx} OR CONCAT(u.first_name,' ',u.last_name) ILIKE $${idx})`)
+    params.push(`%${search}%`); idx++
+  }
 
   const rows = await pool.query(
     `SELECT sr.id, sr.visit_date, sr.visit_time, sr.status, sr.transport_arranged,
@@ -1651,11 +1702,13 @@ const exportSiteVisits = async (req, res, next) => {
 
 const exportFollowUps = async (req, res, next) => {
   try {
-    const { from, to } = req.query
+    const { from, to, is_completed, lead_id, assigned_to, manager_id, overdue } = req.query
     const { start, end } = defaultRange(from, to)
     const wb = new ExcelJS.Workbook()
     wb.creator = 'NextOne Realty CRM'; wb.created = new Date()
-    await buildFollowUpsSheet(wb, req.user, start, end)
+    await buildFollowUpsSheet(wb, req.user, start, end, {
+      isCompleted: is_completed, leadId: lead_id, assignedTo: assigned_to, managerId: manager_id, overdue,
+    })
     await streamWorkbook(res, wb, `FollowUps_${start}_${end}.xlsx`)
   } catch (err) { next(err) }
 }
@@ -1693,11 +1746,14 @@ const exportAttendance = async (req, res, next) => {
 
 const exportSiteRevisits = async (req, res, next) => {
   try {
-    const { from, to, project_id } = req.query
+    const { from, to, status, lead_id, project_id, assigned_to, manager_id, original_visit_id, search } = req.query
     const { start, end } = defaultRange(from, to)
     const wb = new ExcelJS.Workbook()
     wb.creator = 'NextOne Realty CRM'; wb.created = new Date()
-    await buildSiteRevisitsSheet(wb, req.user, start, end, project_id)
+    await buildSiteRevisitsSheet(wb, req.user, start, end, {
+      status, leadId: lead_id, projectId: project_id, assignedTo: assigned_to,
+      managerId: manager_id, originalVisitId: original_visit_id, search,
+    })
     await streamWorkbook(res, wb, `SiteRevisits_${start}_${end}.xlsx`)
   } catch (err) { next(err) }
 }
@@ -1789,7 +1845,7 @@ const exportAll = async (req, res, next) => {
     wb.creator = 'NextOne Realty CRM'; wb.created = new Date()
     await buildLeadsSheet(wb, req.user, start, end)
     await buildSiteVisitsSheet(wb, req.user, start, end)
-    await buildSiteRevisitsSheet(wb, req.user, start, end, null)
+    await buildSiteRevisitsSheet(wb, req.user, start, end)
     await buildFollowUpsSheet(wb, req.user, start, end)
     await buildClosuresSheet(wb, req.user, start, end, null)
     await buildProjectsSheet(wb)
