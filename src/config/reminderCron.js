@@ -90,6 +90,7 @@ const runFollowUpReminders = async () => {
        FROM tasks t
        LEFT JOIN leads l ON l.id = t.lead_id
        WHERE t.is_completed            = false
+         AND t.is_paused                = false
          AND t.follow_up_reminder_sent = false
          AND t.due_date BETWEEN $1 AND $2`,
       [windowStart, windowEnd]
@@ -141,6 +142,7 @@ const runFollowUpOverdue = async () => {
        FROM tasks t
        LEFT JOIN leads l ON l.id = t.lead_id
        WHERE t.is_completed           = false
+         AND t.is_paused               = false
          AND t.follow_up_overdue_sent = false
          AND t.due_date               < $1`,
       [now]

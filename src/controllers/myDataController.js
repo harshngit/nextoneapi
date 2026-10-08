@@ -354,7 +354,7 @@ const getMySiteVisits = async (req, res, next) => {
 const getMyTasks = async (req, res, next) => {
   try {
     const userId = req.user.id;
-    const { is_completed, priority, overdue, due_today, lead_id } = req.query;
+    const { is_completed, priority, overdue, due_today, lead_id, paused } = req.query;
     const { page, per_page } = parsePage(req.query);
     const offset = (page - 1) * per_page;
 
@@ -368,8 +368,10 @@ const getMyTasks = async (req, res, next) => {
     }
     if (priority)  { conditions.push(`t.priority = $${idx++}`);  params.push(priority); }
     if (lead_id)   { conditions.push(`t.lead_id = $${idx++}`);   params.push(lead_id); }
-    if (overdue === "true")    conditions.push(`t.is_completed = false AND t.due_date < NOW()`);
-    if (due_today === "true")  conditions.push(`t.is_completed = false AND t.due_date::date = CURRENT_DATE`);
+    // Paused tasks are deliberately on hold — never count as overdue/due today.
+    if (overdue === "true")    conditions.push(`t.is_completed = false AND t.is_paused = false AND t.due_date < NOW()`);
+    if (due_today === "true")  conditions.push(`t.is_completed = false AND t.is_paused = false AND t.due_date::date = CURRENT_DATE`);
+    if (paused !== undefined) { conditions.push(`t.is_paused = $${idx++}`); params.push(paused === "true"); }
 
     const where = `WHERE ${conditions.join(" AND ")}`;
 
@@ -378,7 +380,7 @@ const getMyTasks = async (req, res, next) => {
       pool.query(
         `SELECT
            t.id, t.title, t.notes, t.priority,
-           t.due_date, t.is_completed, t.completed_at,
+           t.due_date, t.is_completed, t.completed_at, t.is_paused,
            t.created_at, t.updated_at,
            l.id    AS lead_id,
            l.name  AS lead_name,

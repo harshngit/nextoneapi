@@ -58,7 +58,12 @@ const { authenticate, authorize } = require("../middleware/auth");
  *         name: overdue
  *         schema:
  *           type: boolean
- *         description: If true, returns only overdue tasks
+ *         description: If true, returns only overdue tasks (paused tasks are never included, regardless of due date)
+ *       - in: query
+ *         name: paused
+ *         schema:
+ *           type: boolean
+ *         description: Filter by paused state — true for on-hold tasks only, false for everything else
  *       - in: query
  *         name: page
  *         schema:
@@ -293,6 +298,9 @@ router.get("/:id", authenticate, taskController.getTaskById);
  *               notes:
  *                 type: string
  *                 example: "Client asked to call after 10am. Discuss pricing."
+ *               is_paused:
+ *                 type: boolean
+ *                 description: Put the task on hold (true) or resume it (false) — paused tasks are excluded from overdue/reminder logic
  *           example:
  *             title: "Follow up call with Suresh Patel"
  *             lead_id: "lead-uuid-001"
@@ -300,6 +308,7 @@ router.get("/:id", authenticate, taskController.getTaskById);
  *             assigned_to: "user-uuid-001"
  *             priority: "high"
  *             notes: "Client rescheduled. Call after 10am."
+ *             is_paused: false
  *     responses:
  *       200:
  *         description: Task updated and WebSocket event emitted

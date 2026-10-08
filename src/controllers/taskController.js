@@ -30,7 +30,7 @@ const getManagerEmails = async () => {
  */
 const getAllTasks = async (req, res, next) => {
   try {
-    const { is_completed, lead_id, assigned_to, manager_id, due_from, due_to, overdue, page = 1, per_page = 20 } = req.query;
+    const { is_completed, lead_id, assigned_to, manager_id, due_from, due_to, overdue, paused, page = 1, per_page = 20 } = req.query;
     const { role, id: callerId } = req.user;
     const offset = (parseInt(page) - 1) * parseInt(per_page);
 
@@ -57,7 +57,9 @@ const getAllTasks = async (req, res, next) => {
     }
     if (due_from)    { conditions.push(`t.due_date::date >= $${idx++}`);       params.push(due_from); }
     if (due_to)      { conditions.push(`t.due_date::date <= $${idx++}`);       params.push(due_to); }
-    if (overdue === "true") { conditions.push(`t.due_date < NOW() AND t.is_completed = false`); }
+    // Paused tasks are deliberately on hold — never count as overdue.
+    if (overdue === "true") { conditions.push(`t.due_date < NOW() AND t.is_completed = false AND t.is_paused = false`); }
+    if (paused !== undefined) { conditions.push(`t.is_paused = $${idx++}`); params.push(paused === "true"); }
 
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
@@ -68,7 +70,7 @@ const getAllTasks = async (req, res, next) => {
 
     const dataResult = await pool.query(
       `SELECT t.id, t.title, t.lead_id, t.due_date, t.priority, t.notes,
-              t.is_completed, t.completed_at, t.created_at,
+              t.is_completed, t.completed_at, t.is_paused, t.created_at,
               l.name AS lead_name, l.phone AS lead_phone,
               CONCAT(u.first_name, ' ', u.last_name) AS assigned_to
        FROM tasks t
@@ -195,14 +197,14 @@ const getTodayTasks = async (req, res, next) => {
       pool.query(
         `SELECT t.id, t.title, t.lead_id, t.due_date, t.priority, l.name AS lead_name, l.phone AS lead_phone
          FROM tasks t LEFT JOIN leads l ON l.id = t.lead_id
-         WHERE t.assigned_to = $1 AND t.is_completed = false AND t.due_date::date < $2
+         WHERE t.assigned_to = $1 AND t.is_completed = false AND t.is_paused = false AND t.due_date::date < $2
          ORDER BY t.due_date ASC`,
         [userId, today]
       ),
       pool.query(
         `SELECT t.id, t.title, t.lead_id, t.due_date, t.priority, l.name AS lead_name, l.phone AS lead_phone
          FROM tasks t LEFT JOIN leads l ON l.id = t.lead_id
-         WHERE t.assigned_to = $1 AND t.is_completed = false AND t.due_date::date = $2
+         WHERE t.assigned_to = $1 AND t.is_completed = false AND t.is_paused = false AND t.due_date::date = $2
          ORDER BY t.due_date ASC`,
         [userId, today]
       ),
@@ -260,7 +262,7 @@ const updateTask = async (req, res, next) => {
     const existing = await pool.query("SELECT * FROM tasks WHERE id = $1", [id]);
     if (existing.rows.length === 0) return next(new AppError("Task not found", 404));
 
-    const { title, due_date, priority, notes } = req.body;
+    const { title, due_date, priority, notes, is_paused } = req.body;
     const updates = []; const params = []; let idx = 1;
 
     if (title)             { updates.push(`title = $${idx++}`);    params.push(title.trim()); }
@@ -270,6 +272,7 @@ const updateTask = async (req, res, next) => {
       updates.push(`priority = $${idx++}`); params.push(priority);
     }
     if (notes !== undefined) { updates.push(`notes = $${idx++}`); params.push(notes); }
+    if (is_paused !== undefined) { updates.push(`is_paused = $${idx++}`); params.push(Boolean(is_paused)); }
     if (updates.length === 0) return next(new AppError("No fields to update", 400));
     updates.push(`updated_at = NOW()`);
     params.push(id);
@@ -280,7 +283,7 @@ const updateTask = async (req, res, next) => {
 
     const task = result.rows[0];
     emitToUser(task.assigned_to, "task:updated", {
-      id: task.id, title: task.title, due_date: task.due_date, priority: task.priority,
+      id: task.id, title: task.title, due_date: task.due_date, priority: task.priority, is_paused: task.is_paused,
     });
 
     return sendSuccess(res, "Task updated successfully", task);
@@ -375,7 +378,10 @@ const completeTask = async (req, res, next) => {
 
     const completedAt = is_completed ? new Date() : null;
     const result = await pool.query(
-      `UPDATE tasks SET is_completed = $1, completed_at = $2, updated_at = NOW()
+      // Completing a task also clears any pause — "done" overrides "on hold".
+      // Re-opening (is_completed=false) deliberately leaves is_paused as-is.
+      `UPDATE tasks SET is_completed = $1, completed_at = $2,
+              is_paused = CASE WHEN $1 THEN false ELSE is_paused END, updated_at = NOW()
        WHERE id = $3 RETURNING *`,
       [is_completed, completedAt, id]
     );
@@ -444,7 +450,7 @@ const completeTask = async (req, res, next) => {
     return sendSuccess(
       res,
       is_completed ? "Task marked as completed" : "Task marked as pending",
-      { id: task.id, is_completed: task.is_completed, completed_at: task.completed_at }
+      { id: task.id, is_completed: task.is_completed, completed_at: task.completed_at, is_paused: task.is_paused }
     );
   } catch (err) {
     next(err);
@@ -461,7 +467,7 @@ const getTasksByLead = async (req, res, next) => {
     if (lead.rows.length === 0) return next(new AppError("Lead not found", 404));
 
     const result = await pool.query(
-      `SELECT t.id, t.title, t.lead_id, t.due_date, t.priority, t.is_completed, t.completed_at, t.notes,
+      `SELECT t.id, t.title, t.lead_id, t.due_date, t.priority, t.is_completed, t.completed_at, t.is_paused, t.notes,
               l.phone AS lead_phone,
               CONCAT(u.first_name,' ',u.last_name) AS assigned_to
        FROM tasks t
