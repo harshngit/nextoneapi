@@ -377,6 +377,11 @@ router.get("/revisits", authenticate, ctrl.getMyRevisits);
  *           type: string
  *           format: uuid
  *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: Matches task title, or the linked lead's name/phone
+ *       - in: query
  *         name: page
  *         schema:
  *           type: integer

@@ -354,7 +354,7 @@ const getMySiteVisits = async (req, res, next) => {
 const getMyTasks = async (req, res, next) => {
   try {
     const userId = req.user.id;
-    const { is_completed, priority, overdue, due_today, lead_id, paused } = req.query;
+    const { is_completed, priority, overdue, due_today, lead_id, paused, search } = req.query;
     const { page, per_page } = parsePage(req.query);
     const offset = (page - 1) * per_page;
 
@@ -372,11 +372,15 @@ const getMyTasks = async (req, res, next) => {
     if (overdue === "true")    conditions.push(`t.is_completed = false AND t.is_paused = false AND t.due_date < NOW()`);
     if (due_today === "true")  conditions.push(`t.is_completed = false AND t.is_paused = false AND t.due_date::date = CURRENT_DATE`);
     if (paused !== undefined) { conditions.push(`t.is_paused = $${idx++}`); params.push(paused === "true"); }
+    if (search) {
+      conditions.push(`(t.title ILIKE $${idx} OR l.name ILIKE $${idx} OR l.phone ILIKE $${idx})`);
+      params.push(`%${search}%`); idx++;
+    }
 
     const where = `WHERE ${conditions.join(" AND ")}`;
 
     const [countResult, dataResult] = await Promise.all([
-      pool.query(`SELECT COUNT(*) FROM tasks t ${where}`, params),
+      pool.query(`SELECT COUNT(*) FROM tasks t LEFT JOIN leads l ON l.id = t.lead_id ${where}`, params),
       pool.query(
         `SELECT
            t.id, t.title, t.notes, t.priority,
