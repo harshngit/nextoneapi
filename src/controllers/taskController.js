@@ -30,7 +30,7 @@ const getManagerEmails = async () => {
  */
 const getAllTasks = async (req, res, next) => {
   try {
-    const { is_completed, lead_id, assigned_to, manager_id, due_from, due_to, overdue, paused, page = 1, per_page = 20 } = req.query;
+    const { is_completed, lead_id, assigned_to, manager_id, due_from, due_to, overdue, paused, search, page = 1, per_page = 20 } = req.query;
     const { role, id: callerId } = req.user;
     const offset = (parseInt(page) - 1) * parseInt(per_page);
 
@@ -60,11 +60,18 @@ const getAllTasks = async (req, res, next) => {
     // Paused tasks are deliberately on hold — never count as overdue.
     if (overdue === "true") { conditions.push(`t.due_date < NOW() AND t.is_completed = false AND t.is_paused = false`); }
     if (paused !== undefined) { conditions.push(`t.is_paused = $${idx++}`); params.push(paused === "true"); }
+    if (search) {
+      conditions.push(`(t.title ILIKE $${idx} OR l.name ILIKE $${idx} OR l.phone ILIKE $${idx})`);
+      params.push(`%${search}%`); idx++;
+    }
 
     const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
 
     const countResult = await pool.query(
-      `SELECT COUNT(*) FROM tasks t LEFT JOIN users u ON u.id = t.assigned_to ${where}`, params
+      `SELECT COUNT(*) FROM tasks t
+       LEFT JOIN users u ON u.id = t.assigned_to
+       LEFT JOIN leads l ON l.id = t.lead_id
+       ${where}`, params
     );
     const total = parseInt(countResult.rows[0].count);
 

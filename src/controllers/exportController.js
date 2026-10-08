@@ -540,7 +540,7 @@ const buildSiteVisitsSheet = async (wb, user, start, end, filters = {}) => {
 
 // filters mirrors GET /api/v1/tasks: { isCompleted, leadId, assignedTo, managerId, overdue }
 const buildFollowUpsSheet = async (wb, user, start, end, filters = {}) => {
-  const { isCompleted, leadId, assignedTo, managerId, overdue } = filters
+  const { isCompleted, leadId, assignedTo, managerId, overdue, search } = filters
   const admin = isAdmin(user)
   const conditions = [`t.due_date::date BETWEEN $1 AND $2`]
   const params = [start, end]
@@ -562,6 +562,10 @@ const buildFollowUpsSheet = async (wb, user, start, end, filters = {}) => {
     conditions.push(`t.assigned_to = ANY($${idx++}::uuid[])`); params.push(mgrTeamIds)
   }
   if (overdue === 'true') { conditions.push(`t.due_date < NOW() AND t.is_completed = false`) }
+  if (search) {
+    conditions.push(`(t.title ILIKE $${idx} OR l.name ILIKE $${idx} OR l.phone ILIKE $${idx})`)
+    params.push(`%${search}%`); idx++
+  }
 
   const rows = await pool.query(
     `SELECT t.id, t.title, t.notes, t.priority, t.due_date,
@@ -1702,12 +1706,12 @@ const exportSiteVisits = async (req, res, next) => {
 
 const exportFollowUps = async (req, res, next) => {
   try {
-    const { from, to, is_completed, lead_id, assigned_to, manager_id, overdue } = req.query
+    const { from, to, is_completed, lead_id, assigned_to, manager_id, overdue, search } = req.query
     const { start, end } = defaultRange(from, to)
     const wb = new ExcelJS.Workbook()
     wb.creator = 'NextOne Realty CRM'; wb.created = new Date()
     await buildFollowUpsSheet(wb, req.user, start, end, {
-      isCompleted: is_completed, leadId: lead_id, assignedTo: assigned_to, managerId: manager_id, overdue,
+      isCompleted: is_completed, leadId: lead_id, assignedTo: assigned_to, managerId: manager_id, overdue, search,
     })
     await streamWorkbook(res, wb, `FollowUps_${start}_${end}.xlsx`)
   } catch (err) { next(err) }

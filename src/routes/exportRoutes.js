@@ -110,13 +110,21 @@ router.get('/site-visits', authenticate, ctrl.exportSiteVisits)
  * /api/v1/export/follow-ups:
  *   get:
  *     summary: Export follow-ups / tasks to Excel
- *     description: Admin gets all tasks. Others get only their assigned tasks.
+ *     description: >
+ *       Admin gets all tasks. Other roles get their team's tasks, same scoping as
+ *       GET /api/v1/tasks. Every filter that endpoint accepts also works here.
  *     tags: [Exports]
  *     security:
  *       - BearerAuth: []
  *     parameters:
- *       - { in: query, name: from, schema: { type: string, format: date } }
- *       - { in: query, name: to,   schema: { type: string, format: date } }
+ *       - { in: query, name: from,         schema: { type: string, format: date } }
+ *       - { in: query, name: to,           schema: { type: string, format: date } }
+ *       - { in: query, name: is_completed, schema: { type: boolean } }
+ *       - { in: query, name: lead_id,      schema: { type: string, format: uuid } }
+ *       - { in: query, name: assigned_to,  schema: { type: string, format: uuid } }
+ *       - { in: query, name: manager_id,   schema: { type: string, format: uuid }, description: "Team filter — every user in this manager's reporting sub-tree" }
+ *       - { in: query, name: overdue,      schema: { type: boolean } }
+ *       - { in: query, name: search,       schema: { type: string }, description: "Matches task title, or the linked lead's name/phone" }
  *     responses:
  *       200:
  *         description: Excel file

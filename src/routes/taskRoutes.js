@@ -43,6 +43,17 @@ const { authenticate, authorize } = require("../middleware/auth");
  *           type: string
  *           format: uuid
  *       - in: query
+ *         name: manager_id
+ *         schema:
+ *           type: string
+ *           format: uuid
+ *         description: Team filter — every user in this manager's reporting sub-tree (including themselves)
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *         description: Matches task title, or the linked lead's name/phone
+ *       - in: query
  *         name: due_from
  *         schema:
  *           type: string
