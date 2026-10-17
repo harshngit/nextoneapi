@@ -535,7 +535,7 @@ const createSiteVisitWithLead = async (req, res, next) => {
         name, phone, alternate_phone_number, email, source,
         project_id, project_name_text, assigned_to, budget, location_preference, configuration,
         callback_time, next_followup_time, status, created_by
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'site_visit_scheduled',$13) RETURNING *`,
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'site_visit_scheduled',$14) RETURNING *`,
       [
         name.trim(), phone, alternate_phone_number || null, email || null, source || null,
         resolvedProjectId || null, resolvedProjectNameText || null, lead_assigned_to || null, budget || null,
