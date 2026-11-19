@@ -67,6 +67,7 @@ app.use('/api/v1/projects',      projectDocumentsRoutes);
 app.use('/api/v1/phone-reveal',  phoneRevealRoutes);
 app.use('/api/v1/fcm', fcmRoutes);
 app.use('/api/v1/website-inquiries', require('./routes/websiteInquiryRoutes'));
+app.use('/api/v1/reports',       require('./routes/reportRoutes'));
 app.use('/api/v1/public',        require('./routes/publicRoutes'));
 app.use('/api/v1/webhooks/whatsapp', require('./routes/whatsappWebhookRoutes'));
 
