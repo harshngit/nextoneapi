@@ -12,7 +12,6 @@ const { sendSuccess } = require("../utils/response");
 const AppError = require("../utils/AppError");
 const { getTeamIds } = require("../utils/teamUtils");
 
-const ADMIN_ROLES = ["super_admin", "superadmin", "admin"];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -77,7 +76,6 @@ const getDailyReport = async (req, res, next) => {
         SELECT u.id, u.first_name, u.last_name, u.role, u.manager_id
         FROM users u
         WHERE u.is_active = true
-          AND u.role NOT IN (${ADMIN_ROLES.map((r) => `'${r}'`).join(",")})
           AND ($4::uuid[] IS NULL OR u.id = ANY($4::uuid[]))
       ),
       new_leads AS (
@@ -151,6 +149,13 @@ const getDailyReport = async (req, res, next) => {
       SELECT u.id AS user_id,
              TRIM(u.first_name || ' ' || COALESCE(u.last_name, '')) AS name,
              u.role,
+             -- Daily performance score: higher-value outcomes weigh more
+             ( COALESCE(a.total, 0)
+             + COALESCE(nl.n, 0)
+             + COALESCE(fu.done, 0) * 2
+             + COALESCE(sv.done, 0) * 5
+             + COALESCE(rv.done, 0) * 5
+             + COALESCE(cl.n, 0)    * 20 )::int AS score,
              TRIM(m.first_name || ' ' || COALESCE(m.last_name, '')) AS manager_name,
              att.status          AS attendance_status,
              att.check_in_time,
@@ -184,8 +189,7 @@ const getDailyReport = async (req, res, next) => {
       LEFT JOIN sv            ON sv.user_id = u.id
       LEFT JOIN rv            ON rv.user_id = u.id
       LEFT JOIN cl            ON cl.user_id = u.id
-      ORDER BY (COALESCE(a.total, 0) + COALESCE(fu.done, 0) + COALESCE(sv.done, 0) + COALESCE(cl.n, 0)) DESC,
-               name ASC
+      ORDER BY score DESC, closures DESC, site_visits_done DESC, follow_ups_done DESC, activities DESC, name ASC
     `;
 
     const [rowsRes, managersRes, sourcesRes, projectsRes] = await Promise.all([
@@ -202,7 +206,7 @@ const getDailyReport = async (req, res, next) => {
       pool.query(`SELECT id, name FROM projects ORDER BY name`),
     ]);
 
-    const users = rowsRes.rows.map((r) => ({ ...r, closure_value: Number(r.closure_value) }));
+    const users = rowsRes.rows.map((r, i) => ({ ...r, rank: i + 1, closure_value: Number(r.closure_value) }));
 
     const sumKeys = [
       "new_leads", "activities", "calls", "whatsapp", "leads_touched",
